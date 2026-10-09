@@ -1,0 +1,157 @@
+/* fileEm styles on top of the AtlantaFX Primer theme (looked-up colors switch with light/dark). */
+
+.main-toolbar {
+    -fx-padding: 4 8 4 8;
+}
+
+/* ---- file type icon colors ---- */
+.icon-folder { -fx-icon-color: #d9a02b; }
+.icon-image { -fx-icon-color: #3fa66a; }
+.icon-audio { -fx-icon-color: #b356c4; }
+.icon-video { -fx-icon-color: #d4524a; }
+.icon-archive { -fx-icon-color: #a07a46; }
+.icon-pdf { -fx-icon-color: #d93a35; }
+.icon-word { -fx-icon-color: #2f6fd1; }
+.icon-excel { -fx-icon-color: #1f8f4e; }
+.icon-ppt { -fx-icon-color: #d0632d; }
+.icon-code { -fx-icon-color: #3a8fd9; }
+.icon-exe { -fx-icon-color: #6a6fd8; }
+.icon-text, .icon-file, .icon-volume, .icon-header { -fx-icon-color: -color-fg-muted; }
+.icon-quick { -fx-icon-color: -color-accent-fg; }
+
+/* ---- sides ---- */
+.explorer-side > .split-pane-divider,
+.main-window > .split-pane > .split-pane-divider {
+    -fx-padding: 0 1 0 1;
+}
+
+.explorer-side .tab-pane > .tab-header-area {
+    -fx-padding: 4 4 0 4;
+}
+
+.explorer-side .tab-pane .tab {
+    -fx-padding: 4 8 4 8;
+}
+
+.explorer-side .plus-tab {
+    -fx-padding: 4 4 4 4;
+}
+
+.explorer-side:active .tab-pane > .tab-header-area > .headers-region > .tab:selected {
+    -fx-border-color: -color-accent-emphasis transparent transparent transparent;
+    -fx-border-width: 2 0 0 0;
+}
+
+.explorer-side:active .address-bar {
+    -fx-border-color: -color-accent-emphasis;
+}
+
+/* ---- address bar ---- */
+.address-bar {
+    -fx-background-color: -color-bg-default;
+    -fx-background-radius: 6;
+    -fx-border-color: -color-border-default;
+    -fx-border-radius: 6;
+    -fx-min-height: 34;
+    -fx-pref-height: 34;
+    -fx-cursor: text;
+}
+
+.address-bar .crumb {
+    -fx-padding: 3 6 3 6;
+    -fx-cursor: hand;
+}
+
+.address-bar .crumb-separator {
+    -fx-text-fill: -color-fg-subtle;
+    -fx-padding: 0 1 0 1;
+}
+
+.address-bar > .text-field {
+    -fx-background-color: transparent;
+    -fx-border-color: transparent;
+    -fx-background-insets: 0;
+}
+
+/* ---- file list ---- */
+.file-table .table-row-cell:hidden-file {
+    -fx-opacity: 0.55;
+}
+
+.file-table .align-right {
+    -fx-alignment: CENTER_RIGHT;
+}
+
+.file-table .name-cell {
+    -fx-graphic-text-gap: 8;
+}
+
+.mono, .file-table .mono .table-cell {
+    -fx-font-family: "monospace";
+}
+
+.table-row-cell.drop-target,
+.tree-cell.drop-target {
+    -fx-background-color: -color-accent-subtle;
+    -fx-border-color: -color-accent-emphasis;
+    -fx-border-width: 1;
+}
+
+.status-label {
+    -fx-text-fill: -color-fg-muted;
+    -fx-font-size: 0.9em;
+    -fx-padding: 4 10 4 10;
+    -fx-background-color: -color-bg-subtle;
+    -fx-border-color: -color-border-muted transparent transparent transparent;
+}
+
+/* ---- folder tree ---- */
+.folder-tree {
+    -fx-background-color: -color-bg-subtle;
+}
+
+.folder-tree .tree-cell {
+    -fx-background-color: transparent;
+    -fx-padding: 3 4 3 4;
+}
+
+.folder-tree .tree-cell:selected {
+    -fx-background-color: -color-accent-subtle;
+}
+
+.folder-tree .tree-cell:header {
+    -fx-font-weight: bold;
+    -fx-padding: 8 4 3 4;
+}
+
+.folder-tree .tree-extra {
+    -fx-text-fill: -color-fg-subtle;
+    -fx-font-size: 0.85em;
+}
+
+/* ---- function key bar ---- */
+.function-bar {
+    -fx-background-color: -color-bg-subtle;
+    -fx-border-color: -color-border-default transparent transparent transparent;
+}
+
+.function-bar .button {
+    -fx-content-display: LEFT;
+    -fx-graphic-text-gap: 6;
+}
+
+.function-bar .fkey {
+    -fx-font-weight: bold;
+    -fx-text-fill: -color-accent-fg;
+}
+
+/* ---- dialogs ---- */
+.dialog-error {
+    -fx-text-fill: -color-danger-fg;
+}
+
+.readonly-field {
+    -fx-background-color: transparent;
+    -fx-border-color: transparent;
+    -fx-padding: 0;
+}
