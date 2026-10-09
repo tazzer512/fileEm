@@ -822,4 +822,18 @@ class MainWindowUiTest {
         robot.clickOn("OK");
         waitUntil("deleted", () -> !Files.exists(dir));
     }
+
+    @Test
+    void bothFileListsStayVisibleInANarrowDualPaneWindow(FxRobot robot) {
+        robot.type(KeyCode.F9);
+        waitUntil("dual on", window::isDual);
+        robot.interact(() -> stage.setWidth(700));
+        WaitForAsyncUtils.waitForFxEvents();
+        for (ExplorerSide side : List.of(fx(window::left), fx(window::right))) {
+            waitUntil("file list keeps a usable width", () -> {
+                javafx.scene.Node list = side.getItems().get(1);
+                return list.getLayoutBounds().getWidth() >= 250;
+            });
+        }
+    }
 }

@@ -22,6 +22,7 @@ import java.util.List;
 public final class ExplorerSide extends SplitPane {
     private static final PseudoClass ACTIVE = PseudoClass.getPseudoClass("active");
     private static final double DEFAULT_TREE_WIDTH = 240;
+    private static final double MIN_LIST_WIDTH = 260;
 
     private final MainWindow main;
     private final String id;
@@ -64,6 +65,8 @@ public final class ExplorerSide extends SplitPane {
 
         getItems().addAll(tree, tabPane);
         SplitPane.setResizableWithParent(tree, false);
+        // the tree keeps its width when the window resizes, but never at the cost of the file list
+        tabPane.setMinWidth(MIN_LIST_WIDTH);
         setTreeWidth(DEFAULT_TREE_WIDTH);
         addEventFilter(MouseEvent.MOUSE_PRESSED, e -> main.setActiveSide(this));
     }

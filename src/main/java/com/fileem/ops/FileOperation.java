@@ -420,8 +420,10 @@ public final class FileOperation extends Task<Void> {
 
                 @Override
                 public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) {
-                    sum[0] += attrs.isRegularFile() ? attrs.size() : 0;
+                    long bytes = attrs.isRegularFile() ? attrs.size() : 0;
+                    sum[0] += bytes;
                     sum[1]++;
+                    counted(1, bytes);
                     return FileVisitResult.CONTINUE;
                 }
 
@@ -434,6 +436,21 @@ public final class FileOperation extends Task<Void> {
             // progress is only an estimate
         }
         return sum;
+    }
+
+    private long countedItems;
+    private long countedBytes;
+    private long lastCountReport;
+
+    /** Live feedback while measuring, so a big job doesn't look stuck before copying starts. */
+    private void counted(long items, long bytes) {
+        countedItems += items;
+        countedBytes += bytes;
+        long now = System.nanoTime();
+        if (now - lastCountReport > 200_000_000L) {
+            lastCountReport = now;
+            updateMessage("Counting… " + Formats.count(countedItems) + " items, " + Formats.size(countedBytes));
+        }
     }
 
     private FileStore store(Path p) {
