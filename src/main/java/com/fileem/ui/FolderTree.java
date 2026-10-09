@@ -1,5 +1,6 @@
 package com.fileem.ui;
 
+import com.fileem.Bookmarks;
 import com.fileem.fs.Volumes;
 import com.fileem.fs.Volumes.Volume;
 import com.fileem.util.Bg;
@@ -7,6 +8,7 @@ import com.fileem.util.Formats;
 import com.fileem.util.FsUtil;
 import com.fileem.util.NaturalOrder;
 import com.fileem.util.OsUtil;
+import javafx.collections.ListChangeListener;
 import javafx.collections.ObservableList;
 import javafx.css.PseudoClass;
 import javafx.geometry.Pos;
@@ -43,6 +45,7 @@ final class FolderTree extends TreeView<TreeNode> {
     private final MainWindow main;
     private final ExplorerSide side;
     private final TreeItem<TreeNode> quickHeader;
+    private final TreeItem<TreeNode> bookmarksHeader;
     private final TreeItem<TreeNode> volumesHeader;
     private int programmatic;
     private int revealToken;
@@ -55,7 +58,10 @@ final class FolderTree extends TreeView<TreeNode> {
 
         quickHeader = new TreeItem<>(TreeNode.header("Quick access", "mdi2s-star"));
         volumesHeader = new TreeItem<>(TreeNode.header(OsUtil.isWindows() ? "This PC" : "Computer", "mdi2l-laptop"));
+        bookmarksHeader = new TreeItem<>(new TreeNode(TreeNode.Kind.BOOKMARK_HEADER, null, "Bookmarks",
+                "mdi2b-bookmark-multiple", "icon-header", null));
         quickHeader.setExpanded(true);
+        bookmarksHeader.setExpanded(true);
         volumesHeader.setExpanded(true);
         TreeItem<TreeNode> root = new TreeItem<>(TreeNode.header("", null));
         root.getChildren().setAll(List.of(quickHeader, volumesHeader));
@@ -76,6 +82,9 @@ final class FolderTree extends TreeView<TreeNode> {
                 tab.navigateTo(item.getValue().path());
             }
         });
+
+        main.bookmarks().items().addListener((ListChangeListener<Bookmarks.Bookmark>) c -> syncBookmarks());
+        syncBookmarks();
 
         Volumes.current().addListener((o, old, vols) -> syncVolumes(vols));
         syncVolumes(Volumes.current().get());
@@ -122,6 +131,40 @@ final class FolderTree extends TreeView<TreeNode> {
             // use the English defaults
         }
         return out;
+    }
+
+    // ---- bookmarks ----
+
+    /** Mirrors the shared bookmark list; the section is hidden while there are no bookmarks. */
+    private void syncBookmarks() {
+        Map<Path, FolderItem> existing = new HashMap<>();
+        for (TreeItem<TreeNode> c : bookmarksHeader.getChildren()) {
+            existing.put(c.getValue().path(), (FolderItem) c);
+        }
+        List<TreeItem<TreeNode>> wanted = new ArrayList<>();
+        for (Bookmarks.Bookmark b : main.bookmarks().items()) {
+            TreeNode node = TreeNode.bookmark(b.path(), b.name());
+            FolderItem item = existing.get(b.path());
+            if (item == null) {
+                item = new FolderItem(node);
+            } else if (!node.equals(item.getValue())) {
+                item.setValue(node);
+            }
+            wanted.add(item);
+        }
+        programmatic++;
+        try {
+            syncChildren(bookmarksHeader.getChildren(), wanted);
+            ObservableList<TreeItem<TreeNode>> top = getRoot().getChildren();
+            boolean shown = top.contains(bookmarksHeader);
+            if (wanted.isEmpty() && shown) {
+                top.remove(bookmarksHeader);
+            } else if (!wanted.isEmpty() && !shown) {
+                top.add(1, bookmarksHeader);
+            }
+        } finally {
+            programmatic--;
+        }
     }
 
     // ---- volumes ----
@@ -376,6 +419,7 @@ final class FolderTree extends TreeView<TreeNode> {
         private final Label name = new Label();
         private final Label extra = new Label();
         private final HBox box = new HBox(6, icon, name, extra);
+        private final javafx.scene.control.Tooltip tooltip = new javafx.scene.control.Tooltip();
 
         FolderCell() {
             box.setAlignment(Pos.CENTER_LEFT);
@@ -385,7 +429,9 @@ final class FolderTree extends TreeView<TreeNode> {
             ContextMenu menu = new ContextMenu();
             menu.setOnShowing(e -> {
                 TreeNode n = getItem();
-                menu.getItems().setAll(n != null && n.path() != null ? main.folderMenuItems(n.path()) : List.of());
+                menu.getItems().setAll(n != null && n.path() != null ? main.treeMenuItems(n)
+                        : n != null && n.kind() == TreeNode.Kind.BOOKMARK_HEADER ? main.bookmarksHeaderMenuItems()
+                        : List.of());
             });
             setContextMenu(menu);
 
@@ -432,7 +478,7 @@ final class FolderTree extends TreeView<TreeNode> {
                 pseudoClassStateChanged(HEADER, false);
                 return;
             }
-            pseudoClassStateChanged(HEADER, n.kind() == TreeNode.Kind.HEADER);
+            pseudoClassStateChanged(HEADER, n.isHeader());
             icon.setVisible(n.icon() != null);
             icon.setManaged(n.icon() != null);
             if (n.icon() != null) {
@@ -442,7 +488,16 @@ final class FolderTree extends TreeView<TreeNode> {
             extra.setText(n.extra() == null ? "" : n.extra());
             extra.setVisible(n.extra() != null);
             extra.setManaged(n.extra() != null);
-            setGraphic(box);
+            if (getGraphic() != box) {
+                // setGraphic makes the skin re-run CSS on the disclosure arrow, so only when needed
+                setGraphic(box);
+            }
+            if (n.kind() == TreeNode.Kind.BOOKMARK) {
+                tooltip.setText(n.path().toString());
+                setTooltip(tooltip);
+            } else if (getTooltip() != null) {
+                setTooltip(null);
+            }
         }
     }
 }

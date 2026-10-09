@@ -22,6 +22,9 @@ mvn test -Dheadless=false   # watch the UI tests run on screen
 
 - **Folder tree**: Quick access (Home, Desktop, Documents, … including localized XDG folders on Linux)
   and all volumes/mounts with free space. Removable drives show up automatically (polled every 5 s).
+- **Bookmarks**: Ctrl+D (or the bookmark button) bookmarks the current folder; bookmarks appear
+  in their own tree section on both sides. Right-click a bookmark to rename, reorder or remove it,
+  or use *Manage bookmarks* (Ctrl+Shift+B). Bookmarks are saved immediately.
 - **File list**: Name, Size, Type, Date modified by default; Date created, Date accessed, Extension and
   Attributes/permissions can be turned on from the `⋮` header menu. Click headers to sort (folders stay
   on top, natural "file2 < file10" order). Column widths, order, visibility and sort are remembered.
@@ -62,6 +65,8 @@ mvn test -Dheadless=false   # watch the UI tests run on screen
 | Ctrl+F | Filter |
 | Ctrl+H (Cmd+Shift+. on macOS) | Show hidden files |
 | Ctrl+R | Refresh |
+| Ctrl+D | Bookmark / un-bookmark the current folder |
+| Ctrl+Shift+B | Manage bookmarks |
 | F9 | Toggle dual pane |
 
 On macOS, Ctrl is Cmd; Cmd+Backspace deletes and Cmd+Up/Down go up/open.

@@ -15,6 +15,11 @@ final class Views {
             return;
         }
         if (control.lookup(".virtual-flow") instanceof VirtualFlow<?> flow) {
+            var first = flow.getFirstVisibleCell();
+            var last = flow.getLastVisibleCell();
+            if (first != null && last != null && index > first.getIndex() && index < last.getIndex()) {
+                return; // already fully on screen: skip the (row-measuring) scroll
+            }
             flow.scrollTo(index);
         } else if (control instanceof TableView<?> t) {
             t.scrollTo(index);

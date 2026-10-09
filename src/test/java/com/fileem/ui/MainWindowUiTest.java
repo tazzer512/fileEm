@@ -60,8 +60,11 @@ class MainWindowUiTest {
     }
 
     @AfterEach
-    void closeDialogs() throws Exception {
+    void closeWindows() throws Exception {
         FxToolkit.cleanupStages();
+        // Detach this test's window: it stays alive (watchers, volume listeners) and would otherwise
+        // keep restyling while reacting to its deleted temp folders, polluting later tests.
+        WaitForAsyncUtils.asyncFx(() -> stage.setScene(null)).get();
     }
 
     // ---- helpers ----
@@ -469,5 +472,125 @@ class MainWindowUiTest {
                 && b.equals(restored.left().tabs().get(1).currentDir()));
         assertTrue(fx(restored::isDual));
         assertEquals(b, fx(() -> restored.left().activeTab().currentDir()), "selected tab restored");
+    }
+
+    // ---- bookmarks ----
+
+    private static List<String> treeBookmarks(FolderTree tree) {
+        return fx(() -> tree.getRoot().getChildren().stream()
+                .filter(i -> i.getValue().kind() == TreeNode.Kind.BOOKMARK_HEADER)
+                .flatMap(h -> h.getChildren().stream())
+                .map(i -> i.getValue().label() + "=" + i.getValue().path())
+                .toList());
+    }
+
+    private static TreeNode bookmarkNode(FolderTree tree, Path path) {
+        return fx(() -> tree.getRoot().getChildren().stream()
+                .filter(i -> i.getValue().kind() == TreeNode.Kind.BOOKMARK_HEADER)
+                .flatMap(h -> h.getChildren().stream())
+                .map(TreeItem::getValue)
+                .filter(n -> n.path().equals(path))
+                .findFirst().orElseThrow());
+    }
+
+    private void fireMenuItem(List<javafx.scene.control.MenuItem> items, String textPrefix) {
+        javafx.scene.control.MenuItem item = items.stream()
+                .filter(i -> i.getText() != null && i.getText().startsWith(textPrefix))
+                .findFirst().orElseThrow(() -> new AssertionError("no menu item " + textPrefix));
+        assertFalse(item.isDisable(), textPrefix + " is enabled");
+        WaitForAsyncUtils.asyncFx(item::fire); // may open a dialog, so don't wait for it
+        WaitForAsyncUtils.waitForFxEvents();
+    }
+
+    @Test
+    void ctrlDTogglesABookmarkShownInBothTrees(FxRobot robot) throws Exception {
+        Path dir = folderWith("Favourite");
+        open(robot, leftTab(), dir);
+        assertTrue(treeBookmarks(fx(() -> window.left().tree())).isEmpty(), "no section without bookmarks");
+
+        robot.push(KeyCode.SHORTCUT, KeyCode.D);
+        waitUntil("bookmarked", () -> window.bookmarks().contains(dir));
+        assertEquals(List.of("Favourite=" + dir), treeBookmarks(fx(() -> window.left().tree())));
+        assertEquals(List.of("Favourite=" + dir), treeBookmarks(fx(() -> window.right().tree())));
+
+        robot.push(KeyCode.SHORTCUT, KeyCode.D);
+        waitUntil("bookmark removed", () -> !window.bookmarks().contains(dir));
+        assertTrue(treeBookmarks(fx(() -> window.left().tree())).isEmpty());
+    }
+
+    @Test
+    void selectingABookmarkNavigatesTheActiveTab(FxRobot robot) throws Exception {
+        Path dir = folderWith("target", "inside.txt");
+        robot.interact(() -> window.bookmarks().add(dir));
+        FolderTree tree = fx(() -> window.left().tree());
+        robot.interact(() -> tree.getRoot().getChildren().stream()
+                .filter(i -> i.getValue().kind() == TreeNode.Kind.BOOKMARK_HEADER)
+                .findFirst().ifPresent(h -> tree.getSelectionModel().select(h.getChildren().get(0))));
+        waitUntil("navigated to bookmark", () -> dir.equals(leftTab().currentDir()));
+        assertEquals(List.of("inside.txt"), names(leftTab()));
+    }
+
+    @Test
+    void bookmarkContextMenuRenamesMovesAndRemoves(FxRobot robot) throws Exception {
+        Path a = folderWith("alpha");
+        Path b = folderWith("beta");
+        robot.interact(() -> {
+            window.bookmarks().add(a);
+            window.bookmarks().add(b);
+        });
+        FolderTree tree = fx(() -> window.left().tree());
+
+        fireMenuItem(fx(() -> window.treeMenuItems(bookmarkNode(tree, b))), "Move up");
+        waitUntil("beta first", () -> window.bookmarks().items().get(0).path().equals(b));
+
+        fireMenuItem(fx(() -> window.treeMenuItems(bookmarkNode(tree, a))), "Rename bookmark");
+        answerDialog(robot, "My Alpha");
+        waitUntil("renamed", () -> window.bookmarks().find(a).orElseThrow().name().equals("My Alpha"));
+        assertEquals(List.of("beta=" + b, "My Alpha=" + a), treeBookmarks(tree));
+
+        fireMenuItem(fx(() -> window.treeMenuItems(bookmarkNode(tree, b))), "Remove bookmark");
+        waitUntil("removed", () -> window.bookmarks().items().size() == 1);
+        assertEquals(List.of("My Alpha=" + a), treeBookmarks(tree));
+        assertTrue(Files.isDirectory(b), "removing a bookmark never touches the folder");
+    }
+
+    @Test
+    void folderContextMenusOfferAddToBookmarks(FxRobot robot) throws Exception {
+        Path dir = folderWith("menus", "sub/");
+        FileTab tab = leftTab();
+        open(robot, tab, dir);
+        select(robot, tab, "sub");
+        fireMenuItem(fx(() -> window.fileMenuItems(tab)), "Add to bookmarks");
+        waitUntil("selected folder bookmarked", () -> window.bookmarks().contains(dir.resolve("sub")));
+        assertTrue(fx(() -> window.fileMenuItems(tab)).stream()
+                .anyMatch(i -> "Remove from bookmarks".equals(i.getText())), "menu now offers removal");
+    }
+
+    @Test
+    void manageDialogListsAndRemovesBookmarks(FxRobot robot) throws Exception {
+        Path a = folderWith("m1");
+        Path b = folderWith("m2");
+        robot.interact(() -> {
+            window.bookmarks().add(a);
+            window.bookmarks().add(b);
+        });
+        robot.push(KeyCode.SHORTCUT, KeyCode.SHIFT, KeyCode.B);
+        WaitForAsyncUtils.waitForFxEvents();
+        javafx.scene.control.ListView<?> list = robot.lookup(".bookmark-list").queryAs(javafx.scene.control.ListView.class);
+        assertEquals(2, (int) fx(() -> list.getItems().size()));
+        robot.clickOn("Move down");
+        waitUntil("m1 moved down", () -> window.bookmarks().items().get(1).path().equals(a));
+        robot.clickOn("Remove");
+        waitUntil("one left", () -> window.bookmarks().items().size() == 1);
+        assertEquals(1, (int) fx(() -> list.getItems().size()), "dialog list is live");
+    }
+
+    @Test
+    void bookmarksSurviveARestart(FxRobot robot) throws Exception {
+        Path dir = folderWith("kept");
+        robot.interact(() -> window.bookmarks().add(dir, "Kept"));
+        Session reloaded = Session.load(tmp.resolve("session.properties")); // saved immediately, no close needed
+        MainWindow restored = fx(() -> new MainWindow(new Stage(), reloaded));
+        assertEquals(List.of("Kept=" + dir), treeBookmarks(fx(() -> restored.left().tree())));
     }
 }

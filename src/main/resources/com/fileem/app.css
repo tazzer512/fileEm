@@ -18,6 +18,8 @@
 .icon-exe { -fx-icon-color: #6a6fd8; }
 .icon-text, .icon-file, .icon-volume, .icon-header { -fx-icon-color: -color-fg-muted; }
 .icon-quick { -fx-icon-color: -color-accent-fg; }
+.icon-bookmark { -fx-icon-color: #d6457a; }
+.icon-missing { -fx-icon-color: -color-danger-fg; }
 
 /* ---- sides ---- */
 .explorer-side > .split-pane-divider,

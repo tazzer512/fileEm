@@ -96,6 +96,21 @@ public final class Dialogs {
         return d.showAndWait().map(String::trim);
     }
 
+    /** Free text prompt (e.g. a bookmark name); blank answers are treated as cancel. */
+    public static Optional<String> askText(Window owner, String title, String prompt, String initial) {
+        TextInputDialog d = new TextInputDialog(initial);
+        prepare(d, owner);
+        d.setTitle(title);
+        d.setHeaderText(null);
+        d.setContentText(prompt);
+        d.getEditor().setPrefColumnCount(32);
+        d.setOnShown(e -> Platform.runLater(() -> {
+            d.getEditor().requestFocus();
+            d.getEditor().selectAll();
+        }));
+        return d.showAndWait().map(String::strip).filter(t -> !t.isEmpty());
+    }
+
     /** Commander style "copy to" prompt with an editable target folder. */
     public static Optional<Path> askTarget(Window owner, String title, String message, Path initial) {
         TextInputDialog d = new TextInputDialog(initial == null ? "" : initial.toString());

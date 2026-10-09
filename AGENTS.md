@@ -45,7 +45,7 @@ Treat it as part of every change, not an afterthought:
 ```
 src/test/java/com/fileem/
   FxTestSupport        starts the FX toolkit once; drainFx() waits for queued FX events
-  SessionTest
+  SessionTest, BookmarksTest
   util/                NaturalOrderTest, FormatsTest (fixes Locale.US), FsUtilTest
   fs/                  FileEntryTest, FileTypesTest, VolumesTest, DirWatcherTest
   ops/FileOperationTest  copy/move/delete/trash semantics + integrity on failure/cancel
@@ -60,6 +60,10 @@ src/test/java/com/fileem/
 - Monocle quirk: robot key events go to the main window, not to an open dialog. Fill dialogs with
   `answerDialog(robot, text)` (replaces the field's selection, clicks OK) and close them by
   clicking button text.
+- Known noise: across UI tests, JavaFX may log `ClassCastException ... while converting value for
+  '-fx-background-color'` for tree arrows. It comes from VirtualFlow's detached measuring cell in
+  hidden windows left over from earlier tests, not from the app; ignore it, but don't add new
+  warnings.
 - Platform-specific tests use `assumeTrue(OsUtil.isPosix())` / `isWindows()` so they skip, not
   fail, elsewhere.
 - UI test hooks are package-private accessors (`MainWindow.left()/right()/isDual()/activeSide()`,
@@ -78,7 +82,8 @@ src/test/java/com/fileem/
 ## Layout
 
 ```
-com.fileem          Launcher, FileEmApp (stage, session save), Session (properties file)
+com.fileem          Launcher, FileEmApp (stage, session save), Session (properties file),
+                    Bookmarks (ordered named folders, saved on every change)
 com.fileem.util     OsUtil, Bg (background executor → FX callbacks), Formats, FsUtil, NaturalOrder
 com.fileem.fs       FileEntry (row snapshot), FileTypes, Volumes (mount polling), DirWatcher,
                     Trash, Shell (open with OS)
@@ -86,7 +91,8 @@ com.fileem.ops      FileOperation (copy/move/delete/trash Task), FileClipboard
 com.fileem.ui       MainWindow (toolbar, F-key bar, ALL commands + key handling)
                     └ ExplorerSide ×2 (left/right): FolderTree + TabPane of FileTab
                        └ FileTab: AddressBar + filter + FileTable + status line
-                    OperationUi (progress window, conflict dialog), PropertiesDialog, Dialogs,
+                    OperationUi (progress window, conflict dialog), PropertiesDialog, BookmarksDialog,
+                    Dialogs,
                     Dnd, Theme, Icons, Views, TreeNode
 src/main/resources/com/fileem/app.css   author stylesheet on top of AtlantaFX
 ```
@@ -159,7 +165,12 @@ src/main/resources/com/fileem/app.css   author stylesheet on top of AtlantaFX
   applied via `Icons.apply`, not `setIconColor`. Dialogs/stages must get `Theme.APP_CSS`
   (`Dialogs.prepare`).
 - **Session**: everything persisted goes through `Session` keys (`window.*`, `left.*`/`right.*`,
-  `columns.*`, `sort.*`, `dual`, `showHidden`, `theme.dark`). Saved on window close only.
+  `columns.*`, `sort.*`, `dual`, `showHidden`, `theme.dark`, `bookmarks.*`). Saved on window
+  close, except `Bookmarks`, which saves the session file on every change.
+- **Bookmarks**: one `Bookmarks` model per `MainWindow`, shared by both trees. The tree's
+  Bookmarks section (`TreeNode.Kind.BOOKMARK_HEADER` / `BOOKMARK`) mirrors it via `syncBookmarks`
+  and is hidden while empty. Bookmark items are lazy `FolderItem`s like volumes, but `reveal`
+  only walks volumes. Mutate through `Bookmarks` (its list is read-only).
 - Code style: 4-space indent, braces always, `final` classes, package-private UI internals, short
   Javadoc on non-obvious classes/methods, no wildcard imports.
 

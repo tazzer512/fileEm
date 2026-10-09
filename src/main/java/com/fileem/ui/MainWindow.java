@@ -1,6 +1,7 @@
 package com.fileem.ui;
 
 import atlantafx.base.theme.Styles;
+import com.fileem.Bookmarks;
 import com.fileem.Session;
 import com.fileem.fs.FileEntry;
 import com.fileem.fs.Shell;
@@ -63,10 +64,13 @@ public final class MainWindow extends BorderPane {
     private Button backButton;
     private Button forwardButton;
     private Button upButton;
+    private Button bookmarkButton;
+    private final Bookmarks bookmarks;
 
     public MainWindow(Stage stage, Session session) {
         this.stage = stage;
         this.session = session;
+        this.bookmarks = new Bookmarks(session);
         getStyleClass().add("main-window");
         showHidden.set(session.getBool("showHidden", false));
         showHidden.addListener((o, a, v) -> session.put("showHidden", v));
@@ -108,6 +112,10 @@ public final class MainWindow extends BorderPane {
 
     ExplorerSide right() {
         return right;
+    }
+
+    Bookmarks bookmarks() {
+        return bookmarks;
     }
 
     boolean isDual() {
@@ -171,6 +179,14 @@ public final class MainWindow extends BorderPane {
         forwardButton.setDisable(!t.canGoForward());
         upButton.setDisable(!t.canGoUp());
         stage.setTitle(t.currentDir() == null ? "fileEm" : FsUtil.displayName(t.currentDir()) + " — fileEm");
+        updateBookmarkButton();
+    }
+
+    private void updateBookmarkButton() {
+        FileTab t = tab();
+        boolean marked = t != null && t.currentDir() != null && bookmarks.contains(t.currentDir());
+        ((FontIcon) bookmarkButton.getGraphic()).setIconLiteral(marked ? "mdi2b-bookmark" : "mdi2b-bookmark-outline");
+        bookmarkButton.getTooltip().setText(marked ? "Remove bookmark (Ctrl+D)" : "Bookmark this folder (Ctrl+D)");
     }
 
     private Node buildToolbar() {
@@ -188,6 +204,9 @@ public final class MainWindow extends BorderPane {
         Button props = iconButton("mdi2i-information-outline", "Properties (Alt+Enter)", this::properties);
 
         Button newTab = iconButton("mdi2t-tab-plus", "New tab (Ctrl+T)", () -> side().newTab(currentDirOr(), true));
+        bookmarkButton = iconButton("mdi2b-bookmark-outline", "Bookmark this folder (Ctrl+D)",
+                () -> toggleBookmark(tab().currentDir()));
+        bookmarks.items().addListener((javafx.collections.ListChangeListener<Bookmarks.Bookmark>) c -> updateBookmarkButton());
 
         ToggleButton hidden = toggle("mdi2e-eye", "Show hidden files (Ctrl+H)");
         hidden.selectedProperty().bindBidirectional(showHidden);
@@ -199,7 +218,7 @@ public final class MainWindow extends BorderPane {
         HBox.setHgrow(spacer, Priority.ALWAYS);
 
         ToolBar bar = new ToolBar(backButton, forwardButton, upButton, refresh, sep(),
-                newFolder, cut, copy, paste, rename, delete, props, sep(), newTab,
+                newFolder, cut, copy, paste, rename, delete, props, sep(), newTab, bookmarkButton,
                 spacer, hidden, dualToggle, theme);
         bar.getStyleClass().add("main-toolbar");
         return bar;
@@ -295,6 +314,10 @@ public final class MainWindow extends BorderPane {
             action = () -> tab().focusFilter();
         } else if ((e.isControlDown() && !alt && c == KeyCode.H) || (shortcut && shift && c == KeyCode.PERIOD)) {
             action = () -> showHidden.set(!showHidden.get());
+        } else if (shortcut && shift && !alt && c == KeyCode.B) {
+            action = this::manageBookmarks;
+        } else if (shortcut && !alt && !shift && c == KeyCode.D) {
+            action = () -> toggleBookmark(tab().currentDir());
         } else if (shortcut && !alt && c == KeyCode.R) {
             action = this::refreshActive;
         } else if (c == KeyCode.F9) {
@@ -578,6 +601,7 @@ public final class MainWindow extends BorderPane {
                 Path dir = entries.get(0).path();
                 items.add(item("Open in new tab", "mdi2t-tab-plus", () -> t.side().newTab(dir, true)));
                 items.add(item("Open in other side", "mdi2v-view-split-vertical", () -> openInOtherSide(dir)));
+                items.add(bookmarkToggleItem(dir));
             }
             items.add(new SeparatorMenuItem());
             items.add(item("Cut", "mdi2c-content-cut", () -> clipboardPut(true)));
@@ -608,6 +632,7 @@ public final class MainWindow extends BorderPane {
             items.add(item("Refresh", "mdi2r-refresh", this::refreshActive));
             items.add(new SeparatorMenuItem());
             if (t.currentDir() != null) {
+                items.add(bookmarkToggleItem(t.currentDir()));
                 items.add(item("Copy path", "mdi2c-clipboard-text-outline", () -> copyPaths(List.of(t.currentDir()))));
             }
             items.add(item("Properties", "mdi2i-information-outline", this::properties));
@@ -615,10 +640,27 @@ public final class MainWindow extends BorderPane {
         return items;
     }
 
-    List<MenuItem> folderMenuItems(Path dir) {
+    /** Context menu for a folder, bookmark or volume in the tree. */
+    List<MenuItem> treeMenuItems(TreeNode node) {
+        Path dir = node.path();
         List<MenuItem> items = new ArrayList<>();
         items.add(item("Open in new tab", "mdi2t-tab-plus", () -> side().newTab(dir, true)));
         items.add(item("Open in other side", "mdi2v-view-split-vertical", () -> openInOtherSide(dir)));
+        items.add(new SeparatorMenuItem());
+        if (node.kind() == TreeNode.Kind.BOOKMARK) {
+            int index = bookmarkIndex(dir);
+            items.add(item("Rename bookmark…", "mdi2p-pencil", () -> renameBookmark(dir)));
+            items.add(item("Remove bookmark", "mdi2b-bookmark-remove", () -> bookmarks.remove(dir)));
+            MenuItem up = item("Move up", "mdi2a-arrow-up", () -> bookmarks.move(dir, -1));
+            up.setDisable(index <= 0);
+            MenuItem down = item("Move down", "mdi2a-arrow-down", () -> bookmarks.move(dir, 1));
+            down.setDisable(index < 0 || index >= bookmarks.items().size() - 1);
+            items.add(up);
+            items.add(down);
+            items.add(item("Manage bookmarks…  (Ctrl+Shift+B)", "mdi2b-bookmark-multiple", this::manageBookmarks));
+        } else {
+            items.add(bookmarkToggleItem(dir));
+        }
         items.add(new SeparatorMenuItem());
         MenuItem paste = item("Paste into folder", "mdi2c-content-paste", () -> pasteInto(dir));
         paste.setDisable(!FileClipboard.hasFiles());
@@ -626,6 +668,55 @@ public final class MainWindow extends BorderPane {
         items.add(item("Copy path", "mdi2c-clipboard-text-outline", () -> copyPaths(List.of(dir))));
         items.add(item("Properties", "mdi2i-information-outline", () -> PropertiesDialog.show(stage, List.of(dir))));
         return items;
+    }
+
+    List<MenuItem> bookmarksHeaderMenuItems() {
+        return List.of(item("Manage bookmarks…  (Ctrl+Shift+B)", "mdi2b-bookmark-multiple", this::manageBookmarks));
+    }
+
+    private MenuItem bookmarkToggleItem(Path dir) {
+        return bookmarks.contains(dir)
+                ? item("Remove from bookmarks", "mdi2b-bookmark-remove", () -> bookmarks.remove(dir))
+                : item("Add to bookmarks  (Ctrl+D)", "mdi2b-bookmark-plus", () -> bookmarks.add(dir));
+    }
+
+    // ---- bookmarks ----
+
+    private int bookmarkIndex(Path dir) {
+        List<Bookmarks.Bookmark> all = bookmarks.items();
+        for (int i = 0; i < all.size(); i++) {
+            if (all.get(i).path().equals(dir)) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    /** Ctrl+D: bookmarks the folder, or removes its bookmark when it already has one. */
+    void toggleBookmark(Path dir) {
+        if (dir == null) {
+            return;
+        }
+        if (bookmarks.contains(dir)) {
+            bookmarks.remove(dir);
+        } else {
+            bookmarks.add(dir);
+        }
+    }
+
+    void renameBookmark(Path dir) {
+        bookmarks.find(dir).ifPresent(b -> Dialogs.askText(stage, "Rename bookmark", "Name:", b.name())
+                .ifPresent(name -> bookmarks.rename(dir, name)));
+    }
+
+    void openBookmark(Path dir) {
+        FileTab t = tab();
+        t.navigateTo(dir);
+        t.focusTable();
+    }
+
+    void manageBookmarks() {
+        BookmarksDialog.show(stage, this);
     }
 
     private static MenuItem item(String text, String icon, Runnable action) {
