@@ -18,7 +18,10 @@ import javafx.scene.control.TreeCell;
 import javafx.scene.control.TreeItem;
 import javafx.scene.control.TreeView;
 import javafx.scene.input.ClipboardContent;
+import javafx.scene.input.ContextMenuEvent;
 import javafx.scene.input.Dragboard;
+import javafx.scene.input.MouseButton;
+import javafx.scene.input.MouseEvent;
 import javafx.scene.input.TransferMode;
 import javafx.scene.layout.HBox;
 import org.kordamp.ikonli.javafx.FontIcon;
@@ -426,14 +429,24 @@ final class FolderTree extends TreeView<TreeNode> {
             extra.getStyleClass().add("tree-extra");
             name.setMinWidth(0);
 
-            ContextMenu menu = new ContextMenu();
-            menu.setOnShowing(e -> {
+            ContextMenu menu = Views.dynamicContextMenu(this, () -> {
                 TreeNode n = getItem();
-                menu.getItems().setAll(n != null && n.path() != null ? main.treeMenuItems(n)
+                return n != null && n.path() != null ? main.treeMenuItems(n)
                         : n != null && n.kind() == TreeNode.Kind.BOOKMARK_HEADER ? main.bookmarksHeaderMenuItems()
-                        : List.of());
+                        : List.of();
             });
-            setContextMenu(menu);
+            // Right-click must not select (selecting navigates the tab); outline the item instead.
+            addEventFilter(MouseEvent.MOUSE_PRESSED, e -> {
+                if (e.getButton() == MouseButton.SECONDARY) {
+                    e.consume();
+                }
+            });
+            addEventFilter(ContextMenuEvent.CONTEXT_MENU_REQUESTED, e -> {
+                if (getItem() != null && !getStyleClass().contains("context-target")) {
+                    getStyleClass().add("context-target");
+                }
+            });
+            menu.setOnHidden(e -> getStyleClass().remove("context-target"));
 
             setOnDragDetected(e -> {
                 TreeNode n = getItem();
@@ -471,7 +484,7 @@ final class FolderTree extends TreeView<TreeNode> {
         @Override
         protected void updateItem(TreeNode n, boolean empty) {
             super.updateItem(n, empty);
-            getStyleClass().remove("drop-target");
+            getStyleClass().removeAll("drop-target", "context-target");
             setText(null);
             if (empty || n == null) {
                 setGraphic(null);

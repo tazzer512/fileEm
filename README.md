@@ -37,6 +37,11 @@ mvn test -Dheadless=false   # watch the UI tests run on screen
   place, so a failed or cancelled copy never damages an existing file. Moves between drives are
   flushed to disk before the source is deleted. Links are never followed, special files are
   skipped, and free space is checked up front.
+- **Right-click menus** on files, folders, empty space and the tree: open (in a tab, the other
+  side, a terminal or the OS file manager), cut/copy/paste (into a folder), copy/move to the other
+  side, duplicate, compress to ZIP / extract here, new folder / text file, rename, trash, delete,
+  bookmark, sort by, show hidden files, copy path, properties. Quick access folders, bookmarks and
+  drives in the tree can't be cut, renamed or deleted from there.
 - **Drag & drop** between sides, tabs, the tree and other applications. Inside fileEm the OS modifier
   keys choose copy or move; drops from other applications are always copied.
 - **Clipboard** uses the OS clipboard, so files can be copied/pasted to and from Explorer, Finder or

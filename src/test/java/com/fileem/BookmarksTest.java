@@ -102,4 +102,16 @@ class BookmarksTest {
         assertThrows(UnsupportedOperationException.class,
                 () -> b.items().add(new Bookmark("x", dir)));
     }
+
+    @Test
+    void relocateFollowsRenamedFoldersAndKeepsCustomNames() {
+        Bookmarks b = fresh();
+        b.add(dir.resolve("old"));
+        b.add(dir.resolve("old/inner"), "Custom");
+        b.add(dir.resolve("other"));
+        b.relocate(dir.resolve("old"), dir.resolve("new"));
+        assertEquals(List.of("new", "Custom", "other"), names(b), "default names follow, custom names stay");
+        assertEquals(dir.resolve("new/inner"), b.items().get(1).path());
+        assertFalse(b.contains(dir.resolve("old")));
+    }
 }

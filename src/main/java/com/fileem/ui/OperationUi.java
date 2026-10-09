@@ -50,7 +50,8 @@ final class OperationUi {
     private OperationUi() {
     }
 
-    static void run(Window owner, Kind kind, List<Path> sources, Path target, Consumer<Set<Path>> onDone) {
+    /** Starts the operation; {@code onDone} gets the folders whose contents changed. */
+    static FileOperation run(Window owner, Kind kind, List<Path> sources, Path target, Consumer<Set<Path>> onDone) {
         FileOperation op = new FileOperation(kind, sources, target, (s, t) -> askOnFxThread(owner, s, t));
         String title = title(kind, sources, target);
         ProgressWindow window = new ProgressWindow(owner, op, title);
@@ -79,6 +80,7 @@ final class OperationUi {
         });
         Bg.POOL.execute(op);
         window.showDelayed();
+        return op;
     }
 
     private static String title(Kind kind, List<Path> sources, Path target) {
@@ -88,6 +90,8 @@ final class OperationUi {
             case MOVE -> "Moving " + what + " to " + target;
             case DELETE -> "Deleting " + what;
             case TRASH -> "Moving " + what + " to Trash";
+            case COMPRESS -> "Compressing " + what;
+            case EXTRACT -> "Extracting " + what;
         };
     }
 
@@ -171,7 +175,7 @@ final class OperationUi {
             bar.progressProperty().bind(op.progressProperty());
             bar.setMaxWidth(Double.MAX_VALUE);
 
-            boolean bytes = op.kind() == Kind.COPY || op.kind() == Kind.MOVE;
+            boolean bytes = op.kind() != Kind.DELETE && op.kind() != Kind.TRASH;
             Label detail = new Label();
             detail.textProperty().bind(Bindings.createStringBinding(() -> {
                 double p = op.getProgress();

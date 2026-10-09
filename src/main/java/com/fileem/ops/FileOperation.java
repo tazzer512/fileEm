@@ -6,7 +6,12 @@ import com.fileem.util.FsUtil;
 import com.fileem.util.OsUtil;
 import javafx.concurrent.Task;
 
+import java.io.BufferedOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.nio.charset.Charset;
+import java.nio.charset.StandardCharsets;
 import java.nio.channels.FileChannel;
 import java.nio.file.AccessDeniedException;
 import java.nio.file.AtomicMoveNotSupportedException;
@@ -29,7 +34,11 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Enumeration;
 import java.util.concurrent.ThreadLocalRandom;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipFile;
+import java.util.zip.ZipOutputStream;
 
 /**
  * Copy / move / delete / trash of a list of paths, run as a background task.
@@ -49,7 +58,8 @@ import java.util.concurrent.ThreadLocalRandom;
  * </ul>
  */
 public final class FileOperation extends Task<Void> {
-    public enum Kind { COPY, MOVE, DELETE, TRASH }
+    /** COMPRESS zips all sources into one archive in {@code targetDir}; EXTRACT unpacks one zip into it. */
+    public enum Kind { COPY, MOVE, DELETE, TRASH, COMPRESS, EXTRACT }
 
     public enum Resolution { OVERWRITE, SKIP, KEEP_BOTH, CANCEL }
 
@@ -79,6 +89,9 @@ public final class FileOperation extends Task<Void> {
     /** The current top-level move stays on one file system, so items can simply be renamed. */
     private boolean renameMoves;
     private long total = 1;
+    /** The archive or extracted folder created by COMPRESS / EXTRACT. */
+    private volatile Path result;
+    private Charset zipCharset = StandardCharsets.UTF_8;
     private long done;
 
     private static final class Cancelled extends RuntimeException {
@@ -100,6 +113,11 @@ public final class FileOperation extends Task<Void> {
 
     public List<Path> sources() {
         return sources;
+    }
+
+    /** What COMPRESS / EXTRACT created (null otherwise, or when it failed). */
+    public Path result() {
+        return result;
     }
 
     public Path targetDir() {
@@ -129,6 +147,13 @@ public final class FileOperation extends Task<Void> {
             updateProgress(0, total);
             if (kind == Kind.TRASH) {
                 trashAll(work);
+            } else if (kind == Kind.COMPRESS) {
+                compress(work);
+            } else if (kind == Kind.EXTRACT) {
+                for (Path zip : work) {
+                    checkCancel();
+                    extract(zip);
+                }
             } else {
                 for (Path src : work) {
                     checkCancel();
@@ -150,6 +175,191 @@ public final class FileOperation extends Task<Void> {
         return null;
     }
 
+    // ---- archives ----
+
+    /** Name for a new archive: "name.zip" for one item (extension dropped for files), else "Archive.zip". */
+    static String archiveName(List<Path> items) {
+        if (items.size() != 1) {
+            return "Archive.zip";
+        }
+        Path p = items.get(0);
+        String name = FsUtil.displayName(p);
+        int dot = name.lastIndexOf('.');
+        if (dot > 0 && !Files.isDirectory(p, NOFOLLOW)) {
+            name = name.substring(0, dot);
+        }
+        return name + ".zip";
+    }
+
+    private void compress(List<Path> work) throws IOException {
+        if (work.isEmpty()) {
+            return;
+        }
+        Path out = FsUtil.uniqueName(targetDir.resolve(archiveName(work)), false);
+        Path tmp = tempSibling(out);
+        boolean placed = false;
+        try {
+            try (ZipOutputStream zip = new ZipOutputStream(new BufferedOutputStream(
+                    Files.newOutputStream(tmp, StandardOpenOption.CREATE_NEW), 1 << 16))) {
+                for (Path src : work) {
+                    addToZip(zip, src, src.getFileName().toString());
+                }
+            }
+            place(tmp, out, false);
+            placed = true;
+            result = out;
+        } finally {
+            if (!placed) {
+                deleteQuietly(tmp);
+            }
+        }
+    }
+
+    private void addToZip(ZipOutputStream zip, Path p, String entryName) throws IOException {
+        checkCancel();
+        BasicFileAttributes a = Files.readAttributes(p, BasicFileAttributes.class, NOFOLLOW);
+        if (a.isSymbolicLink() || a.isOther() || (a.isDirectory() && FsUtil.isJunction(p))) {
+            errors.add(p + ": Links and special files are not added to archives");
+            advance(1);
+            return;
+        }
+        updateMessage(p.toString());
+        if (a.isDirectory()) {
+            ZipEntry e = new ZipEntry(entryName + "/");
+            e.setLastModifiedTime(a.lastModifiedTime());
+            zip.putNextEntry(e);
+            zip.closeEntry();
+            advance(1);
+            List<Path> children = new ArrayList<>();
+            try (DirectoryStream<Path> ds = Files.newDirectoryStream(p)) {
+                ds.forEach(children::add);
+            } catch (IOException ex) {
+                error(p, ex);
+            }
+            children.sort(null);
+            for (Path child : children) {
+                addToZip(zip, child, entryName + "/" + child.getFileName());
+            }
+            return;
+        }
+        // open before writing the entry header, so an unreadable file is skipped cleanly;
+        // a failure while reading aborts the whole archive (the entry would be truncated)
+        InputStream in;
+        try {
+            in = Files.newInputStream(p);
+        } catch (IOException ex) {
+            error(p, ex);
+            advance(a.size() + 1);
+            return;
+        }
+        try (in) {
+            ZipEntry e = new ZipEntry(entryName);
+            e.setLastModifiedTime(a.lastModifiedTime());
+            zip.putNextEntry(e);
+            copyStream(in, zip);
+            zip.closeEntry();
+        }
+        advance(1);
+    }
+
+    /** {uncompressed bytes, entries}; also picks the name encoding (UTF-8, else the legacy CP437). */
+    private long[] zipSize(Path zipFile) throws IOException {
+        for (Charset cs : List.of(StandardCharsets.UTF_8, Charset.forName("IBM437"))) {
+            try (ZipFile zf = new ZipFile(zipFile.toFile(), cs)) {
+                long bytes = 0, count = 0;
+                for (Enumeration<? extends ZipEntry> en = zf.entries(); en.hasMoreElements(); ) {
+                    ZipEntry e = en.nextElement();
+                    e.getName();
+                    bytes += Math.max(0, e.getSize() >= 0 ? e.getSize() : e.getCompressedSize());
+                    count++;
+                }
+                zipCharset = cs;
+                return new long[]{bytes, count};
+            } catch (IllegalArgumentException malformedNames) {
+                // try the next charset
+            }
+        }
+        throw new IOException("Cannot read the file names in this archive.");
+    }
+
+    /**
+     * Extracts into a hidden temp folder, then renames it into place: "name/" for archives with
+     * several top-level entries, or the single top-level item itself. Entries that would land
+     * outside the target (zip-slip) are refused.
+     */
+    private void extract(Path zipFile) throws IOException {
+        String base = FsUtil.displayName(zipFile);
+        int dot = base.lastIndexOf('.');
+        if (dot > 0) {
+            base = base.substring(0, dot);
+        }
+        Path tmp = tempSibling(targetDir.resolve(base));
+        Files.createDirectory(tmp);
+        boolean placed = false;
+        try {
+            Path root = tmp.toAbsolutePath().normalize();
+            try (ZipFile zf = new ZipFile(zipFile.toFile(), zipCharset)) {
+                for (Enumeration<? extends ZipEntry> en = zf.entries(); en.hasMoreElements(); ) {
+                    checkCancel();
+                    ZipEntry e = en.nextElement();
+                    Path dest = root.resolve(e.getName().replace('\\', '/')).normalize();
+                    if (!dest.startsWith(root) || dest.equals(root)) {
+                        if (!dest.equals(root)) {
+                            errors.add(zipFile + ": Skipped unsafe entry \"" + e.getName() + "\"");
+                        }
+                        advance(1);
+                        continue;
+                    }
+                    updateMessage(e.getName());
+                    if (e.isDirectory()) {
+                        Files.createDirectories(dest);
+                    } else {
+                        Files.createDirectories(dest.getParent());
+                        try (InputStream in = zf.getInputStream(e);
+                             OutputStream out = Files.newOutputStream(dest, StandardOpenOption.CREATE_NEW)) {
+                            copyStream(in, out);
+                        } catch (FileAlreadyExistsException dup) {
+                            errors.add(zipFile + ": Duplicate entry \"" + e.getName() + "\" skipped");
+                        }
+                        if (e.getLastModifiedTime() != null) {
+                            Files.setLastModifiedTime(dest, e.getLastModifiedTime());
+                        }
+                    }
+                    advance(1);
+                }
+            }
+            List<Path> top = new ArrayList<>();
+            try (DirectoryStream<Path> ds = Files.newDirectoryStream(tmp)) {
+                ds.forEach(top::add);
+            }
+            Path out;
+            if (top.size() == 1) {
+                out = FsUtil.uniqueName(targetDir.resolve(top.get(0).getFileName().toString()), false);
+                Files.move(top.get(0), out);
+                Files.delete(tmp);
+            } else {
+                out = FsUtil.uniqueName(targetDir.resolve(base), false);
+                Files.move(tmp, out);
+            }
+            placed = true;
+            result = out;
+        } finally {
+            if (!placed) {
+                deleteQuietly(tmp);
+            }
+        }
+    }
+
+    private void copyStream(InputStream in, OutputStream out) throws IOException {
+        byte[] buf = new byte[1 << 16];
+        int n;
+        while ((n = in.read(buf)) > 0) {
+            checkCancel();
+            out.write(buf, 0, n);
+            advance(n);
+        }
+    }
+
     // ---- measuring ----
 
     private long measure(List<Path> work) throws IOException {
@@ -159,6 +369,15 @@ public final class FileOperation extends Task<Void> {
             checkCancel();
             switch (kind) {
                 case TRASH -> units += 1;
+                case COMPRESS -> {
+                    long[] size = treeSize(src);
+                    units += size[0] + size[1];
+                }
+                case EXTRACT -> {
+                    long[] size = zipSize(src);
+                    units += size[0] + size[1];
+                    newBytes += size[0];
+                }
                 case DELETE -> units += treeSize(src)[1];
                 case COPY, MOVE -> {
                     if (kind == Kind.MOVE && isRename(src)) {

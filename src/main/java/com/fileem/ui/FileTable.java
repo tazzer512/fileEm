@@ -7,7 +7,6 @@ import com.fileem.util.NaturalOrder;
 import javafx.beans.property.ReadOnlyObjectWrapper;
 import javafx.collections.ListChangeListener;
 import javafx.css.PseudoClass;
-import javafx.scene.control.ContextMenu;
 import javafx.scene.control.Label;
 import javafx.scene.control.SelectionMode;
 import javafx.scene.control.TableCell;
@@ -78,9 +77,7 @@ final class FileTable extends TableView<FileEntry> {
         setRowFactory(tv -> new FileRow());
         addEventHandler(KeyEvent.KEY_TYPED, this::onKeyTyped);
 
-        ContextMenu menu = new ContextMenu();
-        menu.setOnShowing(e -> menu.getItems().setAll(main.fileMenuItems(tab)));
-        setContextMenu(menu);
+        Views.dynamicContextMenu(this, () -> main.fileMenuItems(tab));
     }
 
     private static <T> TableColumn<FileEntry, T> column(String id, String title, double width, Function<FileEntry, T> getter) {
@@ -111,6 +108,24 @@ final class FileTable extends TableView<FileEntry> {
         Comparator<FileEntry> byName = (a, b) -> NaturalOrder.INSTANCE.compare(a.name(), b.name());
         Comparator<FileEntry> user = getComparator();
         return user == null ? dirsFirst.thenComparing(byName) : dirsFirst.thenComparing(user).thenComparing(byName);
+    }
+
+    /** Id of the primary sort column, or null when unsorted. */
+    String sortColumnId() {
+        return getSortOrder().isEmpty() ? null : getSortOrder().get(0).getId();
+    }
+
+    boolean sortAscending() {
+        return getSortOrder().isEmpty() || getSortOrder().get(0).getSortType() == TableColumn.SortType.ASCENDING;
+    }
+
+    /** Sorts by the column with {@code id} (making it visible), keeping the current direction. */
+    void sortBy(String id, boolean ascending) {
+        getColumns().stream().filter(c -> c.getId().equals(id)).findFirst().ifPresent(c -> {
+            c.setVisible(true);
+            c.setSortType(ascending ? TableColumn.SortType.ASCENDING : TableColumn.SortType.DESCENDING);
+            getSortOrder().setAll(List.of(c));
+        });
     }
 
     void ensureVisible(int index) {

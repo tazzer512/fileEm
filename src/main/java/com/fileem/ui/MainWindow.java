@@ -7,6 +7,7 @@ import com.fileem.fs.FileEntry;
 import com.fileem.fs.Shell;
 import com.fileem.fs.Trash;
 import com.fileem.ops.FileClipboard;
+import com.fileem.ops.FileOperation;
 import com.fileem.ops.FileOperation.Kind;
 import com.fileem.util.FsUtil;
 import com.fileem.util.OsUtil;
@@ -17,14 +18,19 @@ import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.Node;
 import javafx.scene.Scene;
+import javafx.concurrent.Worker;
 import javafx.scene.control.Button;
 import javafx.scene.control.ButtonBase;
+import javafx.scene.control.CheckMenuItem;
 import javafx.scene.control.Label;
+import javafx.scene.control.Menu;
 import javafx.scene.control.MenuItem;
+import javafx.scene.control.RadioMenuItem;
 import javafx.scene.control.SeparatorMenuItem;
 import javafx.scene.control.SplitPane;
 import javafx.scene.control.TextInputControl;
 import javafx.scene.control.ToggleButton;
+import javafx.scene.control.ToggleGroup;
 import javafx.scene.control.ToolBar;
 import javafx.scene.control.Tooltip;
 import javafx.scene.input.Clipboard;
@@ -421,10 +427,16 @@ public final class MainWindow extends BorderPane {
         t.focusTable();
     }
 
+    // Zero-argument commands act on the active tab's selection (toolbar, keyboard, F-key bar);
+    // the path-taking versions are also used by the tree's context menu.
+
     private void clipboardPut(boolean cut) {
-        List<Path> sel = tab().selectedPaths();
-        if (!sel.isEmpty()) {
-            FileClipboard.put(sel, cut);
+        clipboardPut(tab().selectedPaths(), cut);
+    }
+
+    private void clipboardPut(List<Path> paths, boolean cut) {
+        if (!paths.isEmpty()) {
+            FileClipboard.put(paths, cut);
         }
     }
 
@@ -451,26 +463,35 @@ public final class MainWindow extends BorderPane {
     }
 
     private void delete(boolean permanent) {
-        List<Path> sel = tab().selectedPaths();
-        if (sel.isEmpty()) {
+        delete(tab().selectedPaths(), permanent);
+    }
+
+    void delete(List<Path> paths, boolean permanent) {
+        if (paths.isEmpty()) {
             return;
         }
         boolean trash = !permanent && Trash.isSupported();
-        String what = sel.size() == 1 ? "\"" + FsUtil.displayName(sel.get(0)) + "\"" : sel.size() + " items";
+        String what = describe(paths);
         String question = trash ? "Move " + what + " to the Trash?"
                 : "Permanently delete " + what + "?\n\nThis cannot be undone.";
         if (Dialogs.confirm(stage, trash ? "Move to Trash" : "Delete permanently", question)) {
-            runOperation(trash ? Kind.TRASH : Kind.DELETE, sel, null);
+            runOperation(trash ? Kind.TRASH : Kind.DELETE, paths, null);
         }
     }
 
+    private static String describe(List<Path> paths) {
+        return paths.size() == 1 ? "\"" + FsUtil.displayName(paths.get(0)) + "\"" : paths.size() + " items";
+    }
+
     private void rename() {
-        FileTab t = tab();
-        List<Path> sel = t.selectedPaths();
-        if (sel.size() != 1) {
-            return;
+        List<Path> sel = tab().selectedPaths();
+        if (sel.size() == 1) {
+            rename(sel.get(0));
         }
-        Path src = sel.get(0);
+    }
+
+    /** Renames {@code src}; tabs and bookmarks inside a renamed folder follow it. */
+    void rename(Path src) {
         String oldName = FsUtil.displayName(src);
         Dialogs.askName(stage, "Rename", "New name:", oldName, name -> {
             Path target = src.resolveSibling(name);
@@ -494,8 +515,7 @@ public final class MainWindow extends BorderPane {
                 } else {
                     Files.move(src, target);
                 }
-                t.refresh(target);
-                treesRefresh(t.currentDir());
+                afterRename(src, target);
             } catch (FileAlreadyExistsException e) {
                 Dialogs.error(stage, "Rename", "An item named \"" + name + "\" already exists.");
             } catch (IOException e) {
@@ -504,24 +524,66 @@ public final class MainWindow extends BorderPane {
         });
     }
 
+    private void afterRename(Path src, Path target) {
+        for (ExplorerSide s : List.of(left, right)) {
+            for (FileTab t : s.tabs()) {
+                Path cur = t.currentDir();
+                if (cur != null && cur.startsWith(src)) {
+                    t.navigateTo(target.resolve(src.relativize(cur)));
+                }
+            }
+        }
+        bookmarks.relocate(src, target);
+        showCreated(src.getParent(), target);
+    }
+
+    /** Refreshes views of {@code dir}; the active tab selects {@code item}. */
+    private void showCreated(Path dir, Path item) {
+        for (ExplorerSide s : List.of(left, right)) {
+            for (FileTab t : s.tabs()) {
+                if (dir.equals(t.currentDir())) {
+                    if (t == tab()) {
+                        t.refresh(item);
+                    } else {
+                        t.requestRefresh();
+                    }
+                }
+            }
+        }
+        treesRefresh(dir);
+    }
+
     private void newFolder() {
-        FileTab t = tab();
-        Path dir = t.currentDir();
+        newFolderIn(tab().currentDir());
+    }
+
+    void newFolderIn(Path dir) {
+        createIn(dir, "New folder", "Folder name:", "New folder", true);
+    }
+
+    void newFileIn(Path dir) {
+        createIn(dir, "New text file", "File name:", "New text file.txt", false);
+    }
+
+    private void createIn(Path dir, String title, String prompt, String defaultName, boolean folder) {
         if (dir == null) {
             return;
         }
-        String initial = FsUtil.displayName(FsUtil.uniqueName(dir.resolve("New folder"), false));
-        Dialogs.askName(stage, "New folder", "Folder name:", initial,
+        String initial = FsUtil.displayName(FsUtil.uniqueName(dir.resolve(defaultName), false));
+        Dialogs.askName(stage, title, prompt, initial,
                 name -> Files.exists(dir.resolve(name), LinkOption.NOFOLLOW_LINKS)
                         ? "An item named \"" + name + "\" already exists." : null)
                 .ifPresent(name -> {
                     Path created = dir.resolve(name);
                     try {
-                        Files.createDirectory(created);
-                        t.refresh(created);
-                        treesRefresh(dir);
+                        if (folder) {
+                            Files.createDirectory(created);
+                        } else {
+                            Files.createFile(created);
+                        }
+                        showCreated(dir, created);
                     } catch (IOException e) {
-                        Dialogs.error(stage, "New folder", "Cannot create folder:\n" + e.getMessage());
+                        Dialogs.error(stage, title, "Cannot create \"" + name + "\":\n" + e.getMessage());
                     }
                 });
     }
@@ -529,31 +591,87 @@ public final class MainWindow extends BorderPane {
     private void properties() {
         FileTab t = tab();
         List<Path> sel = t.selectedPaths();
-        if (sel.isEmpty() && t.currentDir() != null) {
-            sel = List.of(t.currentDir());
-        }
-        if (!sel.isEmpty()) {
-            PropertiesDialog.show(stage, sel);
+        properties(sel.isEmpty() && t.currentDir() != null ? List.of(t.currentDir()) : sel);
+    }
+
+    private void properties(List<Path> paths) {
+        if (!paths.isEmpty()) {
+            PropertiesDialog.show(stage, paths);
         }
     }
 
     /** F5 / F6: copy or move the selection to the other side's folder (or a typed folder). */
     private void transferToOther(boolean move) {
-        FileTab t = tab();
-        List<Path> sel = t.selectedPaths();
-        if (sel.isEmpty()) {
+        transferToOther(tab().selectedPaths(), move);
+    }
+
+    private void transferToOther(List<Path> sources, boolean move) {
+        if (sources.isEmpty()) {
             return;
         }
-        Path initial = dual.get() ? otherSide(active).activeTab().currentDir() : t.currentDir();
-        String what = sel.size() == 1 ? "\"" + FsUtil.displayName(sel.get(0)) + "\"" : sel.size() + " items";
+        Path initial = dual.get() ? otherSide(active).activeTab().currentDir() : tab().currentDir();
         String verb = move ? "Move" : "Copy";
-        Dialogs.askTarget(stage, verb, verb + " " + what + " to:", initial).ifPresent(target -> {
+        Dialogs.askTarget(stage, verb, verb + " " + describe(sources) + " to:", initial).ifPresent(target -> {
             if (!Files.isDirectory(target)) {
                 Dialogs.error(stage, verb, "The target folder does not exist:\n" + target);
                 return;
             }
-            runOperation(move ? Kind.MOVE : Kind.COPY, sel, target);
+            runOperation(move ? Kind.MOVE : Kind.COPY, sources, target);
         });
+    }
+
+    /** Copies items next to themselves ("name - Copy"). */
+    void duplicate(List<Path> paths) {
+        if (!paths.isEmpty() && paths.get(0).getParent() != null) {
+            runOperation(Kind.COPY, paths, paths.get(0).getParent());
+        }
+    }
+
+    /** Zips items into one archive next to them and selects it. */
+    void compress(List<Path> paths) {
+        if (!paths.isEmpty() && paths.get(0).getParent() != null) {
+            selectResult(runOperation(Kind.COMPRESS, paths, paths.get(0).getParent()));
+        }
+    }
+
+    /** Extracts a zip next to itself and selects what was extracted. */
+    void extract(Path zip) {
+        if (zip.getParent() != null) {
+            selectResult(runOperation(Kind.EXTRACT, List.of(zip), zip.getParent()));
+        }
+    }
+
+    private void selectResult(FileOperation op) {
+        if (op != null) {
+            op.stateProperty().addListener((o, a, state) -> {
+                if (state == Worker.State.SUCCEEDED && op.result() != null) {
+                    showCreated(op.targetDir(), op.result());
+                }
+            });
+        }
+    }
+
+    static boolean isZip(Path p) {
+        return FsUtil.displayName(p).toLowerCase(java.util.Locale.ROOT).endsWith(".zip");
+    }
+
+    /** Opens a folder in the active tab, or a file with its default application. */
+    void openPath(Path p) {
+        if (Files.isDirectory(p)) {
+            tab().navigateTo(p);
+        } else {
+            Shell.open(p, msg -> Dialogs.error(stage, "Open", "Cannot open " + FsUtil.displayName(p) + ":\n" + msg));
+        }
+    }
+
+    void openTerminal(Path dir) {
+        if (dir != null) {
+            Shell.openTerminal(dir, msg -> Dialogs.error(stage, "Open in terminal", msg));
+        }
+    }
+
+    void reveal(Path p) {
+        Shell.reveal(p, msg -> Dialogs.error(stage, "Show in " + Shell.fileManagerName(), msg));
     }
 
     void drop(DragEvent e, Path target) {
@@ -564,11 +682,11 @@ public final class MainWindow extends BorderPane {
         Platform.runLater(() -> runOperation(mode == TransferMode.MOVE ? Kind.MOVE : Kind.COPY, files, target));
     }
 
-    void runOperation(Kind kind, List<Path> sources, Path target) {
+    FileOperation runOperation(Kind kind, List<Path> sources, Path target) {
         if (sources.isEmpty()) {
-            return;
+            return null;
         }
-        OperationUi.run(stage, kind, sources, target, this::refreshDirs);
+        return OperationUi.run(stage, kind, sources, target, this::refreshDirs);
     }
 
     /** Refreshes every tab and tree item that shows one of {@code dirs}. */
@@ -590,64 +708,171 @@ public final class MainWindow extends BorderPane {
 
     // ---- context menus ----
 
+    /** Right-click menu of the file list: actions on the selection, or on the folder itself. */
     List<MenuItem> fileMenuItems(FileTab t) {
-        List<Path> sel = t.selectedPaths();
         List<FileEntry> entries = t.selectedEntries();
-        List<MenuItem> items = new ArrayList<>();
-        boolean canPaste = FileClipboard.hasFiles();
-        if (!sel.isEmpty()) {
-            items.add(item("Open", "mdi2o-open-in-app", this::openSelection));
-            if (entries.size() == 1 && entries.get(0).isDirectory()) {
-                Path dir = entries.get(0).path();
-                items.add(item("Open in new tab", "mdi2t-tab-plus", () -> t.side().newTab(dir, true)));
-                items.add(item("Open in other side", "mdi2v-view-split-vertical", () -> openInOtherSide(dir)));
-                items.add(bookmarkToggleItem(dir));
-            }
-            items.add(new SeparatorMenuItem());
-            items.add(item("Cut", "mdi2c-content-cut", () -> clipboardPut(true)));
-            items.add(item("Copy", "mdi2c-content-copy", () -> clipboardPut(false)));
-            if (canPaste) {
-                items.add(item("Paste", "mdi2c-content-paste", this::paste));
-            }
-            items.add(new SeparatorMenuItem());
-            items.add(item("Copy to…  (F5)", "mdi2f-file-move", () -> transferToOther(false)));
-            items.add(item("Move to…  (F6)", "mdi2f-file-move", () -> transferToOther(true)));
-            items.add(new SeparatorMenuItem());
-            MenuItem rename = item("Rename  (F2)", "mdi2r-rename-box", this::rename);
-            rename.setDisable(sel.size() != 1);
-            items.add(rename);
-            if (Trash.isSupported()) {
-                items.add(item("Move to Trash  (Del)", "mdi2d-delete", () -> delete(false)));
-            }
-            items.add(item("Delete permanently  (Shift+Del)", "mdi2d-delete-forever", () -> delete(true)));
-            items.add(new SeparatorMenuItem());
-            items.add(item("Copy path", "mdi2c-clipboard-text-outline", () -> copyPaths(sel)));
-            items.add(item("Properties", "mdi2i-information-outline", this::properties));
-        } else {
-            MenuItem paste = item("Paste", "mdi2c-content-paste", this::paste);
-            paste.setDisable(!canPaste);
-            items.add(paste);
-            items.add(new SeparatorMenuItem());
-            items.add(item("New folder  (F7)", "mdi2f-folder-plus", this::newFolder));
-            items.add(item("Refresh", "mdi2r-refresh", this::refreshActive));
-            items.add(new SeparatorMenuItem());
-            if (t.currentDir() != null) {
-                items.add(bookmarkToggleItem(t.currentDir()));
-                items.add(item("Copy path", "mdi2c-clipboard-text-outline", () -> copyPaths(List.of(t.currentDir()))));
-            }
-            items.add(item("Properties", "mdi2i-information-outline", this::properties));
+        if (entries.isEmpty()) {
+            return folderBackgroundItems(t);
         }
+        List<Path> sel = entries.stream().map(FileEntry::path).toList();
+        FileEntry first = entries.get(0);
+        boolean single = entries.size() == 1;
+        boolean singleDir = single && first.isDirectory();
+        boolean canPaste = FileClipboard.hasFiles();
+        List<MenuItem> items = new ArrayList<>();
+
+        items.add(defaultItem(item("Open", "mdi2o-open-in-app", this::openSelection)));
+        if (singleDir) {
+            items.add(item("Open in new tab", "mdi2t-tab-plus", () -> t.side().newTab(first.path(), true)));
+            items.add(item("Open in other side", "mdi2v-view-split-vertical", () -> openInOtherSide(first.path())));
+        }
+        items.add(item("Open in terminal", "mdi2c-console", () -> openTerminal(singleDir ? first.path() : t.currentDir())));
+        if (single) {
+            items.add(item("Show in " + Shell.fileManagerName(), "mdi2f-folder-search-outline", () -> reveal(first.path())));
+        }
+        items.add(new SeparatorMenuItem());
+        items.add(item("Cut", "mdi2c-content-cut", () -> clipboardPut(sel, true)));
+        items.add(item("Copy", "mdi2c-content-copy", () -> clipboardPut(sel, false)));
+        if (canPaste) {
+            items.add(singleDir
+                    ? item("Paste into folder", "mdi2c-content-paste", () -> pasteInto(first.path()))
+                    : item("Paste", "mdi2c-content-paste", this::paste));
+        }
+        items.add(new SeparatorMenuItem());
+        items.add(item("Copy to other side…  (F5)", "mdi2f-file-move", () -> transferToOther(sel, false)));
+        items.add(item("Move to other side…  (F6)", "mdi2f-file-move", () -> transferToOther(sel, true)));
+        items.add(item("Duplicate", "mdi2c-content-duplicate", () -> duplicate(sel)));
+        items.add(new SeparatorMenuItem());
+        items.add(item("Compress to ZIP", "mdi2a-archive-arrow-down-outline", () -> compress(sel)));
+        if (single && !first.isDirectory() && isZip(first.path())) {
+            items.add(item("Extract here", "mdi2a-archive-arrow-up-outline", () -> extract(first.path())));
+        }
+        items.add(new SeparatorMenuItem());
+        MenuItem rename = item("Rename  (F2)", "mdi2r-rename-box", () -> rename(first.path()));
+        rename.setDisable(!single);
+        items.add(rename);
+        if (Trash.isSupported()) {
+            items.add(item("Move to Trash  (Del)", "mdi2d-delete", () -> delete(sel, false)));
+        }
+        items.add(item("Delete permanently  (Shift+Del)", "mdi2d-delete-forever", () -> delete(sel, true)));
+        items.add(new SeparatorMenuItem());
+        if (singleDir) {
+            items.add(bookmarkToggleItem(first.path()));
+        }
+        items.add(item("Copy path", "mdi2c-clipboard-text-outline", () -> copyPaths(sel)));
+        items.add(item("Properties  (Alt+Enter)", "mdi2i-information-outline", () -> properties(sel)));
         return items;
     }
 
-    /** Context menu for a folder, bookmark or volume in the tree. */
+    /** Right-click on empty space in the file list: the current folder. */
+    private List<MenuItem> folderBackgroundItems(FileTab t) {
+        Path dir = t.currentDir();
+        List<MenuItem> items = new ArrayList<>();
+        MenuItem paste = item("Paste", "mdi2c-content-paste", this::paste);
+        paste.setDisable(!FileClipboard.hasFiles());
+        items.add(paste);
+        items.add(new SeparatorMenuItem());
+        items.add(newMenu(dir));
+        items.add(sortMenu(t.table()));
+        CheckMenuItem hidden = new CheckMenuItem("Show hidden files");
+        hidden.setSelected(showHidden.get());
+        hidden.setOnAction(e -> showHidden.set(hidden.isSelected()));
+        items.add(hidden);
+        items.add(item("Refresh  (Ctrl+R)", "mdi2r-refresh", this::refreshActive));
+        items.add(new SeparatorMenuItem());
+        if (dir != null) {
+            items.add(item("Open in terminal", "mdi2c-console", () -> openTerminal(dir)));
+            items.add(item("Open in " + Shell.fileManagerName(), "mdi2f-folder-search-outline", () -> Shell.open(dir,
+                    msg -> Dialogs.error(stage, "Open", msg))));
+            items.add(new SeparatorMenuItem());
+            items.add(bookmarkToggleItem(dir));
+            items.add(item("Copy path", "mdi2c-clipboard-text-outline", () -> copyPaths(List.of(dir))));
+        }
+        items.add(item("Properties  (Alt+Enter)", "mdi2i-information-outline", this::properties));
+        return items;
+    }
+
+    private Menu newMenu(Path dir) {
+        Menu menu = new Menu("New", Icons.icon("mdi2p-plus-box-outline"));
+        menu.getItems().addAll(
+                item("Folder  (F7)", "mdi2f-folder-plus", () -> newFolderIn(dir)),
+                item("Text file", "mdi2f-file-document-outline", () -> newFileIn(dir)));
+        menu.setDisable(dir == null);
+        return menu;
+    }
+
+    private Menu sortMenu(FileTable table) {
+        Menu menu = new Menu("Sort by", Icons.icon("mdi2s-sort"));
+        String current = table.sortColumnId();
+        boolean ascending = table.sortAscending();
+        ToggleGroup columns = new ToggleGroup();
+        String[][] options = {{"name", "Name"}, {"size", "Size"}, {"type", "Type"}, {"modified", "Date modified"},
+                {"created", "Date created"}, {"extension", "Extension"}};
+        for (String[] o : options) {
+            RadioMenuItem r = new RadioMenuItem(o[1]);
+            r.setToggleGroup(columns);
+            r.setSelected(o[0].equals(current));
+            r.setOnAction(e -> table.sortBy(o[0], table.sortAscending()));
+            menu.getItems().add(r);
+        }
+        menu.getItems().add(new SeparatorMenuItem());
+        ToggleGroup direction = new ToggleGroup();
+        RadioMenuItem asc = new RadioMenuItem("Ascending");
+        RadioMenuItem desc = new RadioMenuItem("Descending");
+        asc.setToggleGroup(direction);
+        desc.setToggleGroup(direction);
+        asc.setSelected(ascending);
+        desc.setSelected(!ascending);
+        String column = current != null ? current : "name";
+        asc.setOnAction(e -> table.sortBy(column, true));
+        desc.setOnAction(e -> table.sortBy(column, false));
+        menu.getItems().addAll(asc, desc);
+        return menu;
+    }
+
+    /**
+     * Context menu for a folder, bookmark or volume in the tree. Quick access folders, bookmarks and
+     * volumes are shortcuts, so they can't be cut, renamed or deleted from here.
+     */
     List<MenuItem> treeMenuItems(TreeNode node) {
         Path dir = node.path();
+        TreeNode.Kind kind = node.kind();
+        boolean plainFolder = kind == TreeNode.Kind.FOLDER;
+        boolean volume = kind == TreeNode.Kind.VOLUME;
         List<MenuItem> items = new ArrayList<>();
+
+        items.add(defaultItem(item("Open", "mdi2f-folder-open-outline", () -> openPath(dir))));
         items.add(item("Open in new tab", "mdi2t-tab-plus", () -> side().newTab(dir, true)));
         items.add(item("Open in other side", "mdi2v-view-split-vertical", () -> openInOtherSide(dir)));
+        items.add(item("Open in terminal", "mdi2c-console", () -> openTerminal(dir)));
+        items.add(item("Show in " + Shell.fileManagerName(), "mdi2f-folder-search-outline", () -> reveal(dir)));
         items.add(new SeparatorMenuItem());
-        if (node.kind() == TreeNode.Kind.BOOKMARK) {
+        if (plainFolder) {
+            items.add(item("Cut", "mdi2c-content-cut", () -> clipboardPut(List.of(dir), true)));
+        }
+        if (!volume) {
+            items.add(item("Copy", "mdi2c-content-copy", () -> clipboardPut(List.of(dir), false)));
+        }
+        MenuItem paste = item("Paste into folder", "mdi2c-content-paste", () -> pasteInto(dir));
+        paste.setDisable(!FileClipboard.hasFiles());
+        items.add(paste);
+        items.add(newMenu(dir));
+        items.add(new SeparatorMenuItem());
+        if (plainFolder) {
+            items.add(item("Duplicate", "mdi2c-content-duplicate", () -> duplicate(List.of(dir))));
+        }
+        if (!volume) {
+            items.add(item("Compress to ZIP", "mdi2a-archive-arrow-down-outline", () -> compress(List.of(dir))));
+        }
+        if (plainFolder) {
+            items.add(item("Rename…", "mdi2r-rename-box", () -> rename(dir)));
+            if (Trash.isSupported()) {
+                items.add(item("Move to Trash", "mdi2d-delete", () -> delete(List.of(dir), false)));
+            }
+            items.add(item("Delete permanently", "mdi2d-delete-forever", () -> delete(List.of(dir), true)));
+        }
+        items.add(new SeparatorMenuItem());
+        if (kind == TreeNode.Kind.BOOKMARK) {
             int index = bookmarkIndex(dir);
             items.add(item("Rename bookmark…", "mdi2p-pencil", () -> renameBookmark(dir)));
             items.add(item("Remove bookmark", "mdi2b-bookmark-remove", () -> bookmarks.remove(dir)));
@@ -662,11 +887,8 @@ public final class MainWindow extends BorderPane {
             items.add(bookmarkToggleItem(dir));
         }
         items.add(new SeparatorMenuItem());
-        MenuItem paste = item("Paste into folder", "mdi2c-content-paste", () -> pasteInto(dir));
-        paste.setDisable(!FileClipboard.hasFiles());
-        items.add(paste);
         items.add(item("Copy path", "mdi2c-clipboard-text-outline", () -> copyPaths(List.of(dir))));
-        items.add(item("Properties", "mdi2i-information-outline", () -> PropertiesDialog.show(stage, List.of(dir))));
+        items.add(item("Properties", "mdi2i-information-outline", () -> properties(List.of(dir))));
         return items;
     }
 
@@ -678,6 +900,11 @@ public final class MainWindow extends BorderPane {
         return bookmarks.contains(dir)
                 ? item("Remove from bookmarks", "mdi2b-bookmark-remove", () -> bookmarks.remove(dir))
                 : item("Add to bookmarks  (Ctrl+D)", "mdi2b-bookmark-plus", () -> bookmarks.add(dir));
+    }
+
+    private static MenuItem defaultItem(MenuItem item) {
+        item.getStyleClass().add("default-item");
+        return item;
     }
 
     // ---- bookmarks ----

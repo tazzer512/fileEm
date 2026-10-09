@@ -131,6 +131,17 @@
     -fx-font-size: 0.85em;
 }
 
+.folder-tree .tree-cell.context-target {
+    -fx-border-color: -color-accent-emphasis;
+    -fx-border-width: 1;
+    -fx-border-radius: 3;
+}
+
+/* ---- context menus ---- */
+.context-menu .menu-item.default-item > .label {
+    -fx-font-weight: bold;
+}
+
 /* ---- function key bar ---- */
 .function-bar {
     -fx-background-color: -color-bg-subtle;

@@ -493,10 +493,53 @@ class MainWindowUiTest {
                 .findFirst().orElseThrow());
     }
 
+    /**
+     * Opens a node's context menu the way the OS does (a CONTEXT_MENU_REQUESTED event at the node).
+     * Monocle doesn't turn robot right-clicks into menu requests; real desktops do.
+     */
+    private static void requestContextMenu(FxRobot robot, Node node) {
+        robot.interact(() -> {
+            javafx.geometry.Bounds b = node.localToScreen(node.getBoundsInLocal());
+            node.fireEvent(new javafx.scene.input.ContextMenuEvent(javafx.scene.input.ContextMenuEvent.CONTEXT_MENU_REQUESTED,
+                    5, 5, b.getMinX() + 5, b.getMinY() + 5, false, null));
+        });
+        WaitForAsyncUtils.waitForFxEvents();
+    }
+
+    /** Finds a menu item by text prefix, descending into submenus ("New", "Sort by"). */
+    private static javafx.scene.control.MenuItem findMenuItem(List<javafx.scene.control.MenuItem> items, String textPrefix) {
+        for (javafx.scene.control.MenuItem i : items) {
+            if (i.getText() != null && i.getText().startsWith(textPrefix)) {
+                return i;
+            }
+            if (i instanceof javafx.scene.control.Menu m) {
+                javafx.scene.control.MenuItem inner = findMenuItem(m.getItems(), textPrefix);
+                if (inner != null) {
+                    return inner;
+                }
+            }
+        }
+        return null;
+    }
+
+    private static List<String> menuTexts(List<javafx.scene.control.MenuItem> items) {
+        return items.stream().map(javafx.scene.control.MenuItem::getText).filter(java.util.Objects::nonNull).toList();
+    }
+
+    private static boolean hasItem(List<javafx.scene.control.MenuItem> items, String textPrefix) {
+        return findMenuItem(items, textPrefix) != null;
+    }
+
+    /** Exact command name, ignoring a shortcut hint: "Copy" matches "Copy" but not "Copy path". */
+    private static boolean hasCommand(List<javafx.scene.control.MenuItem> items, String name) {
+        return menuTexts(items).stream().anyMatch(t -> t.equals(name) || t.startsWith(name + "  ("));
+    }
+
     private void fireMenuItem(List<javafx.scene.control.MenuItem> items, String textPrefix) {
-        javafx.scene.control.MenuItem item = items.stream()
-                .filter(i -> i.getText() != null && i.getText().startsWith(textPrefix))
-                .findFirst().orElseThrow(() -> new AssertionError("no menu item " + textPrefix));
+        javafx.scene.control.MenuItem item = findMenuItem(items, textPrefix);
+        if (item == null) {
+            throw new AssertionError("no menu item " + textPrefix + " in " + menuTexts(items));
+        }
         assertFalse(item.isDisable(), textPrefix + " is enabled");
         WaitForAsyncUtils.asyncFx(item::fire); // may open a dialog, so don't wait for it
         WaitForAsyncUtils.waitForFxEvents();
@@ -592,5 +635,191 @@ class MainWindowUiTest {
         Session reloaded = Session.load(tmp.resolve("session.properties")); // saved immediately, no close needed
         MainWindow restored = fx(() -> new MainWindow(new Stage(), reloaded));
         assertEquals(List.of("Kept=" + dir), treeBookmarks(fx(() -> restored.left().tree())));
+    }
+
+    // ---- context menus ----
+
+    @Test
+    void rightClickInTheTreeShowsAMenuWithoutNavigating(FxRobot robot) throws Exception {
+        Path dir = folderWith("stay");
+        FileTab tab = leftTab();
+        open(robot, tab, dir);
+        FolderTree tree = fx(() -> window.left().tree());
+        waitUntil("tree reveals folder", () -> tree.getSelectionModel().getSelectedItem() != null
+                && dir.equals(tree.getSelectionModel().getSelectedItem().getValue().path()));
+        Node other = robot.lookup(".folder-tree .tree-cell").queryAll().stream()
+                .filter(n -> n instanceof javafx.scene.control.TreeCell<?> c && c.getItem() instanceof TreeNode t
+                        && t.path() != null && !t.path().equals(dir) && c.isVisible())
+                .reduce((a, b) -> b).orElseThrow();
+        robot.rightClickOn(other);
+        WaitForAsyncUtils.waitForFxEvents();
+        assertEquals(dir, fx(tab::currentDir), "right-click does not navigate");
+        assertEquals(dir, fx(() -> tree.getSelectionModel().getSelectedItem().getValue().path()),
+                "right-click does not move the tree selection");
+
+        requestContextMenu(robot, other);
+        javafx.scene.control.ContextMenu menu = ((javafx.scene.control.TreeCell<?>) other).getContextMenu();
+        waitUntil("tree menu shown", menu::isShowing);
+        assertTrue(hasItem(fx(menu::getItems), "Open in new tab"));
+        assertTrue(fx(() -> other.getStyleClass().contains("context-target")), "right-clicked folder is outlined");
+        robot.interact(menu::hide);
+        waitUntil("outline removed", () -> !other.getStyleClass().contains("context-target"));
+    }
+
+    /** Regression: menus filled in onShowing never opened, since ContextMenu.show ignores empty menus. */
+    @Test
+    void fileListContextMenuOpensOnItemsAndOnEmptySpace(FxRobot robot) throws Exception {
+        Path dir = folderWith("ctx", "one.txt");
+        FileTab tab = leftTab();
+        open(robot, tab, dir);
+        select(robot, tab, "one.txt");
+        javafx.scene.control.ContextMenu menu = fx(() -> tab.table().getContextMenu());
+
+        requestContextMenu(robot, rowNode(robot, "one.txt"));
+        waitUntil("item menu shown", menu::isShowing);
+        assertTrue(hasItem(fx(menu::getItems), "Rename"), "item actions: " + menuTexts(fx(menu::getItems)));
+        robot.interact(menu::hide);
+
+        robot.interact(() -> tab.table().getSelectionModel().clearSelection());
+        requestContextMenu(robot, fx(tab::table));
+        waitUntil("folder menu shown", menu::isShowing);
+        assertTrue(hasItem(fx(menu::getItems), "Sort by"), "folder actions: " + menuTexts(fx(menu::getItems)));
+        robot.interact(menu::hide);
+    }
+
+    @Test
+    void fileAndFolderMenusOfferTheUsualActions(FxRobot robot) throws Exception {
+        Path dir = folderWith("menu", "doc.txt", "pack.zip", "sub/");
+        FileTab tab = leftTab();
+        open(robot, tab, dir);
+
+        select(robot, tab, "doc.txt");
+        List<javafx.scene.control.MenuItem> file = fx(() -> window.fileMenuItems(tab));
+        for (String expected : List.of("Open", "Open in terminal", "Show in", "Cut", "Copy", "Copy to other side",
+                "Move to other side", "Duplicate", "Compress to ZIP", "Rename", "Delete permanently", "Copy path",
+                "Properties")) {
+            assertTrue(hasItem(file, expected), expected + " in " + menuTexts(file));
+        }
+        assertFalse(hasItem(file, "Extract here"), "only zips can be extracted");
+        assertFalse(hasItem(file, "Open in new tab"), "files don't open in tabs");
+
+        select(robot, tab, "pack.zip");
+        assertTrue(hasItem(fx(() -> window.fileMenuItems(tab)), "Extract here"));
+
+        select(robot, tab, "sub");
+        List<javafx.scene.control.MenuItem> folder = fx(() -> window.fileMenuItems(tab));
+        assertTrue(hasItem(folder, "Open in new tab") && hasItem(folder, "Add to bookmarks"));
+
+        select(robot, tab, "doc.txt", "sub");
+        assertTrue(fx(() -> findMenuItem(window.fileMenuItems(tab), "Rename").isDisable()), "rename needs one item");
+    }
+
+    @Test
+    void emptySpaceMenuOffersNewSortAndHiddenFiles(FxRobot robot) throws Exception {
+        Path dir = folderWith("bg", "b.txt");
+        Files.writeString(dir.resolve("a.txt"), "much longer content");
+        FileTab tab = leftTab();
+        open(robot, tab, dir);
+        robot.interact(() -> tab.table().getSelectionModel().clearSelection());
+        List<javafx.scene.control.MenuItem> items = fx(() -> window.fileMenuItems(tab));
+        for (String expected : List.of("Paste", "New", "Folder", "Text file", "Sort by", "Show hidden files",
+                "Refresh", "Open in terminal", "Properties")) {
+            assertTrue(hasItem(items, expected), expected + " in " + menuTexts(items));
+        }
+
+        fireMenuItem(items, "Size");
+        waitUntil("sorted by size", () -> "size".equals(tab.table().sortColumnId()));
+        assertEquals(List.of("b.txt", "a.txt"), names(tab));
+        fireMenuItem(fx(() -> window.fileMenuItems(tab)), "Descending");
+        waitUntil("descending", () -> names(tab).equals(List.of("a.txt", "b.txt")));
+    }
+
+    @Test
+    void newTextFileFromTheMenu(FxRobot robot) throws Exception {
+        Path dir = folderWith("newfile");
+        FileTab tab = leftTab();
+        open(robot, tab, dir);
+        fireMenuItem(fx(() -> window.fileMenuItems(tab)), "Text file");
+        answerDialog(robot, "notes"); // base name is preselected, ".txt" stays
+        waitUntil("file created", () -> Files.isRegularFile(dir.resolve("notes.txt")));
+        waitUntil("and selected", () -> tab.selectedPaths().equals(List.of(dir.resolve("notes.txt"))));
+    }
+
+    @Test
+    void duplicateCompressAndExtractFromTheMenu(FxRobot robot) throws Exception {
+        Path dir = folderWith("arch", "a.txt");
+        FileTab tab = leftTab();
+        open(robot, tab, dir);
+        select(robot, tab, "a.txt");
+        fireMenuItem(fx(() -> window.fileMenuItems(tab)), "Duplicate");
+        waitUntil("duplicated", () -> Files.exists(dir.resolve("a - Copy.txt")));
+
+        select(robot, tab, "a.txt", "a - Copy.txt");
+        fireMenuItem(fx(() -> window.fileMenuItems(tab)), "Compress to ZIP");
+        waitUntil("archive selected", () -> tab.selectedPaths().equals(List.of(dir.resolve("Archive.zip"))));
+
+        fireMenuItem(fx(() -> window.fileMenuItems(tab)), "Extract here");
+        waitUntil("extracted and selected", () -> tab.selectedPaths().equals(List.of(dir.resolve("Archive"))));
+        assertEquals("a.txt", Files.readString(dir.resolve("Archive/a.txt")));
+    }
+
+    @Test
+    void pasteIntoAFolderFromItsMenu(FxRobot robot) throws Exception {
+        Path dir = folderWith("pin", "f.txt", "target/");
+        FileTab tab = leftTab();
+        open(robot, tab, dir);
+        select(robot, tab, "f.txt");
+        robot.push(KeyCode.SHORTCUT, KeyCode.C);
+        select(robot, tab, "target");
+        fireMenuItem(fx(() -> window.fileMenuItems(tab)), "Paste into folder");
+        waitUntil("pasted into folder", () -> Files.exists(dir.resolve("target/f.txt")));
+    }
+
+    @Test
+    void treeMenusProtectShortcutsAndVolumes(FxRobot robot) throws Exception {
+        Path dir = folderWith("plain");
+        List<javafx.scene.control.MenuItem> folder = fx(() -> window.treeMenuItems(TreeNode.folder(dir)));
+        for (String expected : List.of("Open", "Open in terminal", "Cut", "Copy", "Paste into folder", "New",
+                "Duplicate", "Compress to ZIP", "Rename…", "Delete permanently", "Add to bookmarks", "Properties")) {
+            assertTrue(hasItem(folder, expected), expected + " in " + menuTexts(folder));
+        }
+
+        TreeNode home = new TreeNode(TreeNode.Kind.QUICK, OsUtil.home(), "Home", "mdi2h-home", "icon-quick", null);
+        List<javafx.scene.control.MenuItem> quick = fx(() -> window.treeMenuItems(home));
+        assertTrue(hasItem(quick, "Copy") && hasItem(quick, "Paste into folder"));
+        for (String forbidden : List.of("Cut", "Rename…", "Move to Trash", "Delete permanently", "Duplicate")) {
+            assertFalse(hasCommand(quick, forbidden), forbidden + " must not be offered for Home");
+        }
+
+        TreeNode volume = new TreeNode(TreeNode.Kind.VOLUME, tmp.getRoot(), "Disk", "mdi2h-harddisk", "icon-volume", null);
+        List<javafx.scene.control.MenuItem> vol = fx(() -> window.treeMenuItems(volume));
+        for (String forbidden : List.of("Cut", "Copy", "Rename…", "Delete permanently", "Compress to ZIP")) {
+            assertFalse(hasCommand(vol, forbidden), forbidden + " must not be offered for a drive");
+        }
+    }
+
+    @Test
+    void renamingAFolderFromTheTreeMovesOpenTabsAndBookmarks(FxRobot robot) throws Exception {
+        Path proj = Files.createDirectories(tmp.resolve("proj/inner"));
+        Path projDir = proj.getParent();
+        FileTab tab = leftTab();
+        open(robot, tab, proj);
+        robot.interact(() -> window.bookmarks().add(projDir));
+
+        fireMenuItem(fx(() -> window.treeMenuItems(TreeNode.folder(projDir))), "Rename…");
+        answerDialog(robot, "renamed");
+        Path renamed = tmp.resolve("renamed");
+        waitUntil("renamed on disk", () -> Files.isDirectory(renamed.resolve("inner")));
+        waitUntil("tab followed", () -> renamed.resolve("inner").equals(tab.currentDir()));
+        assertTrue(fx(() -> window.bookmarks().contains(renamed)), "bookmark followed");
+        assertEquals("renamed", fx(() -> window.bookmarks().find(renamed).orElseThrow().name()));
+    }
+
+    @Test
+    void deletingAFolderFromTheTree(FxRobot robot) throws Exception {
+        Path dir = folderWith("doomed", "x.txt");
+        fireMenuItem(fx(() -> window.treeMenuItems(TreeNode.folder(dir))), "Delete permanently");
+        robot.clickOn("OK");
+        waitUntil("deleted", () -> !Files.exists(dir));
     }
 }

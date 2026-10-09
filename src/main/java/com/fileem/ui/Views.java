@@ -1,12 +1,30 @@
 package com.fileem.ui;
 
+import javafx.scene.control.ContextMenu;
 import javafx.scene.control.Control;
+import javafx.scene.control.MenuItem;
 import javafx.scene.control.TableView;
 import javafx.scene.control.TreeView;
 import javafx.scene.control.skin.VirtualFlow;
+import javafx.scene.input.ContextMenuEvent;
+
+import java.util.List;
+import java.util.function.Supplier;
 
 final class Views {
     private Views() {
+    }
+
+    /**
+     * Attaches a context menu whose items are rebuilt for every request. The items must be filled in
+     * before JavaFX shows it ({@code ContextMenu.show} silently does nothing for an empty menu, and
+     * {@code onShowing} runs too late), so they are built in an event filter on the request.
+     */
+    static ContextMenu dynamicContextMenu(Control control, Supplier<List<MenuItem>> items) {
+        ContextMenu menu = new ContextMenu();
+        control.setContextMenu(menu);
+        control.addEventFilter(ContextMenuEvent.CONTEXT_MENU_REQUESTED, e -> menu.getItems().setAll(items.get()));
+        return menu;
     }
 
     /** Scrolls just enough to make the row visible, instead of TableView.scrollTo's jump-to-top. */

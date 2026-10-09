@@ -75,6 +75,27 @@ public final class Bookmarks {
         }
     }
 
+    /** After a folder was renamed or moved: bookmarks of it, or of folders inside it, follow along. */
+    public void relocate(Path from, Path to) {
+        Path f = normalize(from);
+        Path t = normalize(to);
+        List<Bookmark> updated = new ArrayList<>(items.size());
+        boolean changed = false;
+        for (Bookmark b : items) {
+            if (b.path().startsWith(f)) {
+                Path moved = t.resolve(f.relativize(b.path()));
+                boolean renamedFolder = b.path().equals(f) && b.name().equals(FsUtil.displayName(f));
+                updated.add(new Bookmark(renamedFolder ? FsUtil.displayName(moved) : b.name(), moved));
+                changed = true;
+            } else {
+                updated.add(b);
+            }
+        }
+        if (changed) {
+            items.setAll(updated);
+        }
+    }
+
     /** Moves a bookmark {@code delta} places up (negative) or down; clamped to the list. */
     public void move(Path dir, int delta) {
         int from = indexOf(dir);

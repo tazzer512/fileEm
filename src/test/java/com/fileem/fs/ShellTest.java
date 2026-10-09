@@ -1,0 +1,39 @@
+package com.fileem.fs;
+
+import com.fileem.util.OsUtil;
+import org.junit.jupiter.api.Test;
+
+import java.nio.file.Path;
+import java.util.List;
+import java.util.Set;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
+
+class ShellTest {
+    private static final Path DIR = Path.of("/work/dir");
+
+    @Test
+    void linuxPrefersTheTerminalEnvironmentVariable() {
+        assumeTrue(OsUtil.isLinux());
+        assertEquals(List.of("foot"), Shell.terminalCommand(DIR, "foot", Set.of("foot", "xterm")::contains));
+    }
+
+    @Test
+    void linuxPassesTheFolderToKnownTerminals() {
+        assumeTrue(OsUtil.isLinux());
+        assertEquals(List.of("konsole", "--workdir", DIR.toString()),
+                Shell.terminalCommand(DIR, null, Set.of("konsole", "xterm")::contains));
+        assertEquals(List.of("gnome-terminal", "--working-directory=" + DIR),
+                Shell.terminalCommand(DIR, "not-installed", Set.of("gnome-terminal")::contains));
+        assertNull(Shell.terminalCommand(DIR, null, p -> false));
+    }
+
+    @Test
+    void macAndWindowsAlwaysHaveATerminal() {
+        assumeTrue(!OsUtil.isLinux());
+        assertEquals(OsUtil.isMac() ? "open" : "cmd.exe",
+                Shell.terminalCommand(DIR, null, p -> false).get(0));
+    }
+}

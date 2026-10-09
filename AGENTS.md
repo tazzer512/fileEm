@@ -64,6 +64,10 @@ src/test/java/com/fileem/
   '-fx-background-color'` for tree arrows. It comes from VirtualFlow's detached measuring cell in
   hidden windows left over from earlier tests, not from the app; ignore it, but don't add new
   warnings.
+- Context menus: Monocle never turns a robot right-click into a menu request. Open menus in tests
+  with `requestContextMenu(robot, node)` (fires `CONTEXT_MENU_REQUESTED`) and check
+  `getContextMenu().isShowing()`; test menu contents via `fileMenuItems` / `treeMenuItems` +
+  `findMenuItem`/`hasItem`/`hasCommand`.
 - Platform-specific tests use `assumeTrue(OsUtil.isPosix())` / `isWindows()` so they skip, not
   fail, elsewhere.
 - UI test hooks are package-private accessors (`MainWindow.left()/right()/isDual()/activeSide()`,
@@ -115,7 +119,11 @@ src/main/resources/com/fileem/app.css   author stylesheet on top of AtlantaFX
 - Moving an item onto itself (through a link, bind mount or hard link) is refused; copying onto
   itself creates "name - Copy". Folders can't be copied or moved into themselves. Drive/file
   system roots are refused for move, delete and trash.
-- Free space is checked before a copy starts. Per-item failures are collected in `errors()` and
+- COMPRESS writes the archive to a temp file and renames it into place; links, junctions and
+  special files are left out (reported). EXTRACT unpacks into a temp folder, then renames it into
+  place (never merging into an existing folder; a single top-level item is not nested). Entries
+  that would land outside the target (zip-slip: `..`, absolute paths) are skipped and reported.
+- Free space is checked before a copy or extract starts. Per-item failures are collected in `errors()` and
   processing continues.
 
 ## Performance notes (keep it fast)
@@ -154,6 +162,12 @@ src/main/resources/com/fileem/app.css   author stylesheet on top of AtlantaFX
   `FileTab.navigateTo`.
 - **Refreshing**: `DirWatcher` refreshes tabs. After our own operations
   `MainWindow.refreshDirs` refreshes explicitly too, because macOS watching is slow.
+- **Context menus** are built per request with `Views.dynamicContextMenu(control, supplier)`. Never
+  fill a `ContextMenu` in `onShowing`: `ContextMenu.show` silently ignores a menu that is still
+  empty, so it would never open (this bug shipped once). Menu contents live in
+  `MainWindow.fileMenuItems` / `treeMenuItems`; commands there take explicit paths so the tree and
+  the list share them. Quick access, bookmark and volume tree items are shortcuts: no cut, rename,
+  delete or duplicate. Right-click in the tree must not select (selection navigates).
 - **Drag & drop**: drops from other applications accept only COPY (a MOVE could let the source
   delete originals before our async copy finishes). Keep `Dnd.canDrop` (check) separate from
   `Dnd.accept` (check + accept modes): row handlers must not consume drops they can't handle.

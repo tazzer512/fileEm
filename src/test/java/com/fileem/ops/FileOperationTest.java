@@ -437,4 +437,96 @@ class FileOperationTest {
         assertTrue(failure != null && failure.getMessage().contains("Not enough free space"), String.valueOf(failure));
         assertEquals("", tree(dst));
     }
+
+    // ---- archives ----
+
+    @Test
+    void archiveNames() throws Exception {
+        Path file = Files.writeString(src.resolve("report.final.txt"), "x");
+        Path dir = Files.createDirectory(src.resolve("my.folder"));
+        assertEquals("report.final.zip", FileOperation.archiveName(List.of(file)));
+        assertEquals("my.folder.zip", FileOperation.archiveName(List.of(dir)));
+        assertEquals("Archive.zip", FileOperation.archiveName(List.of(file, dir)));
+    }
+
+    @Test
+    void compressAndExtractRoundTripsContentAndTimes() throws Exception {
+        Files.createDirectories(src.resolve("d/inner/empty"));
+        byte[] data = randomBytes(300_000, 7);
+        Files.write(src.resolve("d/inner/data.bin"), data);
+        Files.writeString(src.resolve("top.txt"), "top");
+        FileTime time = FileTime.fromMillis(1_600_000_000_000L);
+        Files.setLastModifiedTime(src.resolve("top.txt"), time);
+
+        FileOperation zip = run(Kind.COMPRESS, List.of(src.resolve("d"), src.resolve("top.txt")), src, FAIL_ON_CONFLICT);
+        assertTrue(zip.errors().isEmpty(), zip.errors().toString());
+        assertEquals(src.resolve("Archive.zip"), zip.result());
+        assertProgressComplete(zip);
+
+        Files.move(zip.result(), dst.resolve("Archive.zip"));
+        FileOperation unzip = run(Kind.EXTRACT, List.of(dst.resolve("Archive.zip")), dst, FAIL_ON_CONFLICT);
+        assertTrue(unzip.errors().isEmpty(), unzip.errors().toString());
+        Path out = dst.resolve("Archive");
+        assertEquals(out, unzip.result());
+        assertEquals("d,d/inner,d/inner/data.bin,d/inner/empty,top.txt", tree(out));
+        assertArrayEquals(data, Files.readAllBytes(out.resolve("d/inner/data.bin")));
+        long delta = Math.abs(Files.getLastModifiedTime(out.resolve("top.txt")).toMillis() - time.toMillis());
+        assertTrue(delta <= 2000, "modification time kept (zip has 2 s precision), off by " + delta);
+        assertNoTempFiles();
+    }
+
+    @Test
+    void extractingASingleTopLevelItemDoesNotNestItAndNeverOverwrites() throws Exception {
+        Files.createDirectories(src.resolve("project/sub"));
+        Files.writeString(src.resolve("project/sub/a.txt"), "a");
+        FileOperation zip = run(Kind.COMPRESS, List.of(src.resolve("project")), src, FAIL_ON_CONFLICT);
+        assertEquals(src.resolve("project.zip"), zip.result());
+
+        Files.move(zip.result(), dst.resolve("project.zip"));
+        Files.createDirectory(dst.resolve("project")); // already there: must not be merged into
+        FileOperation unzip = run(Kind.EXTRACT, List.of(dst.resolve("project.zip")), dst, FAIL_ON_CONFLICT);
+        assertEquals(dst.resolve("project (2)"), unzip.result());
+        assertEquals("a", Files.readString(dst.resolve("project (2)/sub/a.txt")));
+        assertEquals("", tree(dst.resolve("project")));
+    }
+
+    @Test
+    void extractRefusesEntriesThatEscapeTheTarget() throws Exception {
+        Path zip = dst.resolve("evil.zip");
+        try (var out = new java.util.zip.ZipOutputStream(Files.newOutputStream(zip))) {
+            for (String name : List.of("../escaped.txt", "a/../../escaped2.txt", "/abs-escaped.txt", "ok.txt")) {
+                out.putNextEntry(new java.util.zip.ZipEntry(name));
+                out.write("x".getBytes());
+                out.closeEntry();
+            }
+        }
+        FileOperation op = run(Kind.EXTRACT, List.of(zip), dst, FAIL_ON_CONFLICT);
+        assertEquals(3, op.errors().size(), op.errors().toString());
+        assertFalse(Files.exists(base.resolve("escaped.txt")));
+        assertFalse(Files.exists(base.resolve("escaped2.txt")));
+        assertFalse(Files.exists(Path.of("/abs-escaped.txt")));
+        assertEquals("x", Files.readString(dst.resolve("ok.txt")), "safe entries are extracted");
+        assertNoTempFiles();
+    }
+
+    @Test
+    void corruptArchiveFailsWithoutLeavingAnything() throws Exception {
+        Path zip = Files.writeString(dst.resolve("broken.zip"), "this is not a zip file");
+        FileOperation op = run(Kind.EXTRACT, List.of(zip), dst, FAIL_ON_CONFLICT);
+        assertTrue(onFx(op::getException) != null || !op.errors().isEmpty());
+        assertEquals("broken.zip", tree(dst));
+        assertNoTempFiles();
+    }
+
+    @Test
+    void archivesSkipLinksInsteadOfFollowingThem() throws Exception {
+        assumeTrue(OsUtil.isPosix());
+        Files.createDirectory(src.resolve("d"));
+        Files.writeString(src.resolve("d/real.txt"), "r");
+        Files.createSymbolicLink(src.resolve("d/loop"), src);
+        FileOperation zip = run(Kind.COMPRESS, List.of(src.resolve("d")), dst, FAIL_ON_CONFLICT);
+        assertEquals(1, zip.errors().size(), zip.errors().toString());
+        FileOperation unzip = run(Kind.EXTRACT, List.of(zip.result()), base, FAIL_ON_CONFLICT);
+        assertEquals("real.txt", tree(unzip.result()));
+    }
 }
