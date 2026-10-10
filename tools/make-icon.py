@@ -1,4 +1,5 @@
-import sys, os
+"""Draws the fileEm app icon and writes every size and format the app and its packages use."""
+import os
 from PIL import Image, ImageDraw, ImageFilter
 
 S = 1024  # master canvas, downscaled per size
@@ -79,9 +80,17 @@ def master():
     d.rounded_rectangle([478, 500, 492, 740], 7, fill=(214, 120, 0, 140))
     return img
 
-out = sys.argv[1]
-os.makedirs(out, exist_ok=True)
+# Run from the repository root: python3 tools/make-icon.py
 big = master()
-big.save(os.path.join(out, "..", "master.png"))
+res = os.path.join("src", "main", "resources", "com", "fileem", "icons")
+pkg = os.path.join("src", "packaging")
+os.makedirs(res, exist_ok=True)
+os.makedirs(pkg, exist_ok=True)
+# Window icons, loaded by Icons.appIcons()
 for s in (16, 24, 32, 48, 64, 128, 256, 512):
-    big.resize((s, s), Image.LANCZOS).save(os.path.join(out, f"fileem-{s}.png"), optimize=True)
+    big.resize((s, s), Image.LANCZOS).save(os.path.join(res, f"fileem-{s}.png"), optimize=True)
+# Packaging icons for jpackage: PNG (Linux), ICO (Windows), ICNS (macOS)
+big.resize((512, 512), Image.LANCZOS).save(os.path.join(pkg, "fileem.png"), optimize=True)
+big.resize((256, 256), Image.LANCZOS).save(os.path.join(pkg, "fileem.ico"),
+                                          sizes=[(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)])
+big.save(os.path.join(pkg, "fileem.icns"))

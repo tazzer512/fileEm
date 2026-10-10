@@ -19,6 +19,12 @@
         <testfx.version>4.0.18</testfx.version>
         <!-- UI tests run headless by default; pass -Dheadless=false to watch them on screen. -->
         <ui.test.args></ui.test.args>
+        <!-- Native app (mvn -Pdist package): version must be numeric for jpackage. -->
+        <app.version>0.1.0</app.version>
+        <jpackage.type>app-image</jpackage.type>
+        <dist.dir>${project.build.directory}/dist</dist.dir>
+        <!-- jdeps finds base, desktop, logging; charsets: IBM437 zip names; localedata: number formats per locale -->
+        <dist.modules>java.base,java.desktop,java.logging,jdk.unsupported,jdk.charsets,jdk.localedata,javafx.controls</dist.modules>
     </properties>
 
     <dependencies>
@@ -103,6 +109,127 @@
             <properties>
                 <ui.test.args>-Dtestfx.headless=true -Dglass.platform=Monocle -Dmonocle.platform=Headless -Dprism.order=sw</ui.test.args>
             </properties>
+        </profile>
+
+        <!-- JavaFX jar classifier and app icon format for the build OS (used by the dist profile). -->
+        <profile>
+            <id>os-linux</id>
+            <activation><os><name>Linux</name><arch>amd64</arch></os></activation>
+            <properties><fx.platform>linux</fx.platform><app.icon>src/packaging/fileem.png</app.icon></properties>
+        </profile>
+        <profile>
+            <id>os-linux-aarch64</id>
+            <activation><os><name>Linux</name><arch>aarch64</arch></os></activation>
+            <properties><fx.platform>linux-aarch64</fx.platform><app.icon>src/packaging/fileem.png</app.icon></properties>
+        </profile>
+        <profile>
+            <id>os-mac</id>
+            <activation><os><family>mac</family><arch>x86_64</arch></os></activation>
+            <properties><fx.platform>mac</fx.platform><app.icon>src/packaging/fileem.icns</app.icon></properties>
+        </profile>
+        <profile>
+            <id>os-mac-aarch64</id>
+            <activation><os><family>mac</family><arch>aarch64</arch></os></activation>
+            <properties><fx.platform>mac-aarch64</fx.platform><app.icon>src/packaging/fileem.icns</app.icon></properties>
+        </profile>
+        <profile>
+            <id>os-windows</id>
+            <activation><os><family>windows</family></os></activation>
+            <properties><fx.platform>win</fx.platform><app.icon>src/packaging/fileem.ico</app.icon></properties>
+        </profile>
+
+        <!--
+          Native app with its own trimmed Java runtime: mvn -Pdist -DskipTests package
+          Output in target/dist/app: fileEm/ (Linux, Windows) or fileEm.app (macOS).
+          -Djpackage.type=deb|rpm|dmg|pkg|msi|exe builds an installer instead (needs the OS's packaging tools).
+          JavaFX goes into the runtime as real modules; the app and its other libraries stay on the classpath.
+        -->
+        <profile>
+            <id>dist</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-dependency-plugin</artifactId>
+                        <version>3.8.1</version>
+                        <executions>
+                            <execution>
+                                <id>dist-libs</id>
+                                <phase>package</phase>
+                                <goals><goal>copy-dependencies</goal></goals>
+                                <configuration>
+                                    <outputDirectory>${dist.dir}/input</outputDirectory>
+                                    <includeScope>runtime</includeScope>
+                                    <excludeGroupIds>org.openjfx</excludeGroupIds>
+                                </configuration>
+                            </execution>
+                            <execution>
+                                <id>dist-javafx</id>
+                                <phase>package</phase>
+                                <goals><goal>copy-dependencies</goal></goals>
+                                <configuration>
+                                    <outputDirectory>${dist.dir}/javafx</outputDirectory>
+                                    <includeScope>runtime</includeScope>
+                                    <includeGroupIds>org.openjfx</includeGroupIds>
+                                    <!-- only the platform jars; the classifier-less ones are empty -->
+                                    <includeClassifiers>${fx.platform}</includeClassifiers>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-resources-plugin</artifactId>
+                        <version>3.3.1</version>
+                        <executions>
+                            <execution>
+                                <id>dist-app-jar</id>
+                                <phase>package</phase>
+                                <goals><goal>copy-resources</goal></goals>
+                                <configuration>
+                                    <outputDirectory>${dist.dir}/input</outputDirectory>
+                                    <resources>
+                                        <resource>
+                                            <directory>${project.build.directory}</directory>
+                                            <includes><include>${project.build.finalName}.jar</include></includes>
+                                        </resource>
+                                    </resources>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.codehaus.mojo</groupId>
+                        <artifactId>exec-maven-plugin</artifactId>
+                        <version>3.5.0</version>
+                        <executions>
+                            <execution>
+                                <id>jpackage</id>
+                                <phase>package</phase>
+                                <goals><goal>exec</goal></goals>
+                                <configuration>
+                                    <executable>${java.home}/bin/jpackage</executable>
+                                    <arguments>
+                                        <argument>--type</argument><argument>${jpackage.type}</argument>
+                                        <argument>--name</argument><argument>fileEm</argument>
+                                        <argument>--app-version</argument><argument>${app.version}</argument>
+                                        <argument>--vendor</argument><argument>fileEm</argument>
+                                        <argument>--description</argument><argument>Cross-platform file explorer</argument>
+                                        <argument>--icon</argument><argument>${app.icon}</argument>
+                                        <argument>--input</argument><argument>${dist.dir}/input</argument>
+                                        <argument>--main-jar</argument><argument>${project.build.finalName}.jar</argument>
+                                        <argument>--main-class</argument><argument>${main.class}</argument>
+                                        <argument>--module-path</argument><argument>${dist.dir}/javafx</argument>
+                                        <argument>--add-modules</argument><argument>${dist.modules}</argument>
+                                        <argument>--jlink-options</argument><argument>--strip-debug --no-header-files --no-man-pages --strip-native-commands --compress=zip-6</argument>
+                                        <argument>--dest</argument><argument>${dist.dir}/app</argument>
+                                    </arguments>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
         </profile>
     </profiles>
 </project>

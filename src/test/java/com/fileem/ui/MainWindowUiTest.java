@@ -1,5 +1,6 @@
 package com.fileem.ui;
 
+import com.fileem.Autosave;
 import com.fileem.Session;
 import com.fileem.fs.FileEntry;
 import com.fileem.ops.FileOperation;
@@ -754,6 +755,36 @@ class MainWindowUiTest {
         robot.clickOn("Remove");
         waitUntil("one left", () -> window.bookmarks().items().size() == 1);
         assertEquals(1, (int) fx(() -> list.getItems().size()), "dialog list is live");
+    }
+
+    @Test
+    void autosaveKeepsSettingsWithoutANormalClose(FxRobot robot) throws Exception {
+        Path a = folderWith("auto-a");
+        Path b = folderWith("auto-b");
+        Autosave autosave = new Autosave(session, window::saveSession);
+        try {
+            open(robot, leftTab(), a);
+            robot.push(KeyCode.SHORTCUT, KeyCode.T);
+            waitUntil("second tab", () -> window.left().tabs().size() == 2);
+            open(robot, leftTab(), b);
+            robot.type(KeyCode.F9);
+            waitUntil("dual on", window::isDual);
+            robot.interact(() -> Theme.apply(Theme.Family.ADWAITA, true));
+            fx(autosave::saveInBackground).get(TIMEOUT_S, TimeUnit.SECONDS);
+
+            // A fresh read of the file, as on the next start after a kill: no saveSession, no close.
+            Session reloaded = Session.load(tmp.resolve("session.properties"));
+            assertEquals("adwaita", reloaded.get("theme.name", null));
+            assertTrue(reloaded.getBool("theme.dark", false));
+            MainWindow restored = fx(() -> new MainWindow(new Stage(), reloaded));
+            waitUntil("tabs, paths and dual pane restored", () -> restored.isDual()
+                    && restored.left().tabs().size() == 2
+                    && a.equals(restored.left().tabs().get(0).currentDir())
+                    && b.equals(restored.left().tabs().get(1).currentDir())
+                    && restored.left().activeTab() == restored.left().tabs().get(1));
+        } finally {
+            robot.interact(() -> Theme.apply(Theme.Family.CLASSIC, false));
+        }
     }
 
     @Test

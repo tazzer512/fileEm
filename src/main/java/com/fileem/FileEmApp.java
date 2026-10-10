@@ -12,6 +12,7 @@ import javafx.stage.Stage;
 public class FileEmApp extends Application {
     private Session session;
     private MainWindow window;
+    private Autosave autosave;
 
     public static void main(String[] args) {
         launch(args);
@@ -42,11 +43,22 @@ public class FileEmApp extends Application {
             stage.setY(y);
         }
         stage.setMaximized(session.getBool("window.maximized", false));
-        stage.setOnCloseRequest(e -> saveSession(stage));
+        autosave = new Autosave(session, () -> collectSession(stage));
+        stage.setOnCloseRequest(e -> autosave.saveNow());
         stage.show();
+        autosave.start();
     }
 
-    private void saveSession(Stage stage) {
+    @Override
+    public void stop() {
+        if (autosave != null) {
+            autosave.stop();
+            autosave.saveNow();
+        }
+    }
+
+    /** Copies the window geometry and the main window's state into the session. */
+    private void collectSession(Stage stage) {
         session.put("window.maximized", stage.isMaximized());
         if (!stage.isMaximized() && !stage.isIconified()) {
             session.put("window.x", stage.getX());
@@ -55,6 +67,5 @@ public class FileEmApp extends Application {
             session.put("window.h", stage.getHeight());
         }
         window.saveSession();
-        session.save();
     }
 }

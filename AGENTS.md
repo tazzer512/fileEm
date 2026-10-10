@@ -31,6 +31,13 @@ Treat it as part of every change, not an afterthought:
 - `mvn -q compile`: must stay warning/error free.
 - `mvn javafx:run`: starts the app. It is a GUI; when running it non-interactively wrap it in
   `timeout` so it does not block.
+- `mvn -Pdist -DskipTests package`: native app via jpackage in `target/dist/app` (pom `dist`
+  profile; `os-*` profiles pick the JavaFX platform jars and icon format). JavaFX is linked into the
+  runtime as modules, everything else stays on the classpath. `dist.modules` lists the JDK modules:
+  jdeps finds most, but add ones only used reflectively or by name (`jdk.charsets` for IBM437,
+  `jdk.localedata`). `tools/install-linux.sh` installs it per user with a `.desktop` entry named
+  after the window class (`com.fileem.FileEmApp`; renaming `FileEmApp` breaks the dock icon,
+  `PackagingTest` checks). Icons: `tools/make-icon.py` writes `src/packaging/` and the window icons.
 - `mvn test`: about 80 tests, around a minute. UI tests run **headless on Monocle** (configured in
   the pom's `headless-ui-tests` profile), so no display is needed.
   - `mvn test -Dtest=FileOperationTest`: a single class. `-Dtest='!MainWindowUiTest'` skips
@@ -88,7 +95,7 @@ src/test/java/com/fileem/
 ## Layout
 
 ```
-com.fileem          Launcher, FileEmApp (stage, session save), Session (properties file),
+com.fileem          Launcher, FileEmApp (stage), Session (properties file), Autosave,
                     Bookmarks (ordered named folders, saved on every change)
 com.fileem.util     OsUtil, Bg (background executor → FX callbacks), Formats, FsUtil, NaturalOrder
 com.fileem.fs       FileEntry (row snapshot), FileTypes, Volumes (mount polling), DirWatcher,
@@ -192,8 +199,12 @@ src/main/resources/com/fileem/icons/    app icon PNGs (16–512 px); regenerate 
   (`ThemeTest` checks). Keep effects (shadows, blur) off rows and cells: they are re-rendered while
   scrolling. Check new styling with the scene-snapshot harness in light and dark.
 - **Session**: everything persisted goes through `Session` keys (`window.*`, `left.*`/`right.*`,
-  `columns.*`, `sort.*`, `dual`, `showHidden`, `theme.name`, `theme.dark`, `bookmarks.*`). Saved on window
-  close, except `Bookmarks`, which saves the session file on every change.
+  `columns.*`, `sort.*`, `dual`, `showHidden`, `theme.name`, `theme.dark`, `bookmarks.*`). `Autosave` collects
+  the state every 2 s (`MainWindow.saveSession` + window geometry) and writes it in the background
+  only when it changed; close, `Application.stop` and a JVM shutdown hook save too, so a kill or
+  logout loses nothing. `Bookmarks` saves on every change. Writes are atomic (temp file + rename),
+  and an older background write never replaces a newer save. New persisted state only needs to be
+  put into the session from `saveSession` (or on change); don't add other save paths.
 - **Bookmarks**: one `Bookmarks` model per `MainWindow`, shared by both trees. The tree's
   Bookmarks section (`TreeNode.Kind.BOOKMARK_HEADER` / `BOOKMARK`) mirrors it via `syncBookmarks`
   and is hidden while empty. Bookmark items are lazy `FolderItem`s like volumes, but `reveal`

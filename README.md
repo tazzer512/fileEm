@@ -11,6 +11,21 @@ Requires JDK 21+ and Maven.
 mvn javafx:run
 ```
 
+## Install as an app
+
+`mvn -Pdist -DskipTests package` builds a native app with its own trimmed Java runtime and the
+fileEm icon (jpackage, for the OS you build on) in `target/dist/app`: `fileEm/bin/fileEm` on Linux,
+`fileEm/fileEm.exe` on Windows, `fileEm.app` on macOS. Add `-Djpackage.type=deb` (or `rpm`, `dmg`,
+`pkg`, `msi`, `exe`) for an installer; that needs the OS's packaging tools.
+
+On Linux, install it for your user with a launcher entry, so it appears in the app grid / menu and
+the dock shows its icon (no root needed):
+
+```sh
+mvn -Pdist -DskipTests package && tools/install-linux.sh   # again to update
+tools/install-linux.sh --uninstall                          # settings are kept
+```
+
 ## Test
 
 ```sh
@@ -57,7 +72,8 @@ mvn test -Dheadless=false   # watch the UI tests run on screen
   tabs), **Adwaita** (GNOME Files) and **Aurora**, fileEm's own northern-lights theme with gradient
   edge lights, pill controls and keycap F-keys. Fonts fall back to the system font when the
   theme's font (Segoe UI Variable, SF Pro, Cantarell, Inter) isn't installed.
-- Session restore (window, tabs, dual mode, hidden files, columns, theme).
+- Session restore (window, tabs and their folders, dual mode, hidden files, columns, theme and
+  light/dark mode, bookmarks). Saved automatically while the app runs, so it survives a crash or logout.
 
 ## Keyboard
 

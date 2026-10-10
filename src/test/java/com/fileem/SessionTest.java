@@ -5,6 +5,10 @@ import org.junit.jupiter.api.io.TempDir;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
+import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -62,5 +66,59 @@ class SessionTest {
         Files.write(file, new byte[]{'k', '=', '\\', 'u', 'Z', 'Z'});
         Session s = Session.load(file);
         assertEquals("d", s.get("k", "d"));
+    }
+
+    @Test
+    void saveWritesOnlyWhenSomethingChanged() throws Exception {
+        Path file = dir.resolve("session.properties");
+        Session s = Session.load(file);
+        s.put("a", 1);
+        s.save();
+        assertTrue(Files.isRegularFile(file));
+
+        Files.delete(file);
+        s.put("a", 1); // same value
+        s.save();
+        assertFalse(Files.exists(file), "unchanged contents are not written again");
+        assertNull(s.saveInBackground(), "nothing to write in the background either");
+
+        s.put("a", 2);
+        s.save();
+        assertEquals(2, Session.load(file).getInt("a", 0));
+    }
+
+    @Test
+    void backgroundSaveWritesTheFileAndLeavesNoTempFiles() throws Exception {
+        Path file = dir.resolve("session.properties");
+        Session s = Session.load(file);
+        s.put("theme.name", "aurora");
+        s.saveInBackground().get(10, TimeUnit.SECONDS);
+        assertEquals("aurora", Session.load(file).get("theme.name", null));
+        try (Stream<Path> files = Files.list(dir)) {
+            assertEquals(List.of(file), files.toList(), "the temp file was renamed into place");
+        }
+    }
+
+    @Test
+    void anOlderBackgroundWriteNeverReplacesANewerSave() throws Exception {
+        Path file = dir.resolve("session.properties");
+        Session s = Session.load(file);
+        s.put("v", "old");
+        CompletableFuture<Void> older = s.saveInBackground();
+        s.put("v", "new");
+        s.save();
+        older.get(10, TimeUnit.SECONDS);
+        assertEquals("new", Session.load(file).get("v", null));
+    }
+
+    @Test
+    void aFailedSaveIsRetriedOnTheNextSave() throws Exception {
+        Path blocker = Files.writeString(dir.resolve("blocker"), "not a folder");
+        Session broken = Session.load(blocker.resolve("session.properties"));
+        broken.put("a", 1);
+        broken.save(); // parent is a file: fails, reports, does not throw
+        Files.delete(blocker);
+        broken.save(); // nothing changed, but the last write failed
+        assertEquals(1, Session.load(blocker.resolve("session.properties")).getInt("a", 0));
     }
 }
