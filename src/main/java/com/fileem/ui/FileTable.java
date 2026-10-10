@@ -7,6 +7,7 @@ import com.fileem.util.NaturalOrder;
 import javafx.beans.property.ReadOnlyObjectWrapper;
 import javafx.collections.ListChangeListener;
 import javafx.css.PseudoClass;
+import javafx.scene.Node;
 import javafx.scene.control.Label;
 import javafx.scene.control.SelectionMode;
 import javafx.scene.control.TableCell;
@@ -38,6 +39,7 @@ final class FileTable extends TableView<FileEntry> {
 
     private final MainWindow main;
     private final FileTab tab;
+    private final Marquee marquee;
     private final StringBuilder typeAhead = new StringBuilder();
     private long lastTyped;
 
@@ -76,6 +78,7 @@ final class FileTable extends TableView<FileEntry> {
 
         setRowFactory(tv -> new FileRow());
         addEventHandler(KeyEvent.KEY_TYPED, this::onKeyTyped);
+        marquee = new Marquee(this);
 
         Views.dynamicContextMenu(this, () -> main.fileMenuItems(tab));
     }
@@ -126,6 +129,19 @@ final class FileTable extends TableView<FileEntry> {
             c.setSortType(ascending ? TableColumn.SortType.ASCENDING : TableColumn.SortType.DESCENDING);
             getSortOrder().setAll(List.of(c));
         });
+    }
+
+    /** Whether a rubber-band selection is being dragged. */
+    boolean isMarqueeActive() {
+        return marquee.isActive();
+    }
+
+    /** Puts an unmanaged overlay node on top of the skin's children. */
+    void showOverlay(Node node) {
+        if (!getChildren().contains(node)) {
+            getChildren().add(node);
+        }
+        node.toFront();
     }
 
     void ensureVisible(int index) {

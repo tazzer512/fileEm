@@ -43,7 +43,11 @@ mvn test -Dheadless=false   # watch the UI tests run on screen
   bookmark, sort by, show hidden files, copy path, properties. Quick access folders, bookmarks and
   drives in the tree can't be cut, renamed or deleted from there.
 - **Drag & drop** between sides, tabs, the tree and other applications. Inside fileEm the OS modifier
-  keys choose copy or move; drops from other applications are always copied.
+  keys choose copy or move; drops from other applications are always copied. Files are dragged by
+  their icon or name.
+- **Selection box**: drag from empty space, or from a row outside its name, to draw a dotted box that
+  selects every row it touches (Shift adds to the selection, Ctrl/Cmd toggles; the list scrolls when
+  dragging past its edge).
 - **Clipboard** uses the OS clipboard, so files can be copied/pasted to and from Explorer, Finder or
   Nautilus.
 - **Properties** dialog with background folder-size calculation.

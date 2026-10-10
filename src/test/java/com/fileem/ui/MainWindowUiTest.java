@@ -65,6 +65,27 @@ class MainWindowUiTest {
         // Detach this test's window: it stays alive (watchers, volume listeners) and would otherwise
         // keep restyling while reacting to its deleted temp folders, polluting later tests.
         WaitForAsyncUtils.asyncFx(() -> stage.setScene(null)).get();
+        WaitForAsyncUtils.asyncFx(MainWindowUiTest::resetMonocleDragView).get();
+    }
+
+    /**
+     * Works around a Monocle bug: a mouse drag that is not a drag-and-drop (e.g. a selection box)
+     * leaves {@code MouseInput.dragView} pointing at that window, and only a real drop clears it.
+     * The next test's drag-and-drop then sends a drag-leave to the dead window and fails with an NPE.
+     */
+    private static void resetMonocleDragView() {
+        try {
+            Class<?> mouseInput = Class.forName("com.sun.glass.ui.monocle.MouseInput");
+            var getInstance = mouseInput.getDeclaredMethod("getInstance");
+            getInstance.setAccessible(true);
+            var dragView = mouseInput.getDeclaredField("dragView");
+            dragView.setAccessible(true);
+            dragView.set(getInstance.invoke(null), null);
+        } catch (ClassNotFoundException e) {
+            // not running on Monocle
+        } catch (ReflectiveOperationException e) {
+            throw new AssertionError("Monocle changed; revisit resetMonocleDragView", e);
+        }
     }
 
     // ---- helpers ----
@@ -442,7 +463,8 @@ class MainWindowUiTest {
         FileTab tab = leftTab();
         open(robot, tab, dir);
         select(robot, tab, "drag.txt");
-        Node source = rowNode(robot, "drag.txt");
+        // Files are dragged by their name; elsewhere on a row, dragging draws a selection box.
+        Node source = nameText(robot, "drag.txt");
         Node target = rowNode(robot, "into");
         robot.drag(source).dropTo(target);
         waitUntil("dropped into folder", () -> Files.exists(dir.resolve("into/drag.txt")));
@@ -452,6 +474,61 @@ class MainWindowUiTest {
         return robot.lookup(".file-table .table-row-cell").queryAll().stream()
                 .filter(n -> n instanceof TableRow<?> r && r.getItem() instanceof FileEntry e && e.name().equals(name))
                 .findFirst().orElseThrow(() -> new AssertionError("no row " + name));
+    }
+
+    private Node nameText(FxRobot robot, String name) {
+        return robot.lookup(".file-table .name-cell .text").queryAll().stream()
+                .filter(n -> n instanceof javafx.scene.text.Text t && t.getText().equals(name))
+                .findFirst().orElseThrow(() -> new AssertionError("no name " + name));
+    }
+
+    private Node cellOf(FxRobot robot, String name, String columnId) {
+        return robot.from(rowNode(robot, name)).lookup(".table-cell").queryAll().stream()
+                .filter(n -> n instanceof javafx.scene.control.TableCell<?, ?> c
+                        && columnId.equals(c.getTableColumn().getId()))
+                .findFirst().orElseThrow(() -> new AssertionError("no " + columnId + " cell for " + name));
+    }
+
+    private static List<String> selectedNames(FileTab tab) {
+        return fx(() -> tab.selectedEntries().stream().map(FileEntry::name).toList());
+    }
+
+    @Test
+    void draggingFromTheSizeColumnDrawsABoxThatSelectsRows(FxRobot robot) throws Exception {
+        Path dir = folderWith("marquee", "a.txt", "b.txt", "c.txt", "d.txt");
+        FileTab tab = leftTab();
+        open(robot, tab, dir);
+        select(robot, tab, "d.txt");
+        robot.drag(cellOf(robot, "a.txt", "size"));
+        robot.moveTo(cellOf(robot, "c.txt", "type"));
+        assertTrue(fx(() -> tab.table().isMarqueeActive()), "box is shown while dragging");
+        assertTrue(fx(() -> tab.table().lookup(".marquee").isVisible()));
+        assertEquals(List.of("a.txt", "b.txt", "c.txt"), selectedNames(tab));
+        robot.release(javafx.scene.input.MouseButton.PRIMARY);
+        assertFalse(fx(() -> tab.table().isMarqueeActive()));
+        assertFalse(fx(() -> tab.table().lookup(".marquee").isVisible()), "box hidden after release");
+        assertEquals(List.of("a.txt", "b.txt", "c.txt"), selectedNames(tab));
+        assertTrue(Files.exists(dir.resolve("d.txt")) && Files.exists(dir.resolve("a.txt")), "nothing moved");
+    }
+
+    @Test
+    void boxFromEmptySpaceSelectsUpwardsAndShiftAddsToTheSelection(FxRobot robot) throws Exception {
+        Path dir = folderWith("marquee2", "a.txt", "b.txt", "c.txt", "d.txt");
+        FileTab tab = leftTab();
+        open(robot, tab, dir);
+        select(robot, tab, "a.txt");
+        Node table = fx(() -> tab.table());
+        javafx.geometry.Bounds rows = fx(() -> rowNode(robot, "d.txt").localToScreen(
+                rowNode(robot, "d.txt").getBoundsInLocal()));
+        // Press in the empty area below the last row, drag up into c.txt.
+        robot.moveTo(rows.getMinX() + 400, rows.getMaxY() + 60);
+        robot.press(KeyCode.SHIFT);
+        robot.press(javafx.scene.input.MouseButton.PRIMARY);
+        robot.moveTo(cellOf(robot, "c.txt", "modified"));
+        robot.release(javafx.scene.input.MouseButton.PRIMARY);
+        robot.release(KeyCode.SHIFT);
+        assertEquals(List.of("a.txt", "c.txt", "d.txt"), selectedNames(tab));
+        assertTrue(fx(() -> table.isFocused()), "the list keeps focus");
     }
 
     @Test
