@@ -178,8 +178,15 @@ tools/                                  make-icon.py, install-linux.sh (per-user
 - Files are copied to a hidden temp sibling (`.fileem-<random>.part`), **size-verified**, then
   renamed into place (atomic replace on overwrite). An existing target is only replaced by a
   complete copy; failure or cancel leaves the original intact and removes the temp file.
-- Cross-file-system moves **fsync** the copy before deleting the source. A source is deleted only
-  after its copy succeeded; skipped or failed children keep their source folder.
+- Cross-file-system moves make the copy **durable** before deleting the source. On Linux this is
+  batched: finished copies queue their sources (`pendingSources`), and every 1000 files / 1 GB /
+  15 s one `sync -f <target>` (syncfs) flushes the destination, then that batch's sources are
+  deleted, folders after their contents (37× faster than an fsync per file for many small files).
+  If the sync fails, each copy is fsynced on its own; a copy that can't be flushed keeps its
+  source. Completed moves are flushed and their sources removed also when the operation is
+  cancelled or fails (`work()`'s finally). Elsewhere (no `sync`): fsync per file. A source is
+  deleted only after its copy succeeded; skipped or failed children keep their source folder.
+  Tests force copy-style moves with `forceCopyMoves()` and stand in for syncfs with `syncer(..)`.
 - Same-file-system moves are renames (no data copied). A failed rename falls back to copying only
   for errors where that makes sense, and never silently overwrites.
 - Symlinks are copied/deleted as links, never followed. Windows junctions are never descended

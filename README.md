@@ -68,8 +68,9 @@ mvn test -Dheadless=false   # watch the UI tests run on screen
   blocks the window or other folders, and leaving a big folder before it finished loading stops
   reading it.
 - **Safe file operations**: copies are written to a temp file, size-checked, then renamed into
-  place, so a failed or cancelled copy never damages an existing file. Moves between drives are
-  flushed to disk before the source is deleted. Links are never followed, special files are
+  place, so a failed or cancelled copy never damages an existing file. Moves between drives write
+  the copies to disk in batches before deleting the originals (fast even for thousands of small
+  files on a USB stick). Links are never followed, special files are
   skipped, and free space is checked up front.
 - **Right-click menus** on files, folders, empty space and the tree: open (in a tab, the other
   side, a terminal or the OS file manager), cut/copy/paste (into a folder), copy/move to the other

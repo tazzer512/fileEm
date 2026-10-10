@@ -372,6 +372,124 @@ class FileOperationTest {
         assertEquals("d,d/conflict.txt", tree(src), "skipped file and its folder stay at the source");
     }
 
+    // ---- moves between file systems (forced: tests run on one) ----
+
+    /** {@code folders} × {@code perFolder} small files under src/many. */
+    private Path manySmallFiles(int folders, int perFolder) throws IOException {
+        Path many = Files.createDirectory(src.resolve("many"));
+        for (int f = 0; f < folders; f++) {
+            Path d = Files.createDirectory(many.resolve("sub" + f));
+            for (int i = 0; i < perFolder; i++) {
+                Files.writeString(d.resolve("f" + i + ".txt"), "content " + f + "/" + i);
+            }
+        }
+        return many;
+    }
+
+    private static long countFiles(Path root) throws IOException {
+        if (!Files.exists(root)) {
+            return 0;
+        }
+        try (Stream<Path> s = Files.walk(root)) {
+            return s.filter(Files::isRegularFile).count();
+        }
+    }
+
+    private static FileOperation copyingMove(List<Path> sources, Path target, FileOperation.Syncer syncer) {
+        FileOperation op = new FileOperation(Kind.MOVE, sources, target, FAIL_ON_CONFLICT);
+        op.forceCopyMoves();
+        op.syncer(syncer);
+        return op;
+    }
+
+    private void assertMovedIntact(Path movedRoot, int folders, int perFolder) throws IOException {
+        for (int f = 0; f < folders; f++) {
+            for (int i = 0; i < perFolder; i++) {
+                assertEquals("content " + f + "/" + i, Files.readString(movedRoot.resolve("sub" + f + "/f" + i + ".txt")));
+            }
+        }
+    }
+
+    @Test
+    void aMoveBetweenDrivesFlushesInBatchesAndDeletesSourcesOnlyAfterEachFlush() throws Exception {
+        Path many = manySmallFiles(5, 500); // 2500 files: batches of 1000, 1000, 500
+        List<Long> sourcesLeftAtEachSync = new ArrayList<>();
+        FileOperation op = copyingMove(List.of(many), dst, dir -> {
+            assertEquals(dst, dir, "the destination's file system is flushed");
+            try {
+                sourcesLeftAtEachSync.add(countFiles(many));
+            } catch (IOException e) {
+                throw new java.io.UncheckedIOException(e);
+            }
+            return true;
+        });
+        op.run();
+        assertTrue(op.errors().isEmpty(), op.errors().toString());
+        assertEquals(List.of(2500L, 1500L, 500L), sourcesLeftAtEachSync,
+                "one flush per batch, and no source of a batch is deleted before its flush");
+        assertFalse(Files.exists(many), "the emptied source folders are removed too");
+        assertMovedIntact(dst.resolve("many"), 5, 500);
+        assertProgressComplete(op);
+        assertNoTempFiles();
+    }
+
+    @Test
+    void whenTheBatchFlushFailsEveryCopyIsFsyncedBeforeItsSourceGoes() throws Exception {
+        Path many = manySmallFiles(2, 30);
+        int[] calls = {0};
+        FileOperation op = copyingMove(List.of(many), dst, dir -> {
+            calls[0]++;
+            return false; // e.g. no syncfs support: fall back to fsync per file
+        });
+        op.run();
+        assertTrue(op.errors().isEmpty(), op.errors().toString());
+        assertEquals(1, calls[0]);
+        assertFalse(Files.exists(many));
+        assertMovedIntact(dst.resolve("many"), 2, 30);
+        assertNoTempFiles();
+    }
+
+    @Test
+    void withoutBatchingEachMovedFileIsFsyncedAndMovedAsBefore() throws Exception {
+        Path many = manySmallFiles(2, 20);
+        FileOperation op = copyingMove(List.of(many), dst, null);
+        op.run();
+        assertTrue(op.errors().isEmpty(), op.errors().toString());
+        assertFalse(Files.exists(many));
+        assertMovedIntact(dst.resolve("many"), 2, 20);
+        assertNoTempFiles();
+    }
+
+    @Test
+    void cancellingABatchedMoveLosesNothingAndRemovesOnlyFlushedSources() throws Exception {
+        Path many = manySmallFiles(5, 500);
+        FileOperation[] self = new FileOperation[1];
+        int[] syncs = {0};
+        FileOperation op = copyingMove(List.of(many), dst, dir -> {
+            if (++syncs[0] == 1) {
+                self[0].cancel(); // the user cancels while the first batch is being written
+            }
+            return true;
+        });
+        self[0] = op;
+        op.run();
+        // cancel() interrupts the thread running the task: here that is the test thread itself
+        assertTrue(Thread.interrupted(), "the cancel's interrupt is kept for the caller");
+        assertTrue(onFx(op::isCancelled));
+        for (int f = 0; f < 5; f++) {
+            for (int i = 0; i < 500; i++) {
+                String rel = "sub" + f + "/f" + i + ".txt";
+                Path inSrc = many.resolve(rel), inDst = dst.resolve("many").resolve(rel);
+                assertTrue(Files.exists(inSrc) || Files.exists(inDst), rel + " was lost");
+                if (!Files.exists(inSrc)) {
+                    assertEquals("content " + f + "/" + i, Files.readString(inDst), rel + " complete at the destination");
+                }
+            }
+        }
+        assertTrue(countFiles(many) > 0, "the rest of the move was cancelled");
+        assertNoTempFiles();
+    }
+
     @Test
     void moveWithOverwriteReplacesAndRemovesTheSource() throws Exception {
         Files.writeString(src.resolve("a.txt"), "new");

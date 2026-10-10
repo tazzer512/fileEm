@@ -35,8 +35,10 @@ import java.nio.file.attribute.DosFileAttributes;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.Enumeration;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ThreadLocalRandom;
@@ -57,8 +59,10 @@ import java.util.zip.ZipOutputStream;
  *   <li>Files are written to a hidden temp file next to the target, size-checked, then renamed into
  *       place, so an existing target is only replaced by a complete copy and a failed or cancelled
  *       copy never leaves a truncated file behind.</li>
- *   <li>A move between file systems fsyncs the copy before the source is deleted, and a source is
- *       only deleted after its copy succeeded.</li>
+ *   <li>A move between file systems makes the copy durable before the source is deleted, and a
+ *       source is only deleted after its copy succeeded. On Linux the copies are flushed in batches
+ *       (one {@code syncfs} of the destination per batch, then the batch's sources are deleted)
+ *       instead of one fsync per file, which made moving many small files to a USB drive crawl.</li>
  *   <li>Symbolic links are copied/deleted as links and never followed; Windows junctions are never
  *       descended into; special files (FIFOs, devices, sockets) are skipped.</li>
  *   <li>Something displaced by "Replace" (e.g. a folder replaced by a file) is moved aside first
@@ -96,6 +100,30 @@ public final class FileOperation extends Task<Void> {
     private Resolution conflictForAll;
     /** The current top-level move stays on one file system, so items can simply be renamed. */
     private boolean renameMoves;
+    /** Test hook: move by copying even within one file system (tests can't span two). */
+    private boolean forceCopyMoves;
+
+    /** Makes a whole file system durable; false when it couldn't (callers then fsync file by file). */
+    @FunctionalInterface
+    interface Syncer {
+        boolean sync(Path onFileSystem) throws InterruptedException;
+    }
+
+    /** Flush a batch once it holds this many sources, this many bytes, or has waited this long. */
+    static final int BATCH_ITEMS = 1000;
+    static final long BATCH_BYTES = 1L << 30;
+    static final long BATCH_NANOS = 15_000_000_000L;
+
+    /** Null where batching isn't available: every moved file is then fsynced before its source goes. */
+    private Syncer syncer = defaultSyncer();
+    /**
+     * Sources of a cross-file-system move whose copies are complete and in place but not yet flushed
+     * to disk, in the order they finished (a folder after its contents). Deleted by {@link #flushMoves}.
+     */
+    private final List<Path[]> pendingSources = new ArrayList<>();
+    private int pendingFiles;
+    private long pendingBytes;
+    private long pendingSince;
     private long total = 1;
     /** The archive or extracted folder created by COMPRESS / EXTRACT. */
     private volatile Path result;
@@ -132,6 +160,32 @@ public final class FileOperation extends Task<Void> {
 
     public Kind kind() {
         return kind;
+    }
+
+    /** Test hook: moves copy and delete like moves between drives do. */
+    void forceCopyMoves() {
+        forceCopyMoves = true;
+    }
+
+    /** Test hook: how a batch of moved files is flushed (null: fsync every file, no batching). */
+    void syncer(Syncer s) {
+        syncer = s;
+    }
+
+    /** Linux: {@code sync -f DIR} runs syncfs(2) on the file system holding DIR. */
+    private static Syncer defaultSyncer() {
+        if (!OsUtil.isLinux() || !OsUtil.onPath("sync")) {
+            return null;
+        }
+        return dir -> {
+            try {
+                Process p = new ProcessBuilder("sync", "-f", dir.toString()).redirectErrorStream(true)
+                        .redirectOutput(ProcessBuilder.Redirect.DISCARD).start();
+                return p.waitFor() == 0;
+            } catch (IOException e) {
+                return false;
+            }
+        };
     }
 
     public List<Path> sources() {
@@ -265,6 +319,16 @@ public final class FileOperation extends Task<Void> {
             updateProgress(total, total);
         } catch (Cancelled e) {
             cancel(false);
+        } finally {
+            // moves that completed (also before a cancel or failure) lose their source, as before
+            boolean interrupted = Thread.interrupted(); // a cancel's interrupt must not abort the flush
+            try {
+                flushMoves();
+            } finally {
+                if (interrupted) {
+                    Thread.currentThread().interrupt();
+                }
+            }
         }
         return null;
     }
@@ -623,7 +687,7 @@ public final class FileOperation extends Task<Void> {
         if (intoItself(src)) {
             throw new IOException("Cannot move a folder into itself.");
         }
-        renameMoves = sameStore(src);
+        renameMoves = !forceCopyMoves && sameStore(src);
         transfer(src, dest, true);
     }
 
@@ -726,11 +790,19 @@ public final class FileOperation extends Task<Void> {
             // not important
         }
         if (move) {
-            try {
-                Files.delete(src);
-            } catch (DirectoryNotEmptyException ignored) {
-                // something inside was skipped or failed: keep the source folder
+            if (!pendingSources.isEmpty()) {
+                pendingSources.add(new Path[]{src, null}); // after its contents, once they are flushed
+            } else {
+                deleteSourceFolder(src);
             }
+        }
+    }
+
+    private static void deleteSourceFolder(Path src) throws IOException {
+        try {
+            Files.delete(src);
+        } catch (DirectoryNotEmptyException ignored) {
+            // something inside was skipped or failed: keep the source folder
         }
     }
 
@@ -765,14 +837,74 @@ public final class FileOperation extends Task<Void> {
             restore(displaced, dst);
         }
 
+        boolean batch = move && syncer != null;
         if (a.isSymbolicLink()) {
             copySymlink(src, dst, exists);
         } else {
-            copyFile(src, dst, a, exists, move);
+            copyFile(src, dst, a, exists, move && !batch); // batched: flushed with the others below
         }
-        if (move) {
+        if (batch) {
+            deleteAfterFlush(src, dst, a.size());
+        } else if (move) {
             Files.delete(src);
         }
+    }
+
+    /** Queues a moved file's source for deletion once its copy is flushed; flushes full batches. */
+    private void deleteAfterFlush(Path src, Path dst, long size) throws IOException {
+        if (pendingSources.isEmpty()) {
+            pendingSince = System.nanoTime();
+        }
+        pendingSources.add(new Path[]{src, dst});
+        pendingFiles++;
+        pendingBytes += size;
+        if (pendingFiles >= BATCH_ITEMS || pendingBytes >= BATCH_BYTES || System.nanoTime() - pendingSince >= BATCH_NANOS) {
+            flushMoves();
+        }
+    }
+
+    /**
+     * Makes the queued copies durable, then deletes their sources (folders after their contents).
+     * One syncfs for the whole batch; if that fails, every copy is fsynced on its own; a copy that
+     * can't be flushed keeps its source. Never throws: problems are reported per item.
+     */
+    private void flushMoves() {
+        if (pendingSources.isEmpty()) {
+            return;
+        }
+        List<Path[]> batch = List.copyOf(pendingSources);
+        pendingSources.clear();
+        pendingFiles = 0;
+        pendingBytes = 0;
+        String message = lastMessage;
+        updateMessage("Writing to disk…");
+        boolean synced;
+        try {
+            synced = syncer != null && syncer.sync(targetDir);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            synced = false;
+        }
+        Set<Path> unflushed = new HashSet<>();
+        for (Path[] item : batch) {
+            Path src = item[0], dst = item[1];
+            try {
+                if (dst == null) {
+                    if (unflushed.stream().noneMatch(u -> u.startsWith(src))) {
+                        deleteSourceFolder(src);
+                    }
+                    continue;
+                }
+                if (!synced && !Files.isSymbolicLink(dst)) {
+                    force(dst);
+                }
+                Files.delete(src);
+            } catch (IOException e) {
+                unflushed.add(src);
+                error(src, e);
+            }
+        }
+        updateMessage(message);
     }
 
     /**
