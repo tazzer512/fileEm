@@ -149,6 +149,26 @@
             <build>
                 <plugins>
                     <plugin>
+                        <!-- jpackage refuses to overwrite an existing image, and stale jars in input/ would be
+                             bundled: start each packaging from an empty dist folder -->
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-clean-plugin</artifactId>
+                        <version>3.4.0</version>
+                        <executions>
+                            <execution>
+                                <id>dist-clean</id>
+                                <phase>prepare-package</phase>
+                                <goals><goal>clean</goal></goals>
+                                <configuration>
+                                    <excludeDefaultDirectories>true</excludeDefaultDirectories>
+                                    <filesets>
+                                        <fileset><directory>${dist.dir}</directory></fileset>
+                                    </filesets>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
                         <groupId>org.apache.maven.plugins</groupId>
                         <artifactId>maven-dependency-plugin</artifactId>
                         <version>3.8.1</version>
