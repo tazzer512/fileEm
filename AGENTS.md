@@ -38,7 +38,7 @@ Treat it as part of every change, not an afterthought:
   `jdk.localedata`). `tools/install-linux.sh` installs it per user with a `.desktop` entry named
   after the window class (`com.fileem.FileEmApp`; renaming `FileEmApp` breaks the dock icon,
   `PackagingTest` checks). Icons: `tools/make-icon.py` writes `src/packaging/` and the window icons.
-- `mvn test`: about 80 tests, around a minute. UI tests run **headless on Monocle** (configured in
+- `mvn test`: about 130 tests, a bit over a minute. UI tests run **headless on Monocle** (configured in
   the pom's `headless-ui-tests` profile), so no display is needed.
   - `mvn test -Dtest=FileOperationTest`: a single class. `-Dtest='!MainWindowUiTest'` skips
     the slow UI tests while iterating, but run the full suite before finishing.
@@ -52,13 +52,16 @@ Treat it as part of every change, not an afterthought:
 ```
 src/test/java/com/fileem/
   FxTestSupport        starts the FX toolkit once; drainFx() waits for queued FX events
-  SessionTest, BookmarksTest
+  SessionTest          round trip, atomic + change-only writes, background vs. sync save order
+  BookmarksTest
+  PackagingTest        dist profile + install-linux.sh stay consistent (window class, icons, modules)
   ui/ThemeTest         theme sheets parse, both modes define all colors, live restyling
   ui/IconsTest         app icon sizes load; dialogs get the icon
   util/                NaturalOrderTest, FormatsTest (fixes Locale.US), FsUtilTest
   fs/                  FileEntryTest, FileTypesTest, VolumesTest, DirWatcherTest
   ops/FileOperationTest  copy/move/delete/trash semantics + integrity on failure/cancel
-  ui/MainWindowUiTest  TestFX end-to-end: keyboard, dialogs, dual pane, clipboard, DnD, session
+  ui/MainWindowUiTest  TestFX end-to-end: keyboard, dialogs, dual pane, clipboard, DnD, session,
+                       autosave, rubber-band selection, stacked progress window
 ```
 
 - `FileOperation` is a JavaFX `Task`: call `op.run()` synchronously on the test thread, but read
@@ -80,7 +83,19 @@ src/test/java/com/fileem/
 - Platform-specific tests use `assumeTrue(OsUtil.isPosix())` / `isWindows()` so they skip, not
   fail, elsewhere.
 - UI test hooks are package-private accessors (`MainWindow.left()/right()/isDual()/activeSide()`,
-  `FileTab.table()`). Add more of these rather than reaching in with reflection.
+  `FileTab.table()`, `ProgressWindow.of(owner)/operations()/cancelButton(op)`). Add more of these
+  rather than reaching in with reflection.
+- Long-running operations in UI tests: build a `FileOperation` whose `ConflictHandler` blocks on a
+  latch (copy onto an existing name) and start it with `OperationUi.start(...)`; it stays running
+  until the latch opens or it is cancelled. No big files or sleeps needed.
+- Monocle quirk: a mouse drag that isn't a drag-and-drop (rubber band) leaves Monocle's
+  `MouseInput.dragView` set and breaks the next test's DnD; `MainWindowUiTest`'s `@AfterEach`
+  resets it. Keep that reset.
+- Known flake: `rightClickInTheTreeShowsAMenuWithoutNavigating` has failed once on the outline
+  check and passed on rerun. Rerun before digging in; fix it if it fails again.
+- `Autosave` and the shutdown hook are only started by `FileEmApp`; tests drive
+  `Autosave.saveInBackground()` directly with a temp `Session`. Never let a test write
+  `OsUtil.configDir()`.
 
 ## Dependencies
 
@@ -104,13 +119,15 @@ com.fileem.ops      FileOperation (copy/move/delete/trash Task), FileClipboard
 com.fileem.ui       MainWindow (toolbar, F-key bar, ALL commands + key handling)
                     └ ExplorerSide ×2 (left/right): FolderTree + TabPane of FileTab
                        └ FileTab: AddressBar + filter + FileTable + status line
-                    OperationUi (starts operations, conflict dialog), ProgressWindow (one per
-                    window, a row with its own Cancel per running operation), PropertiesDialog, BookmarksDialog,
-                    Dialogs,
-                    Dnd, Theme, Icons, Views, TreeNode
+                       └ FileTable + Marquee (rubber-band selection, autoscroll)
+                    OperationUi (starts operations, conflict dialog)
+                    ProgressWindow (one per main window; a row with its own Cancel per running op)
+                    PropertiesDialog, BookmarksDialog, Dialogs, Dnd, Theme, Icons, Views, TreeNode
 src/main/resources/com/fileem/app.css   author stylesheet on top of AtlantaFX
 src/main/resources/com/fileem/themes/   theme overlays: <id>.css shapes, <id>-light/-dark.css colors
 src/main/resources/com/fileem/icons/    app icon PNGs (16–512 px); regenerate with tools/make-icon.py (Pillow)
+src/packaging/                          jpackage icons (png Linux, ico Windows, icns macOS)
+tools/                                  make-icon.py, install-linux.sh (per-user install + .desktop)
 ```
 
 ## File operation integrity (do not regress)
@@ -205,6 +222,14 @@ src/main/resources/com/fileem/icons/    app icon PNGs (16–512 px); regenerate 
   logout loses nothing. `Bookmarks` saves on every change. Writes are atomic (temp file + rename),
   and an older background write never replaces a newer save. New persisted state only needs to be
   put into the session from `saveSession` (or on change); don't add other save paths.
+- **Operations UI**: start every operation through `OperationUi.run/start`. An operation still
+  running after 350 ms gets a row in its owner's `ProgressWindow`; rows are removed when the
+  operation ends and the window closes with the last one. Each row's Cancel cancels only that
+  operation; Escape is the cancel button only while one row is shown; closing the window cancels all.
+- **Rubber band** (`Marquee`): event filters on the table. A press on a row's name (icon + text)
+  drags files; anywhere else (empty space, other columns) starts the box. Rows are tracked in
+  content coordinates (index × row height) so autoscroll keeps the anchor. Shift adds, Ctrl/Cmd
+  toggles.
 - **Bookmarks**: one `Bookmarks` model per `MainWindow`, shared by both trees. The tree's
   Bookmarks section (`TreeNode.Kind.BOOKMARK_HEADER` / `BOOKMARK`) mirrors it via `syncBookmarks`
   and is hidden while empty. Bookmark items are lazy `FolderItem`s like volumes, but `reveal`
@@ -215,5 +240,7 @@ src/main/resources/com/fileem/icons/    app icon PNGs (16–512 px); regenerate 
 ## Known gaps / ideas
 
 The suite has only run on Linux; the macOS/Windows paths (Trash via AWT, drive labels, junctions,
-Cmd shortcuts) are untested there. Possible next steps: CI on all three OSes, jpackage installers,
-archive browsing, folder-size column.
+Cmd shortcuts) are untested there. Packaging is only tried on Linux as an app-image (+
+`install-linux.sh`); the macOS/Windows images and the `deb`/`rpm`/`dmg`/`msi` installer types are
+untested, and on macOS the Dock icon only comes from the packaged `.app`. Possible next steps: CI on
+all three OSes (tests + `-Pdist`), archive browsing, folder-size column.
