@@ -30,7 +30,7 @@ mvn test -Dheadless=false   # watch the UI tests run on screen
   on top, natural "file2 < file10" order). Column widths, order, visibility and sort are remembered.
 - **Tabs** on each side, **dual pane** (F9), breadcrumb address bar (click or Ctrl+L to type a path),
   live filter box with `*` / `?` wildcards, type-ahead find, auto-refresh when folder contents change.
-- **Operations** run in the background with a progress window and cancel: copy, move, delete to
+- **Operations** run in the background with a progress window (concurrent operations stack in it, each with its own Cancel): copy, move, delete to
   Trash, permanent delete, rename, new folder. Conflicts ask Replace / Skip / Keep both / Cancel
   (optionally for all).
 - **Safe file operations**: copies are written to a temp file, size-checked, then renamed into
@@ -51,7 +51,13 @@ mvn test -Dheadless=false   # watch the UI tests run on screen
 - **Clipboard** uses the OS clipboard, so files can be copied/pasted to and from Explorer, Finder or
   Nautilus.
 - **Properties** dialog with background folder-size calculation.
-- Light/dark theme (AtlantaFX), session restore (window, tabs, dual mode, hidden files, columns).
+- **Themes**, each with a light and a dark mode, picked from the palette button in the toolbar (the
+  button next to it switches light/dark): **Classic**, **Windows 11** (Fluent: mica, rounded
+  corners, accent underlines), **macOS** (Finder: striped rows, solid blue selection, segmented
+  tabs), **Adwaita** (GNOME Files) and **Aurora**, fileEm's own northern-lights theme with gradient
+  edge lights, pill controls and keycap F-keys. Fonts fall back to the system font when the
+  theme's font (Segoe UI Variable, SF Pro, Cantarell, Inter) isn't installed.
+- Session restore (window, tabs, dual mode, hidden files, columns, theme).
 
 ## Keyboard
 

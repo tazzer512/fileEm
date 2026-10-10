@@ -4,21 +4,36 @@
     -fx-padding: 4 8 4 8;
 }
 
-/* ---- file type icon colors ---- */
-.icon-folder { -fx-icon-color: #d9a02b; }
-.icon-image { -fx-icon-color: #3fa66a; }
-.icon-audio { -fx-icon-color: #b356c4; }
-.icon-video { -fx-icon-color: #d4524a; }
-.icon-archive { -fx-icon-color: #a07a46; }
-.icon-pdf { -fx-icon-color: #d93a35; }
-.icon-word { -fx-icon-color: #2f6fd1; }
-.icon-excel { -fx-icon-color: #1f8f4e; }
-.icon-ppt { -fx-icon-color: #d0632d; }
-.icon-code { -fx-icon-color: #3a8fd9; }
-.icon-exe { -fx-icon-color: #6a6fd8; }
+/* ---- file type icon colors (looked-up colors so themes can retint them) ---- */
+.root {
+    icon-folder: #d9a02b;
+    icon-image: #3fa66a;
+    icon-audio: #b356c4;
+    icon-video: #d4524a;
+    icon-archive: #a07a46;
+    icon-pdf: #d93a35;
+    icon-word: #2f6fd1;
+    icon-excel: #1f8f4e;
+    icon-ppt: #d0632d;
+    icon-code: #3a8fd9;
+    icon-exe: #6a6fd8;
+    icon-bookmark: #d6457a;
+}
+
+.icon-folder { -fx-icon-color: icon-folder; }
+.icon-image { -fx-icon-color: icon-image; }
+.icon-audio { -fx-icon-color: icon-audio; }
+.icon-video { -fx-icon-color: icon-video; }
+.icon-archive { -fx-icon-color: icon-archive; }
+.icon-pdf { -fx-icon-color: icon-pdf; }
+.icon-word { -fx-icon-color: icon-word; }
+.icon-excel { -fx-icon-color: icon-excel; }
+.icon-ppt { -fx-icon-color: icon-ppt; }
+.icon-code { -fx-icon-color: icon-code; }
+.icon-exe { -fx-icon-color: icon-exe; }
 .icon-text, .icon-file, .icon-volume, .icon-header { -fx-icon-color: -color-fg-muted; }
 .icon-quick { -fx-icon-color: -color-accent-fg; }
-.icon-bookmark { -fx-icon-color: #d6457a; }
+.icon-bookmark { -fx-icon-color: icon-bookmark; }
 .icon-missing { -fx-icon-color: -color-danger-fg; }
 
 /* ---- sides ---- */

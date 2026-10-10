@@ -1,0 +1,226 @@
+/*
+ * GNOME Adwaita (libadwaita / Files) shapes on top of Primer. Colors come from adwaita-light.css /
+ * adwaita-dark.css.
+ */
+.root {
+    -fx-font-family: "Cantarell";
+}
+
+.main-window {
+    -fx-background-color: -fe-window;
+}
+
+/* ---- header bar ---- */
+.main-toolbar {
+    -fx-background-color: -fe-headerbar;
+    -fx-background-insets: 0;
+    -fx-border-color: transparent transparent -fe-shade transparent;
+    -fx-padding: 6 8 6 8;
+}
+
+.main-toolbar > .container > .button,
+.main-toolbar > .container > .menu-button,
+.main-toolbar > .container .toggle-button {
+    -color-button-bg: transparent;
+    -color-button-border: transparent;
+    -color-button-bg-hover: -fe-hover;
+    -color-button-border-hover: transparent;
+    -color-button-bg-pressed: -fe-active;
+    -color-button-bg-selected: -fe-active;
+    -color-button-border-focused: transparent;
+    -fx-background-radius: 6;
+}
+
+/* ---- sidebar ---- */
+.folder-tree {
+    -fx-background-color: -fe-sidebar;
+    -fx-border-width: 0;
+}
+
+.folder-tree .tree-cell {
+    -fx-background-color: transparent;
+    -fx-background-radius: 6;
+    -fx-background-insets: 1 6 1 6;
+    -fx-padding: 4 4 4 4;
+}
+
+.folder-tree .tree-cell:filled:hover {
+    -fx-background-color: -fe-hover;
+}
+
+.folder-tree .tree-cell:selected,
+.folder-tree .tree-cell:filled:selected:hover {
+    -fx-background-color: -fe-active;
+}
+
+.folder-tree .tree-cell:header {
+    -fx-font-weight: bold;
+    -fx-text-fill: -color-fg-muted;
+    -fx-padding: 12 4 4 4;
+}
+
+/* ---- tab bar: flat, rounded, no underline ---- */
+.explorer-side .tab-pane > .tab-header-area {
+    -fx-background-color: -fe-headerbar;
+    -fx-padding: 4 6 4 6;
+    -fx-border-color: transparent transparent -fe-shade transparent;
+}
+
+.explorer-side .tab-pane > .tab-header-area > .tab-header-background {
+    -fx-background-color: -fe-headerbar;
+    -fx-background-insets: 0;
+}
+
+.explorer-side .tab-pane > .tab-header-area > .headers-region > .tab {
+    -fx-background-color: transparent;
+    -fx-background-insets: 0;
+    -fx-background-radius: 6;
+    -fx-padding: 3 12 3 12;
+}
+
+.explorer-side .tab-pane > .tab-header-area > .headers-region > .tab:hover {
+    -fx-background-color: -fe-hover;
+}
+
+.explorer-side .tab-pane > .tab-header-area > .headers-region > .tab:top:selected,
+.explorer-side:active .tab-pane > .tab-header-area > .headers-region > .tab:selected {
+    -fx-background-color: -fe-active;
+    -fx-border-width: 0;
+}
+
+.explorer-side .tab-pane > .tab-content-area {
+    -fx-background-color: -fe-view;
+}
+
+/* ---- list view ---- */
+.file-table {
+    -color-cell-bg: -fe-view;
+    -color-cell-border: transparent;
+    -color-header-bg: -fe-view;
+    -color-header-fg: -color-fg-muted;
+    -color-cell-bg-selected: -fe-selection;
+    -color-cell-bg-selected-focused: -fe-selection;
+    -fx-border-width: 0;
+    -fx-background-color: -fe-view;
+}
+
+.file-table > .column-header-background {
+    -fx-background-color: -fe-view;
+}
+
+.file-table > .column-header-background .column-header {
+    -fx-border-color: transparent;
+}
+
+.file-table > .column-header-background .column-header:hover {
+    -fx-background-color: -fe-hover;
+    -fx-background-radius: 6;
+}
+
+.file-table > .column-header-background > .filler,
+.file-table > .column-header-background > .show-hide-columns-button {
+    -fx-border-color: transparent;
+}
+
+.file-table .table-row-cell {
+    -fx-background-color: transparent;
+    -fx-background-insets: 0;
+    -fx-cell-size: 2.3em;
+}
+
+.file-table .table-row-cell:filled:hover {
+    -fx-background-color: -fe-hover;
+    -fx-background-radius: 6;
+    -fx-background-insets: 1 6 1 6;
+}
+
+.file-table > .virtual-flow > .clipped-container > .sheet > .table-row-cell:filled:selected {
+    -fx-background-color: -fe-selection;
+    -fx-background-radius: 6;
+    -fx-background-insets: 1 6 1 6;
+}
+
+.file-table:focused > .virtual-flow > .clipped-container > .sheet > .table-row-cell:filled:selected {
+    -fx-background-color: -fe-selection-focused;
+}
+
+/* ---- entries and buttons ---- */
+.address-bar {
+    -fx-background-color: -fe-entry;
+    -fx-background-radius: 6;
+    -fx-border-color: transparent;
+    -fx-border-radius: 6;
+}
+
+.explorer-side:active .address-bar {
+    -fx-border-color: transparent;
+}
+
+.address-bar:focus-within {
+    -fx-border-color: -color-accent-muted;
+    -fx-border-width: 2;
+}
+
+.text-input {
+    -fx-background-radius: 6;
+    -color-input-bg: -fe-entry;
+    -color-input-border: -fe-entry;
+}
+
+.text-input:focused {
+    -fx-background-color: -color-accent-muted, -color-input-bg;
+    -fx-background-insets: 0, 2;
+    -fx-background-radius: 6, 4;
+}
+
+.button, .toggle-button, .menu-button {
+    -fx-background-radius: 6;
+    -fx-border-radius: 6;
+    -color-button-bg: -fe-button;
+    -color-button-border: transparent;
+    -color-button-bg-hover: -fe-button-hover;
+    -color-button-border-hover: transparent;
+}
+
+.address-bar .button,
+.main-toolbar .button,
+.function-bar .button {
+    -color-button-bg: transparent;
+}
+
+.button:default {
+    -color-button-bg: -color-accent-emphasis;
+    -color-button-fg: #ffffff;
+    -color-button-bg-hover: -color-accent-fg;
+}
+
+.context-menu {
+    -fx-background-radius: 12;
+    -fx-border-radius: 12;
+    -fx-padding: 6;
+}
+
+.context-menu .menu-item {
+    -fx-background-radius: 6;
+    -fx-padding: 6 10 6 10;
+}
+
+/* ---- status and function keys ---- */
+.status-label {
+    -fx-background-color: -fe-view;
+    -fx-border-color: -fe-shade transparent transparent transparent;
+}
+
+.function-bar {
+    -fx-background-color: -fe-headerbar;
+    -fx-border-color: -fe-shade transparent transparent transparent;
+}
+
+.function-bar .button {
+    -fx-background-radius: 6;
+}
+
+.explorer-side > .split-pane-divider,
+.main-window > .split-pane > .split-pane-divider {
+    -fx-background-color: -fe-shade;
+}

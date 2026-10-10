@@ -24,6 +24,7 @@ import javafx.scene.control.ButtonBase;
 import javafx.scene.control.CheckMenuItem;
 import javafx.scene.control.Label;
 import javafx.scene.control.Menu;
+import javafx.scene.control.MenuButton;
 import javafx.scene.control.MenuItem;
 import javafx.scene.control.RadioMenuItem;
 import javafx.scene.control.SeparatorMenuItem;
@@ -62,6 +63,7 @@ public final class MainWindow extends BorderPane {
     private final Session session;
     private final BooleanProperty showHidden = new SimpleBooleanProperty();
     private final BooleanProperty dual = new SimpleBooleanProperty();
+    private MenuButton themeMenu;
     private final SplitPane sides = new SplitPane();
     private final ExplorerSide left;
     private final ExplorerSide right;
@@ -218,16 +220,55 @@ public final class MainWindow extends BorderPane {
         hidden.selectedProperty().bindBidirectional(showHidden);
         ToggleButton dualToggle = toggle("mdi2v-view-split-vertical", "Dual pane (F9)");
         dualToggle.selectedProperty().bindBidirectional(dual);
-        Button theme = iconButton("mdi2t-theme-light-dark", "Light / dark theme", Theme::toggle);
+        Button theme = iconButton("mdi2t-theme-light-dark", "Light / dark mode", Theme::toggle);
+        themeMenu = buildThemeMenu();
 
         Region spacer = new Region();
         HBox.setHgrow(spacer, Priority.ALWAYS);
 
         ToolBar bar = new ToolBar(backButton, forwardButton, upButton, refresh, sep(),
                 newFolder, cut, copy, paste, rename, delete, props, sep(), newTab, bookmarkButton,
-                spacer, hidden, dualToggle, theme);
+                spacer, hidden, dualToggle, themeMenu, theme);
         bar.getStyleClass().add("main-toolbar");
         return bar;
+    }
+
+    /** Toolbar menu that picks the theme family and the light or dark mode. */
+    MenuButton themeMenu() {
+        return themeMenu;
+    }
+
+    private MenuButton buildThemeMenu() {
+        MenuButton menu = new MenuButton(null, Icons.icon("mdi2p-palette-outline", 18));
+        menu.getStyleClass().addAll(Styles.BUTTON_ICON, Styles.FLAT, "theme-menu");
+        menu.setTooltip(new Tooltip("Theme"));
+        menu.setFocusTraversable(false);
+        ToggleGroup families = new ToggleGroup();
+        for (Theme.Family f : Theme.Family.values()) {
+            RadioMenuItem item = new RadioMenuItem(f.label());
+            item.setId("theme-" + f.id());
+            item.setToggleGroup(families);
+            item.setOnAction(e -> Theme.apply(f));
+            item.setUserData(f);
+            menu.getItems().add(item);
+        }
+        ToggleGroup modes = new ToggleGroup();
+        RadioMenuItem light = new RadioMenuItem("Light");
+        light.setId("theme-light");
+        light.setToggleGroup(modes);
+        light.setOnAction(e -> Theme.apply(false));
+        RadioMenuItem darkMode = new RadioMenuItem("Dark");
+        darkMode.setId("theme-dark");
+        darkMode.setToggleGroup(modes);
+        darkMode.setOnAction(e -> Theme.apply(true));
+        menu.getItems().addAll(new SeparatorMenuItem(), light, darkMode);
+        // The theme can also change through the light/dark button, so sync the marks on every opening.
+        menu.setOnShowing(e -> {
+            families.getToggles().forEach(t -> t.setSelected(t.getUserData() == Theme.family()));
+            light.setSelected(!Theme.isDark());
+            darkMode.setSelected(Theme.isDark());
+        });
+        return menu;
     }
 
     private static Node sep() {
@@ -956,6 +997,8 @@ public final class MainWindow extends BorderPane {
     // ---- session ----
 
     public void saveSession() {
+        session.put("theme.name", Theme.family().id());
+        session.put("theme.dark", Theme.isDark());
         session.put("dual", dual.get());
         if (dual.get() && sides.getDividerPositions().length > 0) {
             session.put("split.sides", sides.getDividerPositions()[0]);

@@ -46,6 +46,8 @@ Treat it as part of every change, not an afterthought:
 src/test/java/com/fileem/
   FxTestSupport        starts the FX toolkit once; drainFx() waits for queued FX events
   SessionTest, BookmarksTest
+  ui/ThemeTest         theme sheets parse, both modes define all colors, live restyling
+  ui/IconsTest         app icon sizes load; dialogs get the icon
   util/                NaturalOrderTest, FormatsTest (fixes Locale.US), FsUtilTest
   fs/                  FileEntryTest, FileTypesTest, VolumesTest, DirWatcherTest
   ops/FileOperationTest  copy/move/delete/trash semantics + integrity on failure/cancel
@@ -95,10 +97,13 @@ com.fileem.ops      FileOperation (copy/move/delete/trash Task), FileClipboard
 com.fileem.ui       MainWindow (toolbar, F-key bar, ALL commands + key handling)
                     └ ExplorerSide ×2 (left/right): FolderTree + TabPane of FileTab
                        └ FileTab: AddressBar + filter + FileTable + status line
-                    OperationUi (progress window, conflict dialog), PropertiesDialog, BookmarksDialog,
+                    OperationUi (starts operations, conflict dialog), ProgressWindow (one per
+                    window, a row with its own Cancel per running operation), PropertiesDialog, BookmarksDialog,
                     Dialogs,
                     Dnd, Theme, Icons, Views, TreeNode
 src/main/resources/com/fileem/app.css   author stylesheet on top of AtlantaFX
+src/main/resources/com/fileem/themes/   theme overlays: <id>.css shapes, <id>-light/-dark.css colors
+src/main/resources/com/fileem/icons/    app icon PNGs (16–512 px); regenerate with tools/make-icon.py (Pillow)
 ```
 
 ## File operation integrity (do not regress)
@@ -175,11 +180,19 @@ src/main/resources/com/fileem/app.css   author stylesheet on top of AtlantaFX
   Ctrl/Cmd. Paths: compare with `Path.equals`/`startsWith` (case-insensitive on Windows), never
   string ops. Config dir comes from `OsUtil.configDir()`.
 - **Styling**: use AtlantaFX looked-up colors (`-color-fg-muted`, `-color-accent-emphasis`, …) in
-  `app.css` so light and dark themes both work. Icon colors are CSS classes (`icon-folder`, …)
-  applied via `Icons.apply`, not `setIconColor`. Dialogs/stages must get `Theme.APP_CSS`
-  (`Dialogs.prepare`).
+  `app.css` so every theme and mode works; never hard-code colors there. Icon colors are CSS
+  classes (`icon-folder`, …) applied via `Icons.apply`, not `setIconColor`; their colors are
+  looked-up colors (`icon-folder: …` on `.root`) that themes may retint. New scenes and dialogs
+  must call `Theme.style(stylesheets)` (`Dialogs.prepare` does), never add `Theme.APP_CSS` alone.
+- **Themes** (`Theme.Family`: Classic, Windows 11, macOS, Adwaita, Aurora; each light + dark): an
+  AtlantaFX user-agent stylesheet plus, except Classic, `themes/<id>.css` (shapes) and
+  `themes/<id>-light.css` / `-dark.css` (colors: AtlantaFX `-color-*` plus the theme's own `-fe-*`
+  looked-up colors). `Theme.apply` swaps the sheets in every open window; they always sit right
+  after `app.css`. Every `-fe-*` color a shape file uses must be defined in both mode files
+  (`ThemeTest` checks). Keep effects (shadows, blur) off rows and cells: they are re-rendered while
+  scrolling. Check new styling with the scene-snapshot harness in light and dark.
 - **Session**: everything persisted goes through `Session` keys (`window.*`, `left.*`/`right.*`,
-  `columns.*`, `sort.*`, `dual`, `showHidden`, `theme.dark`, `bookmarks.*`). Saved on window
+  `columns.*`, `sort.*`, `dual`, `showHidden`, `theme.name`, `theme.dark`, `bookmarks.*`). Saved on window
   close, except `Bookmarks`, which saves the session file on every change.
 - **Bookmarks**: one `Bookmarks` model per `MainWindow`, shared by both trees. The tree's
   Bookmarks section (`TreeNode.Kind.BOOKMARK_HEADER` / `BOOKMARK`) mirrors it via `syncBookmarks`

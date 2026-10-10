@@ -1,0 +1,33 @@
+/* Adwaita light: window #fafafa, header bar #ebebeb, sidebar #f2f2f4, view #ffffff, accent #3584e4. */
+.root {
+    -fe-window: #fafafa;
+    -fe-headerbar: #ebebeb;
+    -fe-sidebar: #f2f2f4;
+    -fe-view: #ffffff;
+    -fe-shade: #dadadc;
+    -fe-entry: rgba(0, 0, 6, 0.06);
+    -fe-button: rgba(0, 0, 6, 0.08);
+    -fe-button-hover: rgba(0, 0, 6, 0.12);
+    -fe-hover: rgba(0, 0, 6, 0.05);
+    -fe-active: rgba(0, 0, 6, 0.1);
+    -fe-selection: rgba(53, 132, 228, 0.12);
+    -fe-selection-focused: rgba(53, 132, 228, 0.22);
+
+    -color-fg-default: #2e2e32;
+    -color-fg-muted: #6b6b70;
+    -color-fg-subtle: #8e8e93;
+    -color-bg-default: #ffffff;
+    -color-bg-subtle: #fafafa;
+    -color-border-default: #dadadc;
+    -color-border-muted: #e3e3e5;
+    -color-accent-fg: #1c71d8;
+    -color-accent-emphasis: #3584e4;
+    -color-accent-muted: rgba(53, 132, 228, 0.5);
+    -color-accent-subtle: rgba(53, 132, 228, 0.15);
+    -color-danger-fg: #c01c28;
+    -color-danger-emphasis: #e01b24;
+    -color-success-fg: #1b8553;
+    -color-warning-fg: #9c6e03;
+
+    icon-folder: #438de6;
+}

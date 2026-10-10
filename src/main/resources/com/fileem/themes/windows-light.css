@@ -1,0 +1,35 @@
+/* Windows 11 light: mica #f3f3f3, content layer #f9f9f9, Explorer selection blue, accent #005fb8. */
+.root {
+    -fe-mica: #eeeeee;
+    -fe-layer: #f9f9f9;
+    -fe-divider: #e5e5e5;
+    -fe-control: #ffffff;
+    -fe-control-border: #e5e5e5;
+    -fe-control-bottom: #8a8a8a;
+    -fe-subtle-hover: rgba(0, 0, 0, 0.04);
+    -fe-subtle-pressed: rgba(0, 0, 0, 0.06);
+    -fe-nav-selected: #ebebeb;
+    -fe-row-hover: #e5f3ff;
+    -fe-selection: #d9e8f5;
+    -fe-selection-focused: #cce8ff;
+    -fe-on-accent: #ffffff;
+
+    -color-fg-default: #1b1b1b;
+    -color-fg-muted: #5d5d5d;
+    -color-fg-subtle: #8a8a8a;
+    -color-bg-default: #f9f9f9;
+    -color-bg-overlay: #f9f9f9;
+    -color-bg-subtle: #f3f3f3;
+    -color-bg-inset: #eeeeee;
+    -color-border-default: #e0e0e0;
+    -color-border-muted: #e5e5e5;
+    -color-border-subtle: #ebebeb;
+    -color-base-0: #f9f9f9;
+    -color-base-1: #ededed;
+    -color-base-2: #e0e0e0;
+    -color-accent-fg: #005fb8;
+    -color-accent-emphasis: #005fb8;
+    -color-accent-muted: rgba(0, 95, 184, 0.35);
+    -color-accent-subtle: #e0eef9;
+    -color-accent-5: #005fb8;
+}

@@ -20,19 +20,19 @@ public class FileEmApp extends Application {
     @Override
     public void start(Stage stage) {
         session = Session.load();
-        Theme.apply(session.getBool("theme.dark", false));
+        Theme.apply(Theme.Family.byId(session.get("theme.name", "classic")), session.getBool("theme.dark", false));
 
         window = new MainWindow(stage, session);
         double w = session.getDouble("window.w", 1280);
         double h = session.getDouble("window.h", 780);
         Scene scene = new Scene(window, w, h);
-        scene.getStylesheets().add(Theme.APP_CSS);
+        Theme.style(scene.getStylesheets());
 
         stage.setScene(scene);
         stage.setTitle("fileEm");
         stage.setMinWidth(640);
         stage.setMinHeight(400);
-        Icons.appIcon().ifPresent(stage.getIcons()::add);
+        Icons.applyAppIcon(stage);
 
         double x = session.getDouble("window.x", Double.NaN);
         double y = session.getDouble("window.y", Double.NaN);
@@ -54,7 +54,6 @@ public class FileEmApp extends Application {
             session.put("window.w", stage.getWidth());
             session.put("window.h", stage.getHeight());
         }
-        session.put("theme.dark", Theme.isDark());
         window.saveSession();
         session.save();
     }

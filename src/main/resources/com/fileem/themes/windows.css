@@ -1,0 +1,213 @@
+/*
+ * Windows 11 (Fluent) shapes on top of Primer. Colors come from windows-light.css / windows-dark.css,
+ * which define the -fe-* looked-up colors used here.
+ */
+.root {
+    -fx-font-family: "Segoe UI Variable Text";
+}
+
+/* ---- chrome: tab strip on mica, command bar and content on the layer above ---- */
+.main-window {
+    -fx-background-color: -fe-mica;
+}
+
+.main-toolbar {
+    -fx-background-color: -fe-layer;
+    -fx-background-insets: 0;
+    -fx-border-color: transparent transparent -fe-divider transparent;
+    -fx-padding: 6 10 6 10;
+}
+
+.main-toolbar > .container > .button,
+.main-toolbar > .container > .menu-button,
+.main-toolbar > .container .toggle-button {
+    -color-button-bg: transparent;
+    -color-button-border: transparent;
+    -color-button-bg-hover: -fe-subtle-hover;
+    -color-button-border-hover: transparent;
+    -color-button-bg-pressed: -fe-subtle-pressed;
+    -color-button-bg-selected: -fe-subtle-pressed;
+    -color-button-border-focused: transparent;
+    -fx-background-radius: 4;
+}
+
+.explorer-side .tab-pane > .tab-header-area {
+    -fx-background-color: -fe-mica;
+    -fx-padding: 6 6 0 6;
+}
+
+.explorer-side .tab-pane > .tab-header-area > .tab-header-background {
+    -fx-background-color: -fe-mica;
+    -fx-background-insets: 0;
+}
+
+.explorer-side .tab-pane > .tab-header-area > .headers-region > .tab {
+    -fx-background-color: transparent;
+    -fx-background-radius: 8 8 0 0;
+    -fx-background-insets: 0;
+    -fx-padding: 5 10 5 10;
+}
+
+.explorer-side .tab-pane > .tab-header-area > .headers-region > .tab:hover {
+    -fx-background-color: -fe-subtle-hover;
+}
+
+.explorer-side .tab-pane > .tab-header-area > .headers-region > .tab:top:selected,
+.explorer-side:active .tab-pane > .tab-header-area > .headers-region > .tab:selected {
+    -fx-background-color: -fe-layer;
+    -fx-border-color: -fe-divider -fe-divider transparent -fe-divider;
+    -fx-border-width: 1 1 0 1;
+    -fx-border-radius: 8 8 0 0;
+}
+
+.explorer-side .tab-pane > .tab-content-area {
+    -fx-background-color: -fe-layer;
+}
+
+/* ---- navigation pane ---- */
+.folder-tree {
+    -fx-background-color: -fe-layer;
+    -fx-border-width: 0;
+}
+
+.folder-tree .tree-cell {
+    -fx-background-color: transparent;
+    -fx-background-radius: 4;
+    -fx-background-insets: 1 4 1 4;
+}
+
+.folder-tree .tree-cell:filled:hover {
+    -fx-background-color: -fe-subtle-hover;
+}
+
+.folder-tree .tree-cell:selected,
+.folder-tree .tree-cell:filled:selected:hover {
+    /* Fluent "pill": a short accent bar at the left, framed by the (opaque) selection fill */
+    -fx-background-color: -fe-nav-selected, -color-accent-emphasis, -fe-nav-selected;
+    -fx-background-insets: 1 4 1 4, 8 4 8 4, 1 4 1 7;
+    -fx-background-radius: 4, 2, 0 4 4 0;
+    -fx-padding: 3 4 3 8;
+}
+
+.folder-tree .tree-cell:header {
+    -fx-font-weight: normal;
+    -fx-text-fill: -color-fg-muted;
+}
+
+/* ---- details view ---- */
+.file-table {
+    -color-cell-bg: -fe-layer;
+    -color-cell-border: transparent;
+    -color-header-bg: -fe-layer;
+    -color-header-fg: -color-fg-muted;
+    -color-cell-bg-selected: -fe-selection;
+    -color-cell-bg-selected-focused: -fe-selection;
+    -fx-border-width: 0;
+    -fx-background-color: -fe-layer;
+}
+
+.file-table > .column-header-background {
+    -fx-background-color: -fe-layer;
+}
+
+.file-table > .column-header-background .column-header {
+    -fx-font-weight: normal;
+    -fx-border-color: transparent -fe-divider transparent transparent;
+    -fx-border-insets: 6 0 6 0;
+}
+
+.file-table > .column-header-background .column-header:hover {
+    -fx-background-color: -fe-subtle-hover;
+}
+
+.file-table > .column-header-background > .filler,
+.file-table > .column-header-background > .show-hide-columns-button {
+    -fx-border-color: transparent;
+}
+
+.file-table .table-row-cell {
+    -fx-background-color: transparent;
+    -fx-background-insets: 0;
+}
+
+.file-table .table-row-cell:filled:hover {
+    -fx-background-color: -fe-row-hover;
+    -fx-background-radius: 4;
+    -fx-background-insets: 1 4 1 4;
+}
+
+.file-table > .virtual-flow > .clipped-container > .sheet > .table-row-cell:filled:selected {
+    -fx-background-color: -fe-selection;
+    -fx-background-radius: 4;
+    -fx-background-insets: 1 4 1 4;
+}
+
+.file-table:focused > .virtual-flow > .clipped-container > .sheet > .table-row-cell:filled:selected {
+    -fx-background-color: -fe-selection-focused;
+}
+
+/* ---- address bar, search box and other inputs: 4px corners, accent underline when focused ---- */
+.address-bar {
+    -fx-background-color: -fe-control;
+    -fx-background-radius: 4;
+    -fx-border-color: -fe-control-border -fe-control-border -fe-control-bottom -fe-control-border;
+    -fx-border-radius: 4;
+}
+
+.explorer-side:active .address-bar {
+    -fx-border-color: -fe-control-border -fe-control-border -color-accent-emphasis -fe-control-border;
+}
+
+.text-input {
+    -fx-background-radius: 4;
+    -color-input-bg: -fe-control;
+    -color-input-border: -fe-control-border;
+}
+
+.text-input:focused {
+    -fx-border-color: transparent transparent -color-accent-emphasis transparent;
+    -fx-border-width: 0 0 2 0;
+    -fx-border-radius: 0 0 4 4;
+    -fx-border-insets: 0 1 0 1;
+}
+
+.button, .toggle-button, .menu-button {
+    -fx-background-radius: 4;
+    -fx-border-radius: 4;
+}
+
+.button:default {
+    -color-button-bg: -color-accent-emphasis;
+    -color-button-fg: -fe-on-accent;
+}
+
+/* ---- menus and popups: rounded flyouts ---- */
+.context-menu {
+    -fx-background-radius: 8;
+    -fx-border-radius: 8;
+    -fx-padding: 4;
+}
+
+.context-menu .menu-item {
+    -fx-background-radius: 4;
+}
+
+/* ---- status line and function key bar ---- */
+.status-label {
+    -fx-background-color: -fe-layer;
+    -fx-border-color: -fe-divider transparent transparent transparent;
+}
+
+.function-bar {
+    -fx-background-color: -fe-mica;
+    -fx-border-color: -fe-divider transparent transparent transparent;
+}
+
+.function-bar .button {
+    -fx-background-radius: 4;
+}
+
+.explorer-side > .split-pane-divider,
+.main-window > .split-pane > .split-pane-divider {
+    -fx-background-color: -fe-divider;
+}

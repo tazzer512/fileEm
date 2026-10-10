@@ -10,6 +10,7 @@ import javafx.scene.control.TextArea;
 import javafx.scene.control.TextField;
 import javafx.scene.control.TextInputDialog;
 import javafx.scene.layout.VBox;
+import javafx.stage.Stage;
 import javafx.stage.Window;
 
 import java.nio.file.InvalidPathException;
@@ -26,7 +27,10 @@ public final class Dialogs {
         if (owner != null) {
             d.initOwner(owner);
         }
-        d.getDialogPane().getStylesheets().add(Theme.APP_CSS);
+        Theme.style(d.getDialogPane().getStylesheets());
+        if (d.getDialogPane().getScene().getWindow() instanceof Stage s) {
+            Icons.applyAppIcon(s);
+        }
     }
 
     public static boolean confirm(Window owner, String title, String message) {

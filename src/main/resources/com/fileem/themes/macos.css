@@ -1,0 +1,228 @@
+/*
+ * macOS (Finder) shapes on top of Cupertino. Colors come from macos-light.css / macos-dark.css.
+ */
+.root {
+    -fx-font-family: "SF Pro Text";
+    -fx-font-size: 13px;
+}
+
+.main-window {
+    -fx-background-color: -fe-window;
+}
+
+/* ---- unified toolbar ---- */
+.main-toolbar {
+    -fx-background-color: -fe-toolbar;
+    -fx-background-insets: 0;
+    -fx-border-color: transparent transparent -fe-hairline transparent;
+    -fx-padding: 7 12 7 12;
+}
+
+.main-toolbar > .container > .button,
+.main-toolbar > .container > .menu-button,
+.main-toolbar > .container .toggle-button {
+    -color-button-bg: transparent;
+    -color-button-border: transparent;
+    -color-button-bg-hover: -fe-hover;
+    -color-button-border-hover: transparent;
+    -color-button-bg-pressed: -fe-pressed;
+    -color-button-bg-selected: -fe-pressed;
+    -color-button-border-focused: transparent;
+    -color-button-fg: -color-fg-muted;
+    -fx-background-radius: 6;
+}
+
+/* ---- sidebar: translucent grey with rounded selection ---- */
+.folder-tree {
+    -fx-background-color: -fe-sidebar;
+    -fx-border-width: 0;
+}
+
+.folder-tree .tree-cell {
+    -fx-background-color: transparent;
+    -fx-padding: 3 4 3 4;
+}
+
+.folder-tree .tree-cell:selected,
+.folder-tree .tree-cell:filled:selected:hover {
+    -fx-background-color: -fe-sidebar-selection;
+    -fx-background-radius: 5;
+    -fx-background-insets: 0 8 0 8;
+}
+
+.folder-tree .tree-cell:header {
+    -fx-font-size: 11px;
+    -fx-font-weight: bold;
+    -fx-text-fill: -fe-section;
+    -fx-padding: 12 4 3 4;
+}
+
+.folder-tree .tree-cell:header .ikonli-font-icon {
+    -fx-icon-color: -fe-section;
+}
+
+.folder-tree .ikonli-font-icon.icon-quick,
+.folder-tree .ikonli-font-icon.icon-volume {
+    -fx-icon-color: -color-accent-emphasis;
+}
+
+/* ---- tab bar: equal segments like Finder tabs ---- */
+.explorer-side .tab-pane > .tab-header-area {
+    -fx-background-color: -fe-tabbar;
+    -fx-padding: 0;
+    -fx-border-color: transparent transparent -fe-hairline transparent;
+}
+
+.explorer-side .tab-pane > .tab-header-area > .tab-header-background {
+    -fx-background-color: -fe-tabbar;
+    -fx-background-insets: 0;
+}
+
+.explorer-side .tab-pane > .tab-header-area > .headers-region > .tab {
+    -fx-background-color: transparent;
+    -fx-background-insets: 0;
+    -fx-border-color: transparent -fe-hairline transparent transparent;
+    -fx-padding: 3 14 3 14;
+}
+
+.explorer-side .tab-pane > .tab-header-area > .headers-region > .tab:hover {
+    -fx-background-color: -fe-hover;
+}
+
+.explorer-side .tab-pane > .tab-header-area > .headers-region > .tab:top:selected,
+.explorer-side:active .tab-pane > .tab-header-area > .headers-region > .tab:selected {
+    -fx-background-color: -fe-content;
+    -fx-border-color: transparent -fe-hairline transparent transparent;
+    -fx-border-width: 0 1 0 0;
+}
+
+.explorer-side .tab-pane > .tab-content-area {
+    -fx-background-color: -fe-content;
+}
+
+/* ---- list view: striped rows, solid accent selection ---- */
+.file-table {
+    -color-cell-bg: -fe-content;
+    -color-cell-bg-odd: -fe-stripe;
+    -color-cell-border: transparent;
+    -color-header-bg: -fe-content;
+    -color-header-fg: -color-fg-muted;
+    -color-cell-bg-selected: -fe-selection-inactive;
+    -color-cell-fg-selected: -color-fg-default;
+    -color-cell-bg-selected-focused: -color-accent-emphasis;
+    -color-cell-fg-selected-focused: #ffffff;
+    -fx-border-width: 0;
+    -fx-background-color: -fe-content;
+}
+
+.file-table > .column-header-background {
+    -fx-background-color: -fe-hairline, -fe-content;
+    -fx-background-insets: 0, 0 0 1 0;
+}
+
+.file-table > .column-header-background .column-header {
+    -fx-size: 28px;
+    -fx-font-weight: normal;
+    -fx-font-size: 12px;
+    -fx-border-color: transparent -fe-hairline transparent transparent;
+    -fx-border-insets: 5 0 5 0;
+}
+
+.file-table > .column-header-background > .filler,
+.file-table > .column-header-background > .show-hide-columns-button {
+    -fx-border-color: transparent;
+}
+
+.file-table .table-row-cell {
+    -fx-cell-size: 24px;
+    -fx-background-color: -fe-content;
+    -fx-background-insets: 0;
+}
+
+.file-table .table-row-cell:filled:odd {
+    -fx-background-color: -fe-stripe;
+}
+
+.file-table > .virtual-flow > .clipped-container > .sheet > .table-row-cell:filled:selected {
+    -fx-background-color: -fe-selection-inactive;
+    -fx-background-radius: 5;
+    -fx-background-insets: 0 8 0 8;
+}
+
+.file-table:focused > .virtual-flow > .clipped-container > .sheet > .table-row-cell:filled:selected {
+    -fx-background-color: -color-accent-emphasis;
+}
+
+.file-table:focused .table-row-cell:filled:selected .ikonli-font-icon {
+    -fx-icon-color: #ffffff;
+}
+
+/* ---- path bar and search ---- */
+.address-bar {
+    -fx-background-color: -fe-field;
+    -fx-background-radius: 6;
+    -fx-border-color: -fe-hairline;
+    -fx-border-radius: 6;
+    -fx-min-height: 28;
+    -fx-pref-height: 28;
+}
+
+.explorer-side:active .address-bar {
+    -fx-border-color: -color-accent-muted;
+}
+
+.text-input {
+    -fx-background-radius: 6;
+    -color-input-bg: -fe-field;
+    -color-input-border: -fe-hairline;
+}
+
+.text-input:focused {
+    -fx-background-color: -color-accent-muted, -color-input-border-focused, -color-input-bg;
+    -fx-background-insets: -3, 0, 1;
+    -fx-background-radius: 9, 6, 5;
+}
+
+.button, .toggle-button, .menu-button {
+    -fx-background-radius: 6;
+    -fx-border-radius: 6;
+}
+
+.context-menu {
+    -fx-background-radius: 7;
+    -fx-border-radius: 7;
+    -fx-padding: 5;
+}
+
+.context-menu .menu-item {
+    -fx-background-radius: 4;
+}
+
+.context-menu .menu-item:focused {
+    -fx-background-color: -color-accent-emphasis;
+}
+
+.context-menu .menu-item:focused > .label {
+    -fx-text-fill: #ffffff;
+}
+
+/* ---- status bar and function keys ---- */
+.status-label {
+    -fx-background-color: -fe-content;
+    -fx-border-color: -fe-hairline transparent transparent transparent;
+    -fx-font-size: 11px;
+}
+
+.function-bar {
+    -fx-background-color: -fe-toolbar;
+    -fx-border-color: -fe-hairline transparent transparent transparent;
+}
+
+.function-bar .button {
+    -fx-background-radius: 6;
+}
+
+.explorer-side > .split-pane-divider,
+.main-window > .split-pane > .split-pane-divider {
+    -fx-background-color: -fe-hairline;
+}

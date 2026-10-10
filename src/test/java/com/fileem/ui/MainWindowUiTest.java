@@ -2,7 +2,9 @@ package com.fileem.ui;
 
 import com.fileem.Session;
 import com.fileem.fs.FileEntry;
+import com.fileem.ops.FileOperation;
 import com.fileem.util.OsUtil;
+import javafx.concurrent.Worker;
 import javafx.scene.Node;
 import javafx.scene.Scene;
 import javafx.scene.control.TableColumn;
@@ -25,6 +27,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.concurrent.Callable;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -50,11 +53,11 @@ class MainWindowUiTest {
     @Start
     void start(Stage stage) {
         this.stage = stage;
-        Theme.apply(false);
+        Theme.apply(Theme.Family.CLASSIC, false);
         session = Session.load(tmp.resolve("session.properties"));
         window = new MainWindow(stage, session);
         Scene scene = new Scene(window, 1200, 800);
-        scene.getStylesheets().add(Theme.APP_CSS);
+        Theme.style(scene.getStylesheets());
         stage.setScene(scene);
         stage.show();
     }
@@ -531,6 +534,54 @@ class MainWindowUiTest {
         assertTrue(fx(() -> table.isFocused()), "the list keeps focus");
     }
 
+    // ---- themes ----
+
+    private javafx.scene.control.RadioMenuItem themeItem(String id) {
+        return fx(() -> (javafx.scene.control.RadioMenuItem) window.themeMenu().getItems().stream()
+                .filter(i -> ("theme-" + id).equals(i.getId())).findFirst().orElseThrow());
+    }
+
+    @Test
+    void themeMenuSwitchesFamilyAndModeAndTheSessionRemembersThem(FxRobot robot) {
+        try {
+            robot.interact(() -> themeItem("windows").fire());
+            assertEquals(Theme.Family.WINDOWS, fx(Theme::family));
+            assertTrue(fx(() -> stage.getScene().getStylesheets().containsAll(Theme.Family.WINDOWS.stylesheets(false))));
+
+            robot.interact(() -> themeItem("dark").fire());
+            assertTrue(fx(Theme::isDark));
+            assertTrue(fx(() -> stage.getScene().getStylesheets().containsAll(Theme.Family.WINDOWS.stylesheets(true))));
+            assertFalse(fx(() -> stage.getScene().getStylesheets().containsAll(Theme.Family.WINDOWS.stylesheets(false))),
+                    "the light colors are gone");
+
+            robot.interact(() -> themeItem("aurora").fire());
+            assertEquals(Theme.Family.AURORA, fx(Theme::family));
+            assertTrue(fx(Theme::isDark), "switching the family keeps dark mode");
+
+            robot.interact(window::saveSession);
+            assertEquals("aurora", session.get("theme.name", null));
+            assertTrue(session.getBool("theme.dark", false));
+        } finally {
+            robot.interact(() -> Theme.apply(Theme.Family.CLASSIC, false));
+        }
+    }
+
+    @Test
+    void themeMenuMarksTheCurrentThemeWhenOpened(FxRobot robot) {
+        try {
+            robot.interact(() -> Theme.apply(Theme.Family.ADWAITA, true));
+            robot.interact(() -> window.themeMenu().show());
+            waitUntil("menu open", () -> window.themeMenu().isShowing());
+            assertTrue(fx(() -> themeItem("adwaita").isSelected()));
+            assertFalse(fx(() -> themeItem("classic").isSelected()));
+            assertTrue(fx(() -> themeItem("dark").isSelected()));
+            assertFalse(fx(() -> themeItem("light").isSelected()));
+            robot.interact(() -> window.themeMenu().hide());
+        } finally {
+            robot.interact(() -> Theme.apply(Theme.Family.CLASSIC, false));
+        }
+    }
+
     @Test
     void sessionRestoresTabsAndDualMode(FxRobot robot) throws Exception {
         Path a = folderWith("sa");
@@ -911,6 +962,55 @@ class MainWindowUiTest {
                 javafx.scene.Node list = side.getItems().get(1);
                 return list.getLayoutBounds().getWidth() >= 250;
             });
+        }
+    }
+
+    /** Starts a copy that waits in its conflict handler until {@code release} opens. */
+    private FileOperation blockedCopy(String name, CountDownLatch release)
+            throws Exception {
+        Path src = folderWith(name + "-src", name + ".txt");
+        Path dst = folderWith(name + "-dst", name + ".txt");
+        var op = new FileOperation(FileOperation.Kind.COPY,
+                List.of(src.resolve(name + ".txt")), dst, (s, t) -> {
+                    release.await();
+                    return new FileOperation.Decision(FileOperation.Resolution.SKIP, false);
+                });
+        fx(() -> {
+            OperationUi.start(stage, op, List.of(src.resolve(name + ".txt")), dst, dirs -> { });
+            return null;
+        });
+        return op;
+    }
+
+    @Test
+    void concurrentOperationsStackInOneProgressWindowAndCancelIndependently(FxRobot robot) throws Exception {
+        var release = new CountDownLatch(1);
+        try {
+            var first = blockedCopy("first", release);
+            var second = blockedCopy("second", release);
+            waitUntil("both operations shown", () -> {
+                ProgressWindow w = ProgressWindow.of(stage);
+                return w != null && w.operations().size() == 2;
+            });
+            ProgressWindow w = fx(() -> ProgressWindow.of(stage));
+            assertEquals(List.of(first, second), fx(w::operations));
+            assertEquals(1, otherWindows(stage).size(), "one shared window, not one per operation");
+            assertEquals("2 operations in progress", fx(() -> w.stage().getTitle()));
+            assertEquals(Icons.appIcons(), fx(() -> List.copyOf(w.stage().getIcons())), "has the app icon");
+
+            robot.clickOn(fx(() -> w.cancelButton(first)));
+            waitUntil("first cancelled", first::isCancelled);
+            waitUntil("first's row removed", () -> w.operations().equals(List.of(second)));
+            assertFalse(fx(second::isDone), "cancelling one operation leaves the other running");
+            assertTrue(fx(() -> w.stage().isShowing()));
+            assertTrue(fx(() -> w.stage().getTitle().startsWith("Copying \"second.txt\"")));
+
+            release.countDown();
+            waitUntil("second finished", () -> second.getState() == Worker.State.SUCCEEDED);
+            waitUntil("window closed after the last operation", () -> ProgressWindow.of(stage) == null
+                    && !w.stage().isShowing());
+        } finally {
+            release.countDown();
         }
     }
 }

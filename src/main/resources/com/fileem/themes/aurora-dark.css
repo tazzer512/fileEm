@@ -1,0 +1,56 @@
+/* Aurora night: deep polar sky, ink-blue cards, aurora green → cyan → violet → pink. */
+.root {
+    -fe-aurora: linear-gradient(to right, #34d399 0%, #22d3ee 35%, #a78bfa 70%, #f472b6 100%);
+    -fe-aurora-vertical: linear-gradient(to bottom, #34d399 0%, #22d3ee 40%, #a78bfa 100%);
+    -fe-sky: linear-gradient(to bottom, #070b16 0%, #0b1226 60%, #101a33 100%);
+    -fe-panel: #0f1629;
+    -fe-sidebar: linear-gradient(to bottom, #0a1020 0%, #0d1730 55%, #0f2235 100%);
+    -fe-sidebar-solid: #0c1428;
+    -fe-glass: rgba(148, 163, 255, 0.08);
+    -fe-glass-strong: rgba(148, 163, 255, 0.16);
+    -fe-selection: rgba(99, 102, 241, 0.2);
+    -fe-selection-focused: linear-gradient(to right, rgba(34, 211, 238, 0.22) 0%, rgba(167, 139, 250, 0.2) 100%);
+    -fe-section: #7f8db3;
+    -fe-toolbar-icon: #c7d2fe;
+    -fe-input: #0b1224;
+    -fe-input-border: #1f2a48;
+    -fe-glow: rgba(34, 211, 238, 0.45);
+    -fe-on-accent: #04111a;
+    -fe-keycap: #18213b;
+    -fe-keycap-edge: #070b16;
+    -fe-keycap-fg: #5eead4;
+    -fe-marquee-fill: rgba(34, 211, 238, 0.12);
+    -fe-marquee-stroke: #22d3ee;
+
+    -color-fg-default: #e2e8ff;
+    -color-fg-muted: #9aa6c8;
+    -color-fg-subtle: #6f7c9f;
+    -color-bg-default: #0f1629;
+    -color-bg-overlay: #121a30;
+    -color-bg-subtle: #0b1224;
+    -color-bg-inset: #070b16;
+    -color-border-default: #1f2a48;
+    -color-border-muted: #18213b;
+    -color-border-subtle: #141c33;
+    -color-base-6: #1f2a48;
+    -color-base-7: #18213b;
+    -color-base-8: #121a30;
+    -color-base-9: #070b16;
+    -color-accent-fg: #5eead4;
+    -color-accent-emphasis: #22d3ee;
+    -color-accent-muted: rgba(34, 211, 238, 0.35);
+    -color-accent-subtle: rgba(34, 211, 238, 0.14);
+
+    icon-folder: #fbbf24;
+    icon-image: #34d399;
+    icon-audio: #e879f9;
+    icon-video: #fb7185;
+    icon-archive: #d6a56b;
+    icon-pdf: #f87171;
+    icon-word: #60a5fa;
+    icon-excel: #4ade80;
+    icon-ppt: #fb923c;
+    icon-code: #818cf8;
+    icon-exe: #a78bfa;
+    icon-bookmark: #f472b6;
+}

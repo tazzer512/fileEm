@@ -1,0 +1,23 @@
+/* macOS light: Finder sidebar #ececec-ish, content white with #f4f5f5 stripes, accent #0a64e1. */
+.root {
+    -fe-window: #f6f6f6;
+    -fe-toolbar: #f6f6f6;
+    -fe-tabbar: #e3e3e3;
+    -fe-sidebar: #ececec;
+    -fe-sidebar-selection: rgba(0, 0, 0, 0.09);
+    -fe-section: #8e8e93;
+    -fe-content: #ffffff;
+    -fe-stripe: #f4f5f5;
+    -fe-hairline: #dcdcdc;
+    -fe-field: #ffffff;
+    -fe-hover: rgba(0, 0, 0, 0.06);
+    -fe-pressed: rgba(0, 0, 0, 0.1);
+    -fe-selection-inactive: #dcdcdc;
+
+    -color-fg-default: #262626;
+    -color-fg-muted: #6e6e73;
+    -color-accent-fg: #0a64e1;
+    -color-accent-emphasis: #0a64e1;
+    -color-accent-muted: rgba(10, 100, 225, 0.35);
+    -color-accent-subtle: #dbe8fb;
+}

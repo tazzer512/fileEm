@@ -1,0 +1,302 @@
+/*
+ * Aurora: fileEm's own theme. Northern lights over a fjord: a deep night sky (dark) or a lavender
+ * dawn (light), with an aurora gradient (green → cyan → violet → pink) on the toolbar edge, the
+ * active tab, selections and focus. Pill-shaped controls, rounded rows, F-keys drawn as keycaps.
+ * Gradients only paint a handful of nodes (no effects on rows), so scrolling stays as fast as Classic.
+ */
+.root {
+    -fx-font-family: "Inter";
+}
+
+.main-window {
+    -fx-background-color: -fe-sky;
+}
+
+/* ---- toolbar floating on the sky, with the aurora as its lower edge ---- */
+.main-toolbar {
+    -fx-background-color: -fe-aurora, -fe-panel;
+    -fx-background-insets: 0, 0 0 2 0;
+    -fx-padding: 7 12 9 12;
+}
+
+.main-toolbar > .container > .button,
+.main-toolbar > .container > .menu-button,
+.main-toolbar > .container .toggle-button {
+    -color-button-bg: transparent;
+    -color-button-border: transparent;
+    -color-button-bg-hover: -fe-glass;
+    -color-button-border-hover: transparent;
+    -color-button-bg-pressed: -fe-glass-strong;
+    -color-button-bg-selected: -fe-glass-strong;
+    -color-button-fg-selected: -color-accent-fg;
+    -color-button-border-focused: transparent;
+    -fx-background-radius: 999;
+}
+
+.main-toolbar .ikonli-font-icon {
+    -fx-icon-color: -fe-toolbar-icon;
+}
+
+.main-toolbar .toggle-button:selected {
+    -fx-background-color: -fe-aurora;
+}
+
+.main-toolbar .toggle-button:selected .ikonli-font-icon {
+    -fx-icon-color: -fe-on-accent;
+}
+
+/* ---- sidebar: a gradient from the horizon up ---- */
+.folder-tree {
+    -fx-background-color: -fe-sidebar;
+    -fx-border-width: 0;
+}
+
+.folder-tree .tree-cell {
+    -fx-background-color: transparent;
+    -fx-background-radius: 10;
+    -fx-background-insets: 1 8 1 6;
+    -fx-padding: 4 4 4 4;
+}
+
+.folder-tree .tree-cell:filled:hover {
+    -fx-background-color: -fe-glass;
+}
+
+/* An aurora edge light left of a tinted pill (the opaque middle layer hides the gradient behind the tint). */
+.folder-tree .tree-cell:selected,
+.folder-tree .tree-cell:filled:selected:hover {
+    -fx-background-color: -fe-aurora-vertical, -fe-sidebar-solid, -fe-selection-focused;
+    -fx-background-insets: 1 8 1 6, 1 8 1 9, 1 8 1 9;
+    -fx-background-radius: 10, 0 10 10 0, 0 10 10 0;
+}
+
+.folder-tree .tree-cell:header {
+    -fx-font-weight: bold;
+    -fx-text-fill: -fe-section;
+    -fx-padding: 14 4 4 4;
+}
+
+.folder-tree .tree-cell:header .ikonli-font-icon {
+    -fx-icon-color: -fe-section;
+}
+
+/* ---- tabs: pills, the active one carries the aurora ---- */
+.explorer-side .tab-pane > .tab-header-area {
+    -fx-background-color: -fe-sky;
+    -fx-padding: 6 8 4 8;
+}
+
+.explorer-side .tab-pane > .tab-header-area > .tab-header-background {
+    -fx-background-color: -fe-sky;
+    -fx-background-insets: 0;
+}
+
+.explorer-side .tab-pane > .tab-header-area > .headers-region > .tab {
+    -fx-background-color: transparent;
+    -fx-background-insets: 0;
+    -fx-background-radius: 999;
+    -fx-padding: 3 12 3 12;
+}
+
+.explorer-side .tab-pane > .tab-header-area > .headers-region > .tab:hover {
+    -fx-background-color: -fe-glass;
+}
+
+.explorer-side .tab-pane > .tab-header-area > .headers-region > .tab:top:selected {
+    -fx-background-color: -fe-glass-strong, -fe-panel;
+    -fx-background-insets: 0, 1;
+    -fx-border-width: 0;
+}
+
+.explorer-side:active .tab-pane > .tab-header-area > .headers-region > .tab:selected {
+    -fx-background-color: -fe-aurora, -fe-panel;
+    -fx-background-insets: 0, 2;
+    -fx-border-width: 0;
+}
+
+.explorer-side .tab-pane > .tab-content-area {
+    -fx-background-color: -fe-sky;
+    -fx-padding: 0 6 0 0;
+}
+
+/* The tab's contents float as a rounded card on the sky. */
+.file-tab {
+    -fx-background-color: -fe-panel;
+    -fx-background-radius: 14 14 0 0;
+}
+
+/* ---- file list ---- */
+.file-table {
+    -color-cell-bg: transparent;
+    -color-cell-border: transparent;
+    -color-header-bg: transparent;
+    -color-header-fg: -fe-section;
+    -color-cell-bg-selected: -fe-selection;
+    -color-cell-bg-selected-focused: -fe-selection;
+    -fx-border-width: 0;
+    -fx-background-color: transparent;
+}
+
+.file-table > .column-header-background {
+    -fx-background-color: transparent;
+}
+
+.file-table > .column-header-background .column-header {
+    -fx-border-color: transparent;
+    -fx-font-size: 0.85em;
+}
+
+.file-table > .column-header-background .column-header:hover {
+    -fx-background-color: -fe-glass;
+    -fx-background-radius: 999;
+}
+
+.file-table > .column-header-background > .filler,
+.file-table > .column-header-background > .show-hide-columns-button {
+    -fx-border-color: transparent;
+}
+
+.file-table .table-row-cell {
+    -fx-background-color: transparent;
+    -fx-background-insets: 0;
+    -fx-cell-size: 2.3em;
+}
+
+.file-table .table-row-cell:filled:hover {
+    -fx-background-color: -fe-glass;
+    -fx-background-radius: 10;
+    -fx-background-insets: 1 6 1 6;
+}
+
+.file-table > .virtual-flow > .clipped-container > .sheet > .table-row-cell:filled:selected {
+    -fx-background-color: -fe-selection;
+    -fx-background-radius: 10;
+    -fx-background-insets: 1 6 1 6;
+}
+
+/* Focused: an aurora "edge light" on the left of each selected row. */
+.file-table:focused > .virtual-flow > .clipped-container > .sheet > .table-row-cell:filled:selected {
+    -fx-background-color: -fe-aurora-vertical, -fe-panel, -fe-selection-focused;
+    -fx-background-insets: 1 6 1 6, 1 6 1 10, 1 6 1 10;
+    -fx-background-radius: 10, 0 10 10 0, 0 10 10 0;
+}
+
+.file-table .marquee {
+    -fx-fill: -fe-marquee-fill;
+    -fx-stroke: -fe-marquee-stroke;
+    -fx-stroke-dash-array: 6 4;
+}
+
+/* ---- inputs: pills that glow when focused ---- */
+.address-bar {
+    -fx-background-color: -fe-input;
+    -fx-background-radius: 999;
+    -fx-border-color: -fe-input-border;
+    -fx-border-radius: 999;
+    -fx-padding: 0 8 0 8;
+}
+
+.explorer-side:active .address-bar {
+    -fx-border-color: -fe-input-border;
+}
+
+.address-bar:focus-within {
+    -fx-border-color: -color-accent-emphasis;
+}
+
+.text-input {
+    -fx-background-radius: 999;
+    -color-input-bg: -fe-input;
+    -color-input-border: -fe-input-border;
+    -color-input-bg-focused: -fe-input;
+}
+
+.text-input:focused {
+    -fx-background-color: -fe-aurora, -color-input-bg;
+    -fx-background-insets: 0, 2;
+    -fx-background-radius: 999, 999;
+    -fx-effect: dropshadow(gaussian, -fe-glow, 12, 0.2, 0, 0);
+}
+
+.address-bar .text-input:focused {
+    -fx-background-color: transparent;
+    -fx-effect: null;
+}
+
+.button, .toggle-button, .menu-button {
+    -fx-background-radius: 999;
+    -fx-border-radius: 999;
+}
+
+.button:default {
+    -color-button-bg: -color-accent-emphasis;
+    -color-button-fg: -fe-on-accent;
+    -fx-background-color: -fe-aurora;
+    -fx-text-fill: -fe-on-accent;
+}
+
+.context-menu {
+    -fx-background-color: -fe-aurora, -fe-panel;
+    -fx-background-insets: 0, 1;
+    -fx-background-radius: 14, 13;
+    -fx-border-width: 0;
+    -fx-padding: 6;
+}
+
+.context-menu .menu-item {
+    -fx-background-radius: 999;
+}
+
+.context-menu .menu-item:focused {
+    -fx-background-color: -fe-selection-focused;
+}
+
+/* ---- status line and keycap F-keys ---- */
+.status-label {
+    -fx-background-color: -fe-panel;
+    -fx-border-color: transparent;
+    -fx-text-fill: -fe-section;
+}
+
+.function-bar {
+    -fx-background-color: -fe-sky;
+    -fx-border-color: transparent;
+    -fx-padding: 5 8 5 8;
+}
+
+.function-bar .button {
+    -color-button-bg: transparent;
+    -color-button-border: transparent;
+    -color-button-bg-hover: -fe-glass;
+    -fx-background-radius: 999;
+}
+
+.function-bar .fkey {
+    -fx-text-fill: -fe-keycap-fg;
+    -fx-background-color: -fe-keycap-edge, -fe-keycap;
+    -fx-background-insets: 0, 0 0 2 0;
+    -fx-background-radius: 5, 5;
+    -fx-padding: 1 6 3 6;
+    -fx-font-size: 0.85em;
+}
+
+.explorer-side > .split-pane-divider,
+.main-window > .split-pane > .split-pane-divider {
+    -fx-background-color: transparent;
+    -fx-padding: 0 3 0 3;
+}
+
+.drop-target {
+    -fx-border-color: -color-accent-emphasis;
+    -fx-border-radius: 10;
+}
+
+/* ---- scroll bars: slim and rounded ---- */
+.scroll-bar > .thumb {
+    -fx-background-color: -fe-glass-strong;
+    -fx-background-radius: 999;
+}
+
+.scroll-bar {
+    -fx-background-color: transparent;
+}

@@ -1,0 +1,45 @@
+/* Aurora dawn: lavender sky, white cards, violet accent, a sunrise aurora (coral → violet → teal). */
+.root {
+    -fe-aurora: linear-gradient(to right, #ff7a59 0%, #f472b6 30%, #8b5cf6 65%, #14b8a6 100%);
+    -fe-aurora-vertical: linear-gradient(to bottom, #f472b6 0%, #8b5cf6 55%, #14b8a6 100%);
+    -fe-sky: linear-gradient(to bottom right, #f1edff 0%, #eef6ff 55%, #ecfbf6 100%);
+    -fe-panel: #ffffff;
+    -fe-sidebar: linear-gradient(to bottom, #f5f2ff 0%, #f0f5ff 60%, #effbf7 100%);
+    -fe-sidebar-solid: #f3f3ff;
+    -fe-glass: rgba(124, 58, 237, 0.07);
+    -fe-glass-strong: rgba(124, 58, 237, 0.14);
+    -fe-selection: rgba(139, 92, 246, 0.12);
+    -fe-selection-focused: linear-gradient(to right, rgba(139, 92, 246, 0.2) 0%, rgba(20, 184, 166, 0.13) 100%);
+    -fe-section: #7a7499;
+    -fe-toolbar-icon: #4c4370;
+    -fe-input: #faf9ff;
+    -fe-input-border: #e4defa;
+    -fe-glow: rgba(139, 92, 246, 0.45);
+    -fe-on-accent: #ffffff;
+    -fe-keycap: #ffffff;
+    -fe-keycap-edge: #d9d2f5;
+    -fe-keycap-fg: #6d28d9;
+    -fe-marquee-fill: rgba(139, 92, 246, 0.12);
+    -fe-marquee-stroke: #8b5cf6;
+
+    -color-fg-default: #231c46;
+    -color-fg-muted: #5f5884;
+    -color-fg-subtle: #8a84a8;
+    -color-bg-default: #ffffff;
+    -color-bg-overlay: #ffffff;
+    -color-bg-subtle: #f7f5ff;
+    -color-border-default: #e4defa;
+    -color-border-muted: #ece8fb;
+    -color-accent-fg: #7c3aed;
+    -color-accent-emphasis: #8b5cf6;
+    -color-accent-muted: rgba(139, 92, 246, 0.35);
+    -color-accent-subtle: rgba(139, 92, 246, 0.12);
+
+    icon-folder: #f59e0b;
+    icon-image: #10b981;
+    icon-audio: #d946ef;
+    icon-video: #f43f5e;
+    icon-archive: #b45309;
+    icon-code: #6366f1;
+    icon-bookmark: #ec4899;
+}

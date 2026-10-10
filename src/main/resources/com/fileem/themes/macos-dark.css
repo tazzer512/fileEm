@@ -1,0 +1,23 @@
+/* macOS dark: sidebar #2a2a2c, content #1e1e1e with #262626 stripes, accent #0a84ff. */
+.root {
+    -fe-window: #2b2b2d;
+    -fe-toolbar: #2d2d2f;
+    -fe-tabbar: #1f1f21;
+    -fe-sidebar: #262628;
+    -fe-sidebar-selection: rgba(255, 255, 255, 0.1);
+    -fe-section: #8d8d93;
+    -fe-content: #1e1e1e;
+    -fe-stripe: #262626;
+    -fe-hairline: #3a3a3c;
+    -fe-field: #2c2c2e;
+    -fe-hover: rgba(255, 255, 255, 0.07);
+    -fe-pressed: rgba(255, 255, 255, 0.12);
+    -fe-selection-inactive: #464648;
+
+    -color-fg-default: #e5e5e7;
+    -color-fg-muted: #98989d;
+    -color-accent-fg: #3d9bff;
+    -color-accent-emphasis: #0a64d8;
+    -color-accent-muted: rgba(10, 132, 255, 0.4);
+    -color-accent-subtle: rgba(10, 132, 255, 0.18);
+}
