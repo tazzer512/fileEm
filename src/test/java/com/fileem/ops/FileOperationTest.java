@@ -31,6 +31,7 @@ import java.util.stream.Stream;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
@@ -161,6 +162,22 @@ class FileOperationTest {
         FileOperation op = run(Kind.COPY, List.of(src.resolve("sub")), src.resolve("sub/deep"), FAIL_ON_CONFLICT);
         assertEquals(1, op.errors().size());
         assertEquals("sub,sub/deep", tree(src));
+    }
+
+    @Test
+    void copyingOrMovingAFolderIntoItselfThroughALinkIsRefused() throws Exception {
+        assumeTrue(OsUtil.isPosix());
+        Files.createDirectories(src.resolve("sub/deep"));
+        Files.writeString(src.resolve("sub/file.txt"), "f");
+        Path viaLink = Files.createSymbolicLink(dst.resolve("link"), src.resolve("sub"));
+        String before = tree(src);
+        for (Kind kind : List.of(Kind.COPY, Kind.MOVE)) {
+            FileOperation op = run(kind, List.of(src.resolve("sub")), viaLink.resolve("deep"), FAIL_ON_CONFLICT);
+            assertEquals(1, op.errors().size(), kind + ": " + op.errors());
+            assertTrue(op.errors().get(0).contains("into itself"), op.errors().toString());
+            assertEquals(before, tree(src), kind + " left everything as it was");
+        }
+        assertNoTempFiles();
     }
 
     // ---- conflicts ----
@@ -515,6 +532,71 @@ class FileOperationTest {
         FileOperation op = run(Kind.EXTRACT, List.of(zip), dst, FAIL_ON_CONFLICT);
         assertTrue(onFx(op::getException) != null || !op.errors().isEmpty());
         assertEquals("broken.zip", tree(dst));
+        assertNoTempFiles();
+    }
+
+    /** A zip whose entry "big.bin" really holds {@code realSize} zero bytes but declares only 10 in its directory. */
+    private static Path zipWithUnderstatedSize(Path zip, int realSize) throws IOException {
+        try (var out = new java.util.zip.ZipOutputStream(Files.newOutputStream(zip))) {
+            out.putNextEntry(new java.util.zip.ZipEntry("big.bin"));
+            out.write(new byte[realSize]);
+            out.closeEntry();
+        }
+        byte[] b = Files.readAllBytes(zip);
+        boolean patched = false;
+        for (int i = 0; i + 28 < b.length; i++) {
+            if (b[i] == 0x50 && b[i + 1] == 0x4b && b[i + 2] == 0x01 && b[i + 3] == 0x02) { // central directory header
+                java.nio.ByteBuffer.wrap(b, i + 24, 4).order(java.nio.ByteOrder.LITTLE_ENDIAN).putInt(10);
+                patched = true;
+            }
+        }
+        assertTrue(patched, "central directory found");
+        Files.write(zip, b);
+        return zip;
+    }
+
+    @Test
+    void extractStopsAtTheDeclaredEntrySizeSoAZipBombCannotFillTheDisk() throws Exception {
+        Path zip = zipWithUnderstatedSize(dst.resolve("bomb.zip"), 1 << 20);
+        FileOperation op = run(Kind.EXTRACT, List.of(zip), dst, FAIL_ON_CONFLICT);
+        assertEquals(1, op.errors().size(), op.errors().toString());
+        assertTrue(op.errors().get(0).contains("larger than the archive says"), op.errors().toString());
+        assertNull(op.result());
+        assertEquals("bomb.zip", tree(dst), "nothing placed");
+        assertNoTempFiles();
+    }
+
+    @Test
+    void oneFailingArchiveDoesNotStopTheOthers() throws Exception {
+        Path bomb = zipWithUnderstatedSize(dst.resolve("bomb.zip"), 1 << 20);
+        Path good = dst.resolve("good.zip");
+        try (var out = new java.util.zip.ZipOutputStream(Files.newOutputStream(good))) {
+            out.putNextEntry(new java.util.zip.ZipEntry("fine.txt"));
+            out.write("ok".getBytes());
+            out.closeEntry();
+        }
+        FileOperation op = run(Kind.EXTRACT, List.of(bomb, good), dst, FAIL_ON_CONFLICT);
+        assertNull(onFx(op::getException));
+        assertEquals(1, op.errors().size(), op.errors().toString());
+        assertEquals("ok", Files.readString(dst.resolve("fine.txt")));
+        assertNoTempFiles();
+    }
+
+    @Test
+    void extractSkipsEntriesWhoseNameIsNotAValidPath() throws Exception {
+        assumeTrue(OsUtil.isPosix());
+        Path zip = dst.resolve("odd.zip");
+        try (var out = new java.util.zip.ZipOutputStream(Files.newOutputStream(zip))) {
+            for (String name : List.of("bad\u0000name.txt", "ok.txt")) {
+                out.putNextEntry(new java.util.zip.ZipEntry(name));
+                out.write("x".getBytes());
+                out.closeEntry();
+            }
+        }
+        FileOperation op = run(Kind.EXTRACT, List.of(zip), dst, FAIL_ON_CONFLICT);
+        assertNull(onFx(op::getException), "an invalid name does not abort the extraction");
+        assertEquals(1, op.errors().size(), op.errors().toString());
+        assertEquals("x", Files.readString(dst.resolve("ok.txt")));
         assertNoTempFiles();
     }
 

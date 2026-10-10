@@ -55,7 +55,10 @@ public final class DirWatcher {
         return instance;
     }
 
-    /** Calls {@code onChange} whenever the content of {@code dir} changes. Close the handle to stop. */
+    /**
+     * Calls {@code onChange} whenever the content of {@code dir} changes. Close the handle to stop.
+     * Registering touches the file system (it can block on a hung mount): call it off the FX thread.
+     */
     public static AutoCloseable watch(Path dir, Runnable onChange) {
         DirWatcher w = get();
         return w == null ? () -> { } : w.register(dir, onChange);
@@ -63,13 +66,17 @@ public final class DirWatcher {
 
     private synchronized AutoCloseable register(Path dir, Runnable listener) {
         Entry e = entries.get(dir);
-        if (e == null) {
+        if (e == null || !e.key.isValid()) {
+            // a key turns invalid when its folder is deleted; a folder created again at the same
+            // path needs a new one, or it would never be watched again
             try {
                 WatchKey key = dir.register(service, StandardWatchEventKinds.ENTRY_CREATE,
                         StandardWatchEventKinds.ENTRY_DELETE, StandardWatchEventKinds.ENTRY_MODIFY);
-                e = new Entry();
+                if (e == null) {
+                    e = new Entry();
+                    entries.put(dir, e);
+                }
                 e.key = key;
-                entries.put(dir, e);
             } catch (IOException | RuntimeException ex) {
                 return () -> { };
             }

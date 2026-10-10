@@ -70,6 +70,18 @@ class FsUtilTest {
     }
 
     @Test
+    void validateNameRejectsWindowsDeviceNamesOnWindows() {
+        assumeTrue(OsUtil.isWindows());
+        for (String reserved : new String[]{"CON", "nul", "Aux.txt", "COM1", "lpt9.log", "PRN.tar.gz", "COM\u00b9"}) {
+            assertNotNull(FsUtil.validateName(reserved), reserved);
+        }
+        assertNotNull(FsUtil.validateName("tab\there"));
+        assertNull(FsUtil.validateName("CONSOLE.txt"));
+        assertNull(FsUtil.validateName("com10"));
+        assertNull(FsUtil.validateName("null"));
+    }
+
+    @Test
     void nameMatcherPlainTextIsCaseInsensitiveContains() {
         Predicate<String> m = FsUtil.nameMatcher("Rep");
         assertTrue(m.test("report.pdf"));

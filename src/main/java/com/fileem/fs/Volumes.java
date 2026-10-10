@@ -16,9 +16,14 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -77,19 +82,11 @@ public final class Volumes {
         List<Volume> out = new ArrayList<>();
         for (Path root : FileSystems.getDefault().getRootDirectories()) {
             String letter = root.toString().replace("\\", "");
-            String label;
-            long free = -1, total = -1;
-            try {
-                FileStore store = Files.getFileStore(root);
-                String name = store.name();
-                label = (name == null || name.isBlank() ? "Local Disk" : name) + " (" + letter + ")";
-                free = store.getUsableSpace();
-                total = store.getTotalSpace();
-            } catch (IOException | RuntimeException e) {
-                label = "Drive (" + letter + ")";
-            }
+            StoreInfo info = storeInfo(root);
+            String label = info == null ? "Drive (" + letter + ")"
+                    : (info.name() == null || info.name().isBlank() ? "Local Disk" : info.name()) + " (" + letter + ")";
             Kind kind = letter.equalsIgnoreCase("C:") ? Kind.SYSTEM : Kind.LOCAL;
-            out.add(new Volume(root, label, kind, free, total));
+            out.add(new Volume(root, label, kind, info == null ? -1 : info.free(), info == null ? -1 : info.total()));
         }
         return out;
     }
@@ -180,14 +177,45 @@ public final class Volumes {
     }
 
     private static Volume volume(Path root, String label, Kind kind) {
-        long free = -1, total = -1;
+        StoreInfo info = storeInfo(root);
+        return new Volume(root, label, kind, info == null ? -1 : info.free(), info == null ? -1 : info.total());
+    }
+
+    private record StoreInfo(String name, long free, long total) {
+    }
+
+    /** How long one poll waits for a volume's size before showing it as unknown. */
+    static final long STORE_TIMEOUT_MS = 1500;
+    /** Lookups still running, per root: a hung mount gets one stuck lookup, not one per poll. */
+    private static final Map<Path, Future<StoreInfo>> LOOKUPS = new ConcurrentHashMap<>();
+    private static final ExecutorService LOOKUP = Executors.newCachedThreadPool(r -> {
+        Thread t = new Thread(r, "fileem-volume-lookup");
+        t.setDaemon(true);
+        return t;
+    });
+
+    /**
+     * Name and space of the volume at {@code root}, or null when unknown. A dead network mount can
+     * block these calls for minutes; the poll gives up after {@link #STORE_TIMEOUT_MS} so the other
+     * volumes keep updating, and asks again once the stuck lookup has returned.
+     */
+    private static StoreInfo storeInfo(Path root) {
+        Future<StoreInfo> f = LOOKUPS.computeIfAbsent(root, r -> LOOKUP.submit(() -> {
+            FileStore store = Files.getFileStore(r);
+            return new StoreInfo(store.name(), store.getUsableSpace(), store.getTotalSpace());
+        }));
         try {
-            FileStore store = Files.getFileStore(root);
-            free = store.getUsableSpace();
-            total = store.getTotalSpace();
-        } catch (IOException | RuntimeException ignored) {
-            // unknown space
+            StoreInfo info = f.get(STORE_TIMEOUT_MS, TimeUnit.MILLISECONDS);
+            LOOKUPS.remove(root, f);
+            return info;
+        } catch (TimeoutException e) {
+            return null; // still hanging: keep it, the next poll waits on the same lookup
+        } catch (ExecutionException e) {
+            LOOKUPS.remove(root, f);
+            return null;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return null;
         }
-        return new Volume(root, label, kind, free, total);
     }
 }

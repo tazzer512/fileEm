@@ -23,6 +23,7 @@ import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.FileStore;
 import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
+import java.nio.file.InvalidPathException;
 import java.nio.file.LinkOption;
 import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
@@ -43,6 +44,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.zip.ZipEntry;
+import java.util.zip.ZipException;
 import java.util.zip.ZipFile;
 import java.util.zip.ZipOutputStream;
 
@@ -240,7 +242,11 @@ public final class FileOperation extends Task<Void> {
             } else if (kind == Kind.EXTRACT) {
                 for (Path zip : work) {
                     checkCancel();
-                    extract(zip);
+                    try {
+                        extract(zip);
+                    } catch (IOException e) {
+                        error(zip, e);
+                    }
                 }
             } else {
                 for (Path src : work) {
@@ -390,7 +396,14 @@ public final class FileOperation extends Task<Void> {
                 for (Enumeration<? extends ZipEntry> en = zf.entries(); en.hasMoreElements(); ) {
                     checkCancel();
                     ZipEntry e = en.nextElement();
-                    Path dest = root.resolve(e.getName().replace('\\', '/')).normalize();
+                    Path dest;
+                    try {
+                        dest = root.resolve(e.getName().replace('\\', '/')).normalize();
+                    } catch (InvalidPathException bad) {
+                        errors.add(zipFile + ": Skipped entry with an invalid name \"" + e.getName() + "\"");
+                        advance(1);
+                        continue;
+                    }
                     if (!dest.startsWith(root) || dest.equals(root)) {
                         if (!dest.equals(root)) {
                             errors.add(zipFile + ": Skipped unsafe entry \"" + e.getName() + "\"");
@@ -405,9 +418,11 @@ public final class FileOperation extends Task<Void> {
                         Files.createDirectories(dest.getParent());
                         try (InputStream in = zf.getInputStream(e);
                              OutputStream out = Files.newOutputStream(dest, StandardOpenOption.CREATE_NEW)) {
-                            copyStream(in, out);
+                            copyEntry(in, out, e);
                         } catch (FileAlreadyExistsException dup) {
                             errors.add(zipFile + ": Duplicate entry \"" + e.getName() + "\" skipped");
+                            advance(1);
+                            continue;
                         }
                         if (e.getLastModifiedTime() != null) {
                             Files.setLastModifiedTime(dest, e.getLastModifiedTime());
@@ -435,6 +450,30 @@ public final class FileOperation extends Task<Void> {
             if (!placed) {
                 deleteQuietly(tmp);
             }
+        }
+    }
+
+    /**
+     * Unpacks one entry, never writing more than the size the archive declares for it: the free
+     * space check trusts those sizes, and a crafted archive (zip bomb) could otherwise fill the disk.
+     */
+    private void copyEntry(InputStream in, OutputStream out, ZipEntry e) throws IOException {
+        long declared = e.getSize();
+        if (declared < 0) {
+            copyStream(in, out);
+            return;
+        }
+        byte[] buf = new byte[1 << 16];
+        long written = 0;
+        int n;
+        while ((n = in.read(buf)) > 0) {
+            checkCancel();
+            if (written + n > declared) {
+                throw new ZipException("Entry \"" + e.getName() + "\" is larger than the archive says; extraction stopped.");
+            }
+            out.write(buf, 0, n);
+            written += n;
+            advance(n);
         }
     }
 
@@ -568,7 +607,7 @@ public final class FileOperation extends Task<Void> {
         Path dest = targetDir.resolve(src.getFileName().toString());
         if (dest.equals(src)) {
             dest = FsUtil.uniqueName(src, true);
-        } else if (Files.isDirectory(src, NOFOLLOW) && FsUtil.isSameOrInside(targetDir, src)) {
+        } else if (intoItself(src)) {
             throw new IOException("Cannot copy a folder into itself.");
         }
         renameMoves = false;
@@ -581,11 +620,30 @@ public final class FileOperation extends Task<Void> {
             advance(1);
             return;
         }
-        if (Files.isDirectory(src, NOFOLLOW) && FsUtil.isSameOrInside(targetDir, src)) {
+        if (intoItself(src)) {
             throw new IOException("Cannot move a folder into itself.");
         }
         renameMoves = sameStore(src);
         transfer(src, dest, true);
+    }
+
+    /**
+     * Whether the target folder is the folder {@code src} or lies inside it, also when the target
+     * path reaches it through a link (lexical checks alone miss that, and the copy would recurse
+     * into its own output until paths get too long).
+     */
+    private boolean intoItself(Path src) throws IOException {
+        if (!Files.isDirectory(src, NOFOLLOW)) {
+            return false;
+        }
+        if (FsUtil.isSameOrInside(targetDir, src)) {
+            return true;
+        }
+        try {
+            return targetDir.toRealPath().startsWith(src.toRealPath(NOFOLLOW));
+        } catch (NoSuchFileException e) {
+            return false; // the copy itself reports the missing folder
+        }
     }
 
     /** Copies (or moves, when {@code move}) {@code src} to {@code dst}, merging folders and asking on conflicts. */

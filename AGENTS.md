@@ -38,7 +38,7 @@ Treat it as part of every change, not an afterthought:
   `jdk.localedata`). `tools/install-linux.sh` installs it per user with a `.desktop` entry named
   after the window class (`com.fileem.FileEmApp`; renaming `FileEmApp` breaks the dock icon,
   `PackagingTest` checks). Icons: `tools/make-icon.py` writes `src/packaging/` and the window icons.
-- `mvn test`: about 160 tests, a bit over a minute. UI tests run **headless on Monocle** (configured in
+- `mvn test`: about 170 tests, a bit over a minute. UI tests run **headless on Monocle** (configured in
   the pom's `headless-ui-tests` profile), so no display is needed.
   - `mvn test -Dtest=FileOperationTest`: a single class. `-Dtest='!MainWindowUiTest'` skips
     the slow UI tests while iterating, but run the full suite before finishing.
@@ -58,7 +58,8 @@ src/test/java/com/fileem/
   ui/ThemeTest         theme sheets parse, both modes define all colors, live restyling
   ui/IconsTest         app icon sizes load; dialogs get the icon
   util/                NaturalOrderTest, FormatsTest (fixes Locale.US), FsUtilTest
-  fs/                  FileEntryTest, FileTypesTest, VolumesTest, DirWatcherTest
+  fs/                  FileEntryTest, FileTypesTest, VolumesTest, DirWatcherTest,
+                       ShellTest (terminal launch commands per platform)
   ops/FileOperationTest  copy/move/delete/trash semantics + integrity on failure/cancel, pause/resume
   util/BgTest          virtual-thread I/O never blocked by stuck jobs, cancel drops results,
                        operations run in parallel on platform threads
@@ -86,7 +87,8 @@ src/test/java/com/fileem/
 - Platform-specific tests use `assumeTrue(OsUtil.isPosix())` / `isWindows()` so they skip, not
   fail, elsewhere.
 - UI test hooks are package-private accessors (`MainWindow.left()/right()/isDual()/activeSide()`,
-  `FileTab.table()`, `ProgressWindow.of(owner)/operations()/cancelButton(op)`). Add more of these
+  `FileTab.table()/grid()`, `ProgressWindow.of(owner)/operations()/pauseButton(op)/cancelButton(op)/
+  conflictButton(op, text)`). Add more of these
   rather than reaching in with reflection.
 - Long-running operations in UI tests: build a `FileOperation` whose `ConflictHandler` blocks on a
   latch (copy onto an existing name) and start it with `OperationUi.start(...)`; it stays running
@@ -128,7 +130,8 @@ com.fileem.ui       MainWindow (toolbar, F-key bar, ALL commands + key handling)
                        └ FileGrid (the other ViewModes: virtualized grid on the table's models)
                          + Thumbnails (image thumbnail LRU)
                     OperationUi (starts operations, conflict dialog)
-                    ProgressWindow (one per main window; a row with its own Cancel per running op)
+                    ProgressWindow (one per main window; a row per running op with Pause/Resume,
+                      Cancel and inline conflict questions)
                     PropertiesDialog, BookmarksDialog, Dialogs, Dnd, Theme, Icons, Views, TreeNode
 src/main/resources/com/fileem/app.css   author stylesheet on top of AtlantaFX
 src/main/resources/com/fileem/themes/   theme overlays: <id>.css shapes, <id>-light/-dark.css colors
@@ -158,7 +161,11 @@ tools/                                  make-icon.py, install-linux.sh (per-user
 - COMPRESS writes the archive to a temp file and renames it into place; links, junctions and
   special files are left out (reported). EXTRACT unpacks into a temp folder, then renames it into
   place (never merging into an existing folder; a single top-level item is not nested). Entries
-  that would land outside the target (zip-slip: `..`, absolute paths) are skipped and reported.
+  that would land outside the target (zip-slip: `..`, absolute paths) or have names that aren't valid
+  paths are skipped and reported. An entry is never written past its declared size (zip bomb: the
+  free-space check trusts those sizes); one failing archive doesn't stop the others.
+- Copying or moving a folder into itself is also refused when the target reaches it through a link
+  (real-path check), otherwise the copy recurses into its own output.
 - Free space is checked before a copy or extract starts. Per-item failures are collected in `errors()` and
   processing continues.
 
@@ -173,7 +180,12 @@ tools/                                  make-icon.py, install-linux.sh (per-user
 - `FileOperation` caches `FileStore` lookups (each one parses the mount table on Linux), uses
   `Files.copy` for files ≤ 8 MB and chunked `FileChannel.transferTo` above that (kernel copy,
   cancellable, with progress). Linux trash is batched (one `gio trash` per 100 items).
-- Never touch the file system on the FX thread except trivially cheap calls (rename, mkdir).
+- Never touch the file system on the FX thread except trivially cheap calls (rename, mkdir). That
+  includes watcher registration (`DirWatcher.watch` runs in a `Bg` job) and existence checks in cells.
+- `Volumes` polls space with a per-volume timeout; a hung mount keeps one stuck lookup (reused by
+  later polls), never blocking the poller or piling up threads.
+- Restore selections with one `selectIndices` call, never `select(i)` per item: every change re-runs
+  the selection listeners (status line, grid), so per-item selects are quadratic.
 
 ## Conventions & invariants
 
@@ -187,7 +199,8 @@ tools/                                  make-icon.py, install-linux.sh (per-user
   virtual thread, block with `java.util.concurrent` locks, not `synchronized`/`wait` (pinning).
   Async loads also use a generation counter (`loadGeneration`, `revealToken`) to drop stale
   results: keep that pattern. A watcher refresh is skipped while a navigation is loading
-  (`navigating`), or it would replace the navigation's generation and drop it.
+  (`navigating`), or it would replace the navigation's generation and drop it. A navigation
+  cancels a running refresh, which then never calls back, so `go` resets `refreshing` itself.
 - **No file system calls on the FX thread** in navigation paths, not even `Files.isRegularFile`:
   on a dead network mount they hang the UI. Do them in the `Bg.run` job (see `FileTab.go`).
 - **Commands live in `MainWindow`** and act on the *active* side's active tab. Keyboard
@@ -265,8 +278,8 @@ tools/                                  make-icon.py, install-linux.sh (per-user
   `FileGrid` is virtualized (fixed slots, cells reused, unmanaged so the layer pane doesn't resize
   them); keep per-layout work O(visible items) (e.g. List's column width is cached per items change).
   Thumbnails (`Thumbnails`) load with JavaFX background loading into a pixel-bounded LRU cache.
-- **Rubber band** (`Marquee`): event filters on the table. A press on a row's name (icon + text)
-  drags files; anywhere else (empty space, other columns) starts the box. Rows are tracked in
+- **Rubber band** (`Marquee` in Details, built into `FileGrid` in the other views): event filters
+  on the table. A press on a row's name (icon + text, plus a few pixels of slack) drags files; anywhere else (empty space, other columns) starts the box. Rows are tracked in
   content coordinates (index × row height) so autoscroll keeps the anchor. Shift adds, Ctrl/Cmd
   toggles.
 - **Bookmarks**: one `Bookmarks` model per `MainWindow`, shared by both trees. The tree's
@@ -275,6 +288,15 @@ tools/                                  make-icon.py, install-linux.sh (per-user
   only walks volumes. Mutate through `Bookmarks` (its list is read-only).
 - Code style: 4-space indent, braces always, `final` classes, package-private UI internals, short
   Javadoc on non-obvious classes/methods, no wildcard imports.
+
+## Diagnosing "stuck" operations
+
+When a copy or move seems to hang, check the device before the app: take a `jstack` of the
+running JVM and look at the operation thread's state, its kernel wait channel
+(`/proc/<pid>/task/<tid>/wchan`), `/proc/diskstats` progress, and `journalctl -k`. A failing USB
+drive or UAS adapter (`uas_eh_abort_handler` / device resets in the kernel log) blocks the thread
+inside a kernel read; Pause and Cancel only take effect once that read returns. This happened
+once with an ASMedia `174c:55aa` adapter (fix: the `usb-storage quirks=174c:55aa:u` option to disable UAS).
 
 ## Known gaps / ideas
 

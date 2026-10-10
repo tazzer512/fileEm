@@ -37,6 +37,7 @@ import java.nio.file.NoSuchFileException;
 import java.nio.file.NotDirectoryException;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.HashSet;
 import java.util.List;
@@ -79,6 +80,8 @@ public final class FileTab extends BorderPane {
     private volatile long lastListMillis;
     private long freeSpace = -1;
     private AutoCloseable watch;
+    /** Identifies the latest watch registration (it runs in the background). */
+    private int watchToken;
 
     FileTab(MainWindow main, ExplorerSide side, Path initial) {
         this.main = main;
@@ -151,7 +154,8 @@ public final class FileTab extends BorderPane {
         table.getSelectionModel().getSelectedItems().addListener((ListChangeListener<FileEntry>) c -> updateStatus());
         updatePredicate();
 
-        go(initial, null, true);
+        // a restored folder may be gone, or on a mount that hangs: find the nearest existing one off the FX thread
+        go(initial, null, true, 0, false, true);
     }
 
     Tab tab() {
@@ -358,6 +362,10 @@ public final class FileTab extends BorderPane {
         Path previous = currentDir;
         int gen = ++loadGeneration;
         navigating = true;
+        // a refresh still running is cancelled below and never calls back: clear its state here, or
+        // requestRefresh would wait for it forever and the watcher would stop updating this tab
+        refreshing = false;
+        refreshPending = false;
         status.setText("Loading…");
         startLoad(Bg.run(() -> {
             Path target = requested;
@@ -483,11 +491,18 @@ public final class FileTab extends BorderPane {
         tab.setTooltip(new Tooltip(currentDir.toString()));
         closeWatch();
         Path watched = currentDir;
-        watch = DirWatcher.watch(watched, () -> {
+        int token = ++watchToken;
+        Bg.run(() -> DirWatcher.watch(watched, () -> {
             if (watched.equals(currentDir)) {
                 requestRefresh();
             }
-        });
+        }), handle -> {
+            if (token == watchToken) {
+                watch = handle;
+            } else {
+                closeQuietly(handle); // navigated on (or closed) while registering
+            }
+        }, null);
         freeSpace = -1;
         Bg.run(() -> Files.getFileStore(watched).getUsableSpace(), free -> {
             if (watched.equals(currentDir)) {
@@ -498,13 +513,23 @@ public final class FileTab extends BorderPane {
     }
 
     private void closeWatch() {
+        watchToken++; // a registration still in flight is closed when it arrives
         if (watch != null) {
-            try {
-                watch.close();
-            } catch (Exception ignored) {
-                // nothing to do
-            }
+            closeQuietly(watch);
             watch = null;
+        }
+    }
+
+    /** Whether the directory watcher is registered for the current folder (test hook). */
+    boolean isWatching() {
+        return watch != null;
+    }
+
+    private static void closeQuietly(AutoCloseable c) {
+        try {
+            c.close();
+        } catch (Exception ignored) {
+            // nothing to do
         }
     }
 
@@ -530,14 +555,17 @@ public final class FileTab extends BorderPane {
         Set<Path> wanted = new HashSet<>(paths);
         var sm = table.getSelectionModel();
         sm.clearSelection();
-        int first = -1;
-        for (int i = 0; i < sorted.size(); i++) {
+        int[] indices = new int[Math.min(wanted.size(), sorted.size())];
+        int found = 0;
+        for (int i = 0; i < sorted.size() && found < indices.length; i++) {
             if (wanted.contains(sorted.get(i).path())) {
-                sm.select(i);
-                if (first < 0) {
-                    first = i;
-                }
+                indices[found++] = i;
             }
+        }
+        int first = found > 0 ? indices[0] : -1;
+        if (found > 0) {
+            // one selection change, not one per item: every change re-runs the selection listeners
+            sm.selectIndices(first, Arrays.copyOfRange(indices, 1, found));
         }
         if (first >= 0) {
             table.getFocusModel().focus(first);

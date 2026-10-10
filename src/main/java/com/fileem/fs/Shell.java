@@ -126,7 +126,7 @@ public final class Shell {
                     "--dest", "org.freedesktop.FileManager1",
                     "--object-path", "/org/freedesktop/FileManager1",
                     "--method", "org.freedesktop.FileManager1.ShowItems",
-                    "['" + p.toUri() + "']", "")
+                    showItemsArgument(p), "")
                     .redirectErrorStream(true).redirectOutput(ProcessBuilder.Redirect.DISCARD).start();
             return proc.waitFor(5, TimeUnit.SECONDS) && proc.exitValue() == 0;
         } catch (IOException e) {
@@ -135,6 +135,14 @@ public final class Shell {
             Thread.currentThread().interrupt();
             return false;
         }
+    }
+
+    /**
+     * The GVariant array literal for ShowItems. URIs keep {@code '} unescaped, which would end the
+     * quoted string early (the call fails or names other items), so it is percent-encoded too.
+     */
+    static String showItemsArgument(Path p) {
+        return "['" + p.toUri().toString().replace("'", "%27") + "']";
     }
 
     private static boolean onPath(String program) {

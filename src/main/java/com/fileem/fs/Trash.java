@@ -107,7 +107,9 @@ public final class Trash {
         Path info = trash.resolve("info");
         Files.createDirectories(files);
         Files.createDirectories(info);
-        if (!Files.getFileStore(p).equals(Files.getFileStore(files))) {
+        // the volume of the item itself, not of a link's target: links are trashed as links
+        Path parent = p.toAbsolutePath().getParent();
+        if (parent == null || !Files.getFileStore(parent).equals(Files.getFileStore(files))) {
             throw new IOException("Trash is not available on this volume. Use Shift+Delete to delete permanently.");
         }
         String name = p.getFileName().toString();

@@ -3,13 +3,16 @@ package com.fileem.ui;
 import atlantafx.base.theme.Styles;
 import com.fileem.Bookmarks;
 import com.fileem.Bookmarks.Bookmark;
+import com.fileem.util.Bg;
 import javafx.beans.binding.Bindings;
 import javafx.beans.binding.BooleanBinding;
+import javafx.collections.ListChangeListener;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.control.Button;
 import javafx.scene.control.ButtonType;
 import javafx.scene.control.Dialog;
+import javafx.scene.control.DialogEvent;
 import javafx.scene.control.Label;
 import javafx.scene.control.ListCell;
 import javafx.scene.control.ListView;
@@ -23,6 +26,10 @@ import org.kordamp.ikonli.javafx.FontIcon;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 /** Lists all bookmarks with open / rename / remove / reorder. Changes apply immediately. */
 final class BookmarksDialog {
@@ -42,7 +49,23 @@ final class BookmarksDialog {
         list.getStyleClass().add("bookmark-list");
         list.setPrefSize(520, 320);
         list.setPlaceholder(new Label("No bookmarks yet.\nOpen a folder and press Ctrl+D to add one."));
-        list.setCellFactory(lv -> new BookmarkCell());
+        // which folders exist is checked in the background: a bookmark on a dead mount would hang the UI
+        Set<Path> missing = new HashSet<>();
+        list.setCellFactory(lv -> new BookmarkCell(missing));
+        Runnable check = () -> {
+            List<Path> paths = bookmarks.items().stream().map(Bookmark::path).toList();
+            Bg.run(() -> paths.stream().filter(p -> !Files.isDirectory(p)).collect(Collectors.toSet()), gone -> {
+                if (!gone.equals(missing)) {
+                    missing.clear();
+                    missing.addAll(gone);
+                    list.refresh();
+                }
+            }, null);
+        };
+        check.run();
+        ListChangeListener<Bookmark> recheck = c -> check.run();
+        bookmarks.items().addListener(recheck);
+        d.addEventHandler(DialogEvent.DIALOG_HIDDEN, e -> bookmarks.items().removeListener(recheck));
 
         Button open = action("Open", "mdi2f-folder-open");
         Button rename = action("Rename…", "mdi2p-pencil");
@@ -154,8 +177,10 @@ final class BookmarksDialog {
         private final Label name = new Label();
         private final Label path = new Label();
         private final HBox box;
+        private final Set<Path> missing;
 
-        BookmarkCell() {
+        BookmarkCell(Set<Path> missing) {
+            this.missing = missing;
             path.getStyleClass().addAll(Styles.TEXT_MUTED, Styles.TEXT_SMALL);
             VBox text = new VBox(2, name, path);
             box = new HBox(10, icon, text);
@@ -170,7 +195,7 @@ final class BookmarksDialog {
                 setGraphic(null);
                 return;
             }
-            boolean exists = Files.isDirectory(b.path());
+            boolean exists = !missing.contains(b.path());
             Icons.apply(icon, exists ? "mdi2b-bookmark" : "mdi2b-bookmark-remove", exists ? "icon-bookmark" : "icon-missing");
             name.setText(b.name());
             path.setText(exists ? b.path().toString() : b.path() + "  (not found)");

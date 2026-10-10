@@ -13,7 +13,6 @@ import javafx.scene.control.TabPane;
 import javafx.scene.control.Tooltip;
 import javafx.scene.input.MouseEvent;
 
-import java.nio.file.Files;
 import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
 import java.util.List;
@@ -200,7 +199,7 @@ public final class ExplorerSide extends SplitPane {
         int count = s.getInt(id + ".tabs", 0);
         int selected = s.getInt(id + ".selected", 0);
         for (int i = 0; i < count; i++) {
-            Path p = existingDir(s.get(id + ".tab." + i, null));
+            Path p = savedDir(s.get(id + ".tab." + i, null));
             if (p != null) {
                 newTab(p, false).setViewMode(ViewMode.byId(s.get(id + ".tab." + i + ".view", null)));
             }
@@ -227,16 +226,13 @@ public final class ExplorerSide extends SplitPane {
         }
     }
 
-    private static Path existingDir(String value) {
-        if (value == null) {
+    /** The saved folder; the tab walks up to an existing one in the background (no disk access here). */
+    private static Path savedDir(String value) {
+        if (value == null || value.isBlank()) {
             return null;
         }
         try {
-            Path p = Path.of(value);
-            while (p != null && !Files.isDirectory(p)) {
-                p = p.getParent();
-            }
-            return p;
+            return Path.of(value);
         } catch (InvalidPathException e) {
             return null;
         }

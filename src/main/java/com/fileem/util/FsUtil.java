@@ -9,6 +9,10 @@ import java.util.function.Predicate;
 import java.util.regex.Pattern;
 
 public final class FsUtil {
+    /** Device names Windows reserves, with or without an extension ("NUL", "con.txt", "COM1"). */
+    private static final Pattern WINDOWS_RESERVED =
+            Pattern.compile("(?i)CON|PRN|AUX|NUL|COM[0-9¹²³]|LPT[0-9¹²³]");
+
     private FsUtil() {
     }
 
@@ -99,6 +103,15 @@ public final class FsUtil {
             }
             if (name.endsWith(".") || name.endsWith(" ")) {
                 return "A name cannot end with a dot or a space.";
+            }
+            for (char c : name.toCharArray()) {
+                if (c < 32) {
+                    return "A name cannot contain control characters.";
+                }
+            }
+            String stem = name.contains(".") ? name.substring(0, name.indexOf('.')) : name;
+            if (WINDOWS_RESERVED.matcher(stem.strip()).matches()) {
+                return "\"" + stem + "\" is reserved by Windows and cannot be used as a name.";
             }
         }
         return null;

@@ -15,6 +15,13 @@ class ShellTest {
     private static final Path DIR = Path.of("/work/dir");
 
     @Test
+    void showInFileManagerQuotesApostrophesInTheItemUri() {
+        assumeTrue(OsUtil.isPosix());
+        String arg = Shell.showItemsArgument(Path.of("/home/u/it's here.txt"));
+        assertEquals("['file:///home/u/it%27s%20here.txt']", arg);
+    }
+
+    @Test
     void linuxPrefersTheTerminalEnvironmentVariable() {
         assumeTrue(OsUtil.isLinux());
         assertEquals(List.of("foot"), Shell.terminalCommand(DIR, "foot", Set.of("foot", "xterm")::contains));

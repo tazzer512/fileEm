@@ -9,6 +9,7 @@ import com.fileem.fs.Trash;
 import com.fileem.ops.FileClipboard;
 import com.fileem.ops.FileOperation;
 import com.fileem.ops.FileOperation.Kind;
+import com.fileem.util.Bg;
 import com.fileem.util.FsUtil;
 import com.fileem.util.OsUtil;
 import javafx.application.Platform;
@@ -714,13 +715,15 @@ public final class MainWindow extends BorderPane {
         }
         Path initial = dual.get() ? otherSide(active).activeTab().currentDir() : tab().currentDir();
         String verb = move ? "Move" : "Copy";
-        Dialogs.askTarget(stage, verb, verb + " " + describe(sources) + " to:", initial).ifPresent(target -> {
-            if (!Files.isDirectory(target)) {
-                Dialogs.error(stage, verb, "The target folder does not exist:\n" + target);
-                return;
-            }
-            runOperation(move ? Kind.MOVE : Kind.COPY, sources, target);
-        });
+        Dialogs.askTarget(stage, verb, verb + " " + describe(sources) + " to:", initial).ifPresent(target ->
+                // checked in the background: a typed folder may be on a mount that hangs
+                Bg.run(() -> Files.isDirectory(target), isDir -> {
+                    if (isDir) {
+                        runOperation(move ? Kind.MOVE : Kind.COPY, sources, target);
+                    } else {
+                        Dialogs.error(stage, verb, "The target folder does not exist:\n" + target);
+                    }
+                }, err -> Dialogs.error(stage, verb, "Cannot open the target folder:\n" + target)));
     }
 
     /** Copies items next to themselves ("name - Copy"). */

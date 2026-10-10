@@ -46,6 +46,27 @@ class DirWatcherTest {
     }
 
     @Test
+    void aFolderDeletedAndCreatedAgainIsWatchedAgain() throws Exception {
+        Path sub = Files.createDirectory(dir.resolve("sub"));
+        CountDownLatch first = new CountDownLatch(1);
+        AutoCloseable handle = DirWatcher.watch(sub, first::countDown);
+        Files.writeString(sub.resolve("a.txt"), "x");
+        assertTrue(first.await(15, TimeUnit.SECONDS));
+        Files.delete(sub.resolve("a.txt"));
+        Files.delete(sub);
+        Thread.sleep(600); // let the watcher see the deletion (its key turns invalid)
+        Files.createDirectory(sub);
+
+        CountDownLatch again = new CountDownLatch(1);
+        try (AutoCloseable second = DirWatcher.watch(sub, again::countDown)) {
+            Files.writeString(sub.resolve("b.txt"), "x");
+            assertTrue(again.await(15, TimeUnit.SECONDS), "changes in the new folder are reported");
+        } finally {
+            handle.close();
+        }
+    }
+
+    @Test
     void burstsOfChangesAreDebounced() throws Exception {
         AtomicInteger calls = new AtomicInteger();
         CountDownLatch first = new CountDownLatch(1);

@@ -1206,6 +1206,45 @@ class MainWindowUiTest {
     }
 
     @Test
+    void aNavigationThatCancelsARefreshKeepsTheWatcherRefreshing(FxRobot robot) throws Exception {
+        Path a = folderWith("cancel-a", "one.txt");
+        Path b = folderWith("cancel-b", "two.txt");
+        FileTab tab = leftTab();
+        open(robot, tab, a);
+        // the navigation cancels the refresh that is still listing, which then never calls back
+        robot.interact(() -> {
+            tab.refresh();
+            tab.navigateTo(b);
+        });
+        waitUntil("navigation completed and watching", () -> b.equals(tab.currentDir()) && tab.isWatching());
+        Files.writeString(b.resolve("new.txt"), "n");
+        waitUntil("the watcher refreshed the list", () -> names(tab).contains("new.txt"));
+    }
+
+    @Test
+    void aRefreshRestoresALargeSelectionInOneChange(FxRobot robot) throws Exception {
+        String[] files = new String[400];
+        for (int i = 0; i < files.length; i++) {
+            files[i] = "f" + i + ".txt";
+        }
+        Path dir = folderWith("bigsel", files);
+        FileTab tab = leftTab();
+        open(robot, tab, dir);
+        robot.interact(tab::selectAll);
+        int[] changes = {0};
+        javafx.collections.ListChangeListener<FileEntry> count = c -> changes[0]++;
+        robot.interact(() -> tab.table().getSelectionModel().getSelectedItems().addListener(count));
+        try {
+            robot.interact(() -> tab.refresh());
+            waitUntil("selection restored", () -> changes[0] > 0 && tab.selectedPaths().size() == files.length);
+            // clearing plus one bulk select; one change per item made big selections quadratic
+            assertTrue(changes[0] <= 3, changes[0] + " selection changes");
+        } finally {
+            robot.interact(() -> tab.table().getSelectionModel().getSelectedItems().removeListener(count));
+        }
+    }
+
+    @Test
     void navigatingToAFileOpensItsFolderWithTheFileSelected(FxRobot robot) throws Exception {
         Path dir = folderWith("navfile", "a.txt", "target.txt", "z.txt");
         FileTab tab = leftTab();
