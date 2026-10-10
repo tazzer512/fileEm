@@ -11,17 +11,44 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 import java.util.function.Predicate;
 
 /** Hands files to the operating system. */
 public final class Shell {
+    /**
+     * Set by the test runner ({@code -Dfileem.noLaunch=true}): nothing is started, requests are only
+     * recorded in {@link #launched()}. Tests must never open files in the user's real applications.
+     */
+    private static final boolean NO_LAUNCH = Boolean.getBoolean("fileem.noLaunch");
+    private static final List<String> LAUNCHED = new CopyOnWriteArrayList<>();
+
     private Shell() {
+    }
+
+    /** What was requested while launching is disabled ("open /path", "terminal /path", "reveal /path"). */
+    public static List<String> launched() {
+        return List.copyOf(LAUNCHED);
+    }
+
+    public static void clearLaunched() {
+        LAUNCHED.clear();
+    }
+
+    private static boolean suppressed(String what, Path p) {
+        if (NO_LAUNCH) {
+            LAUNCHED.add(what + " " + p);
+        }
+        return NO_LAUNCH;
     }
 
     /** Opens the file with its default application. Errors are reported on the FX thread. */
     public static void open(Path p, Consumer<String> onError) {
+        if (suppressed("open", p)) {
+            return;
+        }
         Bg.IO.execute(() -> {
             try {
                 if (OsUtil.isLinux()) {
@@ -50,6 +77,9 @@ public final class Shell {
 
     /** Opens a terminal window in {@code dir}. */
     public static void openTerminal(Path dir, Consumer<String> onError) {
+        if (suppressed("terminal", dir)) {
+            return;
+        }
         Bg.IO.execute(() -> {
             try {
                 List<String> cmd = terminalCommand(dir, System.getenv("TERMINAL"), OsUtil::onPath);
@@ -103,6 +133,9 @@ public final class Shell {
 
     /** Shows the item selected in the OS file manager (falls back to opening its folder). */
     public static void reveal(Path p, Consumer<String> onError) {
+        if (suppressed("reveal", p)) {
+            return;
+        }
         Bg.IO.execute(() -> {
             try {
                 if (OsUtil.isWindows()) {

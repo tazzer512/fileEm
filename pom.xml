@@ -82,7 +82,7 @@
                 <artifactId>maven-surefire-plugin</artifactId>
                 <version>3.5.3</version>
                 <configuration>
-                    <argLine>-Djava.awt.headless=true -Dtestfx.robot=glass ${ui.test.args}</argLine>
+                    <argLine>-Djava.awt.headless=true -Dtestfx.robot=glass -Dfileem.noLaunch=true ${ui.test.args}</argLine>
                 </configuration>
             </plugin>
             <plugin>

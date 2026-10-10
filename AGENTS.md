@@ -23,6 +23,33 @@ Treat it as part of every change, not an afterthought:
   links not followed, and data never deleted before it's safely copied.
 - Tests use `@TempDir` only. Never touch real user folders or the real Trash (only test Trash
   with paths that don't exist), and never pass a real file system root to a delete or move.
+- Tests never start real programs. Surefire sets `-Dfileem.noLaunch=true`, which makes `Shell`
+  (open, terminal, reveal) only record requests in `Shell.launched()`; assert on that. Watch for
+  accidental double-clicks: a robot click right before a drag's press on the same item opens it
+  (this once opened `drag.txt` in the user's editor on every test run).
+
+## Shell commands: use rtk when available
+
+[rtk](https://github.com/rtk-ai/rtk) is a CLI proxy that trims command output before it reaches the
+agent's context (fewer tokens, same information). Use it where it helps, and fall back to the plain
+command when it isn't installed:
+
+- Check once per session: `command -v rtk`. If it's missing, run every command below without the
+  `rtk` prefix. Never install it or change hooks yourself; never make the build or scripts depend on it.
+- Where it pays off (noisy output): `rtk err mvn -q compile` (only errors/warnings),
+  `rtk git status|diff|log`, `rtk grep`/`rtk find` for searches with many hits, `rtk ls`/`rtk tree`,
+  `rtk log <file>`. Short, quiet commands gain nothing; plain is fine.
+- Maven tests: **don't** use `rtk test mvn test` (it keeps only the last lines, which are test log
+  noise, and drops the summary) or `rtk err` (a green run prints nothing). Filter instead; this
+  works with or without rtk:
+  `mvn test 2>&1 | grep -E "Tests run:|FAIL|ERROR\]|BUILD" | tail -15`
+  and rerun the failing class plainly (`mvn test -Dtest=Name`) to read a failure in full.
+- If filtered output hides something you need (a full stack trace, a complete diff before
+  committing), rerun the plain command, or `rtk proxy <cmd>` for unfiltered output. `rtk recall` can
+  show what a filter left out.
+- A Claude Code `PreToolUse` hook (`rtk hook claude`) may already rewrite Bash commands to rtk; then
+  plain commands are filtered automatically. `rtk gain` shows what it did.
+- Test results are still reported faithfully: the rules under "Tests are mandatory" apply unchanged.
 
 ## Build, run, test
 
@@ -32,13 +59,14 @@ Treat it as part of every change, not an afterthought:
 - `mvn javafx:run`: starts the app. It is a GUI; when running it non-interactively wrap it in
   `timeout` so it does not block.
 - `mvn -Pdist -DskipTests package`: native app via jpackage in `target/dist/app` (pom `dist`
-  profile; `os-*` profiles pick the JavaFX platform jars and icon format). JavaFX is linked into the
+  profile; it clears `target/dist` first, because jpackage refuses to overwrite an existing image and
+  `install-linux.sh` would then install the stale one; `os-*` profiles pick the JavaFX platform jars and icon format). JavaFX is linked into the
   runtime as modules, everything else stays on the classpath. `dist.modules` lists the JDK modules:
   jdeps finds most, but add ones only used reflectively or by name (`jdk.charsets` for IBM437,
   `jdk.localedata`). `tools/install-linux.sh` installs it per user with a `.desktop` entry named
   after the window class (`com.fileem.FileEmApp`; renaming `FileEmApp` breaks the dock icon,
   `PackagingTest` checks). Icons: `tools/make-icon.py` writes `src/packaging/` and the window icons.
-- `mvn test`: about 180 tests, a bit over a minute. UI tests run **headless on Monocle** (configured in
+- `mvn test`: about 190 tests, a bit over a minute. UI tests run **headless on Monocle** (configured in
   the pom's `headless-ui-tests` profile), so no display is needed.
   - `mvn test -Dtest=FileOperationTest`: a single class. `-Dtest='!MainWindowUiTest'` skips
     the slow UI tests while iterating, but run the full suite before finishing.
@@ -62,6 +90,7 @@ src/test/java/com/fileem/
                        ShellTest (terminal launch commands per platform), VolumesTest (listing,
                        eject commands, mount table parsing)
   ops/FileOperationTest  copy/move/delete/trash semantics + integrity on failure/cancel, pause/resume
+  util/EtaTest         time-left estimate: warm-up, steady rate, speed changes, reset on pause, wording
   util/BgTest          virtual-thread I/O never blocked by stuck jobs, cancel drops results,
                        operations run in parallel on platform threads
   ui/MainWindowUiTest  TestFX end-to-end: keyboard, dialogs, dual pane, clipboard, DnD, session,
@@ -262,7 +291,10 @@ tools/                                  make-icon.py, install-linux.sh (per-user
   `OperationUi.running()`). An operation still running after 350 ms gets a row in its owner's
   `ProgressWindow`; rows are removed when the operation ends and the window closes with the last
   one. Each row's Pause/Resume and Cancel act on that operation only; Escape is the cancel button
-  only while one row is shown; closing the window cancels all. Pause blocks the worker in
+  only while one row is shown; closing the window cancels all. Each row's speed and time left come
+  from `util/Eta` (sliding 10 s window, nothing before 2 s of measuring), sampled by the window's
+  1 s ticker (`ProgressWindow.tick(now)`, driven with a fake clock in tests); the row resets its
+  `Eta` while paused or asking, so waiting never reads as slow progress. Pause blocks the worker in
   `FileOperation.checkCancel` (every item and chunk), so new loops must call `checkCancel()`.
   **Conflicts are asked inline** in the operation's row (`OperationUi.askInProgressRow` →
   `ProgressWindow.ask`), never with a modal dialog: a modal `showAndWait` blocks the whole app, and

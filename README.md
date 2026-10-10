@@ -58,7 +58,9 @@ mvn test -Dheadless=false   # watch the UI tests run on screen
   live filter box with `*` / `?` wildcards, type-ahead find, auto-refresh when folder contents change.
 - **Operations** (copy, move, delete to Trash, permanent delete, compress, extract) each run on their
   own thread, all at the same time: starting one never stops or slows down the others. They share
-  one progress window, stacked, each with its own **Pause/Resume** and **Cancel**. Pausing stops at
+  one progress window, stacked, each with its own **Pause/Resume** and **Cancel**. Each row shows the
+  percentage, amount done, speed and **time left** (measured over the last 10 seconds, so it follows
+  changes in speed; no guess while paused or waiting for an answer). Pausing stops at
   the next file or 16 MB chunk. Name conflicts are asked right in the operation's progress row
   (Replace / Skip / Keep both, optionally for all), so the rest of the app and other operations keep
   working while a question waits. Quitting while operations run asks first, then stops them cleanly (no half-written files).

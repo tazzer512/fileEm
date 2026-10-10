@@ -5,8 +5,13 @@ import com.fileem.ops.FileOperation;
 import com.fileem.ops.FileOperation.Decision;
 import com.fileem.ops.FileOperation.Kind;
 import com.fileem.ops.FileOperation.Resolution;
+import com.fileem.util.Eta;
 import com.fileem.util.Formats;
+import javafx.animation.KeyFrame;
+import javafx.animation.Timeline;
 import javafx.beans.binding.Bindings;
+import javafx.beans.property.SimpleStringProperty;
+import javafx.beans.property.StringProperty;
 import javafx.css.PseudoClass;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
@@ -25,6 +30,7 @@ import javafx.stage.Stage;
 import javafx.scene.control.CheckBox;
 import javafx.scene.layout.GridPane;
 import javafx.stage.Window;
+import javafx.util.Duration;
 import org.kordamp.ikonli.javafx.FontIcon;
 
 import java.util.ArrayList;
@@ -46,6 +52,8 @@ final class ProgressWindow {
     private final Stage stage = new Stage();
     private final VBox rows = new VBox();
     private final Map<FileOperation, Row> shown = new LinkedHashMap<>();
+    /** Samples every row's progress once a second for its speed and time-left estimate. */
+    private final Timeline ticker = new Timeline(new KeyFrame(Duration.seconds(1), e -> tick(System.nanoTime())));
 
     private ProgressWindow(Window owner) {
         this.owner = owner;
@@ -58,6 +66,37 @@ final class ProgressWindow {
         stage.setScene(scene);
         stage.setResizable(false);
         stage.setOnCloseRequest(e -> List.copyOf(shown.keySet()).forEach(FileOperation::cancel));
+        ticker.setCycleCount(Timeline.INDEFINITE);
+        stage.setOnShown(e -> ticker.play());
+        stage.setOnHidden(e -> ticker.stop());
+    }
+
+    /** Updates every row's speed and time left (package-private: tests drive it with their own clock). */
+    void tick(long nowNanos) {
+        shown.values().forEach(r -> r.tick(nowNanos));
+    }
+
+    /** The progress line under {@code op}'s bar ("42%  ·  1.2 GB of 3 GB  ·  40 MB/s  ·  About 1 minute left"). */
+    String detailText(FileOperation op) {
+        Row r = shown.get(op);
+        return r == null ? null : r.detail.getText();
+    }
+
+    /**
+     * The progress line: percentage, amount, and (once known) speed and time left. Paused operations
+     * say so instead of guessing a time.
+     */
+    static String detailText(double progress, long done, long total, boolean bytes, boolean paused, String estimate) {
+        if (progress < 0) {
+            return "";
+        }
+        String amount = bytes ? Formats.size(done) + " of " + Formats.size(total)
+                : Formats.count(done) + " of " + Formats.count(total) + " items";
+        String text = String.format("%.0f%%   ·   %s", progress * 100, amount);
+        if (paused) {
+            return "Paused   ·   " + text;
+        }
+        return estimate == null || estimate.isEmpty() ? text : text + "   ·   " + estimate;
     }
 
     /** The progress window of {@code owner}, or null while no operation is shown there. */
@@ -204,6 +243,12 @@ final class ProgressWindow {
         private CompletableFuture<Decision> answer;
         final Button cancel = new Button("Cancel");
         final Button pause = new Button("Pause", Icons.icon("mdi2p-pause"));
+        final Label detail = new Label();
+        private final FileOperation op;
+        private final boolean bytes;
+        private final Eta eta = new Eta();
+        /** "40 MB/s   ·   About 1 minute left", or empty while unknown. */
+        private final StringProperty estimate = new SimpleStringProperty("");
 
         Row(FileOperation op, String title) {
             this.title = title;
@@ -222,19 +267,11 @@ final class ProgressWindow {
             bar.progressProperty().bind(op.progressProperty());
             bar.setMaxWidth(Double.MAX_VALUE);
 
-            boolean bytes = op.kind() != Kind.DELETE && op.kind() != Kind.TRASH;
-            Label detail = new Label();
-            detail.textProperty().bind(Bindings.createStringBinding(() -> {
-                double p = op.getProgress();
-                if (p < 0) {
-                    return "";
-                }
-                long d = (long) op.getWorkDone(), t = (long) op.getTotalWork();
-                String amount = bytes ? Formats.size(d) + " of " + Formats.size(t)
-                        : Formats.count(d) + " of " + Formats.count(t) + " items";
-                String text = String.format("%.0f%%   ·   %s", p * 100, amount);
-                return op.isPaused() ? "Paused   ·   " + text : text;
-            }, op.progressProperty(), op.pausedProperty()));
+            this.op = op;
+            bytes = op.kind() != Kind.DELETE && op.kind() != Kind.TRASH;
+            detail.textProperty().bind(Bindings.createStringBinding(() -> detailText(op.getProgress(),
+                    (long) op.getWorkDone(), (long) op.getTotalWork(), bytes, op.isPaused(), estimate.get()),
+                    op.progressProperty(), op.pausedProperty(), estimate));
 
             pause.setOnAction(e -> {
                 if (op.isPaused()) {
@@ -256,10 +293,27 @@ final class ProgressWindow {
             });
             Region spacer = new Region();
             HBox.setHgrow(spacer, Priority.ALWAYS);
-            HBox bottom = new HBox(8, detail, spacer, pause, cancel);
+            // the progress line gets its own row: with speed and time left it is too wide to share with the buttons
+            detail.setMaxWidth(Double.MAX_VALUE);
+            detail.setTextOverrun(OverrunStyle.LEADING_ELLIPSIS); // if it must be cut, keep the time left
+            HBox bottom = new HBox(8, spacer, pause, cancel);
             bottom.setAlignment(Pos.CENTER_LEFT);
 
-            box = new VBox(10, heading, current, bar, bottom);
+            box = new VBox(10, heading, current, bar, detail, bottom);
+        }
+
+        void tick(long nowNanos) {
+            // waiting is not slow progress: measure afresh once the operation moves again
+            if (op.isPaused() || question != null || op.getProgress() < 0 || op.isDone()) {
+                eta.reset();
+                estimate.set("");
+                return;
+            }
+            eta.sample(nowNanos, (long) op.getWorkDone());
+            double rate = eta.rate();
+            String left = Eta.format(eta.secondsLeft((long) op.getTotalWork()));
+            String speed = bytes && rate > 0 ? Formats.size((long) rate) + "/s" : "";
+            estimate.set(speed.isEmpty() || left.isEmpty() ? left : speed + "   ·   " + left);
         }
 
         void ask(OperationUi.Conflict c, CompletableFuture<Decision> next) {

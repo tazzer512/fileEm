@@ -3,6 +3,7 @@ package com.fileem.ui;
 import com.fileem.Autosave;
 import com.fileem.Session;
 import com.fileem.fs.FileEntry;
+import com.fileem.fs.Shell;
 import com.fileem.ops.FileOperation;
 import com.fileem.util.OsUtil;
 import javafx.concurrent.Worker;
@@ -1248,6 +1249,46 @@ class MainWindowUiTest {
     }
 
     @Test
+    void theProgressLineShowsSpeedAndTimeLeftOnceKnown() {
+        assertEquals("", ProgressWindow.detailText(-1, 0, 0, true, false, ""), "nothing while counting");
+        assertEquals("25%   ·   1.00 KB of 4.00 KB",
+                ProgressWindow.detailText(0.25, 1024, 4096, true, false, ""), "no estimate yet");
+        assertEquals("25%   ·   1.00 KB of 4.00 KB   ·   2.00 MB/s   ·   About 5 seconds left",
+                ProgressWindow.detailText(0.25, 1024, 4096, true, false, "2.00 MB/s   ·   About 5 seconds left"));
+        assertEquals("Paused   ·   50%   ·   2 of 4 items",
+                ProgressWindow.detailText(0.5, 2, 4, false, true, "About 5 seconds left"), "no guess while paused");
+    }
+
+    @Test
+    void noTimeLeftIsGuessedForAStalledOrPausedOperation(FxRobot robot) throws Exception {
+        var release = new CountDownLatch(1);
+        try {
+            var op = blockedCopy("eta", release, true); // stuck waiting in its conflict handler: no progress
+            waitUntil("row shown", () -> ProgressWindow.of(stage) != null
+                    && ProgressWindow.of(stage).operations().contains(op));
+            ProgressWindow w = fx(() -> ProgressWindow.of(stage));
+            long s = 1_000_000_000L;
+            for (int i = 0; i < 15; i++) {
+                long now = (100 + i) * s;
+                robot.interact(() -> w.tick(now));
+            }
+            String stalled = fx(() -> w.detailText(op));
+            assertFalse(stalled.contains("left") || stalled.contains("/s"), stalled);
+
+            robot.interact(op::pause);
+            for (int i = 15; i < 30; i++) {
+                long now = (100 + i) * s;
+                robot.interact(() -> w.tick(now));
+            }
+            String paused = fx(() -> w.detailText(op));
+            assertTrue(paused.startsWith("Paused") && !paused.contains("left"), paused);
+            robot.interact(op::resume);
+        } finally {
+            release.countDown();
+        }
+    }
+
+    @Test
     void pauseButtonPausesAndResumesAnOperation(FxRobot robot) throws Exception {
         var release = new CountDownLatch(1);
         try {
@@ -1561,16 +1602,29 @@ class MainWindowUiTest {
     }
 
     @Test
+    void openingAFileInTestsIsRecordedInsteadOfLaunchingARealProgram(FxRobot robot) throws Exception {
+        Path dir = folderWith("openrec", "note.txt");
+        FileTab tab = leftTab();
+        open(robot, tab, dir);
+        select(robot, tab, "note.txt");
+        Shell.clearLaunched();
+        robot.interact(window::openSelection);
+        assertEquals(List.of("open " + dir.resolve("note.txt")), Shell.launched());
+    }
+
+    @Test
     void dragAFileOntoAFolderInTheGrid(FxRobot robot) throws Exception {
         Path dir = folderWith("griddnd", "into/", "drag.txt");
         FileTab tab = leftTab();
         open(robot, tab, dir);
         setView(robot, tab, ViewMode.TILES);
-        robot.clickOn(itemPoint(tab, "drag.txt"));
+        Shell.clearLaunched();
+        // one press only: a click right before the drag's press would be a double-click, which opens the file
         robot.drag(itemPoint(tab, "drag.txt"), javafx.scene.input.MouseButton.PRIMARY).dropTo(itemPoint(tab, "into"));
         answerDrop(robot, "Move");
         waitUntil("moved into folder", () -> Files.exists(dir.resolve("into/drag.txt"))
                 && !Files.exists(dir.resolve("drag.txt")));
+        assertEquals(List.of(), Shell.launched(), "dragging never opens the file");
     }
 
     @Test
