@@ -38,7 +38,7 @@ Treat it as part of every change, not an afterthought:
   `jdk.localedata`). `tools/install-linux.sh` installs it per user with a `.desktop` entry named
   after the window class (`com.fileem.FileEmApp`; renaming `FileEmApp` breaks the dock icon,
   `PackagingTest` checks). Icons: `tools/make-icon.py` writes `src/packaging/` and the window icons.
-- `mvn test`: about 170 tests, a bit over a minute. UI tests run **headless on Monocle** (configured in
+- `mvn test`: about 180 tests, a bit over a minute. UI tests run **headless on Monocle** (configured in
   the pom's `headless-ui-tests` profile), so no display is needed.
   - `mvn test -Dtest=FileOperationTest`: a single class. `-Dtest='!MainWindowUiTest'` skips
     the slow UI tests while iterating, but run the full suite before finishing.
@@ -58,13 +58,15 @@ src/test/java/com/fileem/
   ui/ThemeTest         theme sheets parse, both modes define all colors, live restyling
   ui/IconsTest         app icon sizes load; dialogs get the icon
   util/                NaturalOrderTest, FormatsTest (fixes Locale.US), FsUtilTest
-  fs/                  FileEntryTest, FileTypesTest, VolumesTest, DirWatcherTest,
-                       ShellTest (terminal launch commands per platform)
+  fs/                  FileEntryTest, FileTypesTest, DirWatcherTest,
+                       ShellTest (terminal launch commands per platform), VolumesTest (listing,
+                       eject commands, mount table parsing)
   ops/FileOperationTest  copy/move/delete/trash semantics + integrity on failure/cancel, pause/resume
   util/BgTest          virtual-thread I/O never blocked by stuck jobs, cancel drops results,
                        operations run in parallel on platform threads
   ui/MainWindowUiTest  TestFX end-to-end: keyboard, dialogs, dual pane, clipboard, DnD, session,
                        autosave, rubber-band selection, stacked progress window (pause/cancel),
+                       eject (menu/button, tabs leave first, refused while busy, errors),
                        view modes (menu, keys, wheel, grid mouse/keys/box/DnD/menus, thumbnails)
 ```
 
@@ -282,6 +284,17 @@ tools/                                  make-icon.py, install-linux.sh (per-user
   on the table. A press on a row's name (icon + text, plus a few pixels of slack) drags files; anywhere else (empty space, other columns) starts the box. Rows are tracked in
   content coordinates (index × row height) so autoscroll keeps the anchor. Shift adds, Ctrl/Cmd
   toggles.
+- **Eject** (`Volumes.eject`, `MainWindow.eject`): `Volume.ejectable` marks drives people plug in
+  (Linux: on a USB/MMC bus per sysfs, or mounted by the desktop under `/media`, `/run/media`; not
+  internal disks under `/mnt`. Windows: `volume:isRemovable`/`isCdrom`. macOS: `/Volumes`). The
+  tree shows an eject button and an *Eject* menu item for them (`TreeNode.ejectable`). The whole
+  drive goes, like Windows/macOS: `Volumes.sameDrive` finds its other mounted partitions (sysfs
+  parent disk). Ejecting is refused while a running operation uses any of them, moves tabs on them
+  to home first and waits for them to leave (open folders and watchers keep a drive busy), then
+  runs the blocking eject on `Bg`. Linux: `udisksctl unmount` each partition + `power-off` the
+  disk (a failed power-off still counts: the data is safe), else `gio mount --eject`, else
+  `umount`. Tests swap the real eject with `MainWindow.setEjector` (`drive` + `eject`) and show
+  fake drives via `FolderTree.syncVolumes`; never eject for real.
 - **Bookmarks**: one `Bookmarks` model per `MainWindow`, shared by both trees. The tree's
   Bookmarks section (`TreeNode.Kind.BOOKMARK_HEADER` / `BOOKMARK`) mirrors it via `syncBookmarks`
   and is hidden while empty. Bookmark items are lazy `FolderItem`s like volumes, but `reveal`

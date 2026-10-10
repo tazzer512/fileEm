@@ -6,12 +6,14 @@ import com.fileem.Session;
 import com.fileem.fs.FileEntry;
 import com.fileem.fs.Shell;
 import com.fileem.fs.Trash;
+import com.fileem.fs.Volumes;
 import com.fileem.ops.FileClipboard;
 import com.fileem.ops.FileOperation;
 import com.fileem.ops.FileOperation.Kind;
 import com.fileem.util.Bg;
 import com.fileem.util.FsUtil;
 import com.fileem.util.OsUtil;
+import javafx.animation.PauseTransition;
 import javafx.application.Platform;
 import javafx.beans.property.BooleanProperty;
 import javafx.beans.property.SimpleBooleanProperty;
@@ -45,6 +47,7 @@ import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
 import javafx.scene.layout.Region;
 import javafx.stage.Stage;
+import javafx.util.Duration;
 import org.kordamp.ikonli.javafx.FontIcon;
 
 import java.io.IOException;
@@ -53,6 +56,7 @@ import java.nio.file.Files;
 import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -1011,7 +1015,125 @@ public final class MainWindow extends BorderPane {
         items.add(new SeparatorMenuItem());
         items.add(item("Copy path", "mdi2c-clipboard-text-outline", () -> copyPaths(List.of(dir))));
         items.add(item("Properties", "mdi2i-information-outline", () -> properties(List.of(dir))));
+        if (volume && node.ejectable()) {
+            items.add(new SeparatorMenuItem());
+            MenuItem eject = item("Eject", "mdi2e-eject", () -> eject(dir, node.label()));
+            eject.setDisable(isEjecting(dir));
+            items.add(eject);
+        }
         return items;
+    }
+
+    // ---- eject ----
+
+    /** Ejects drives; both methods block and run on a background thread. Replaceable for tests. */
+    interface Ejector {
+        /** Every mount point that goes away with the drive holding {@code root}, {@code root} first. */
+        default List<Path> drive(Path root) {
+            return List.of(root);
+        }
+
+        void eject(List<Path> roots) throws Exception;
+    }
+
+    private Ejector ejector = new Ejector() {
+        @Override
+        public List<Path> drive(Path root) {
+            return Volumes.sameDrive(root);
+        }
+
+        @Override
+        public void eject(List<Path> roots) throws IOException {
+            Volumes.eject(roots);
+        }
+    };
+    private final Set<Path> ejecting = new HashSet<>();
+
+    void setEjector(Ejector e) {
+        ejector = e;
+    }
+
+    boolean isEjecting(Path root) {
+        return ejecting.contains(root);
+    }
+
+    /**
+     * Safely removes the drive at {@code root}, with all its other mounted partitions (the whole
+     * drive goes, as in Windows and macOS). Refused while a file operation uses it. Tabs showing a
+     * folder on it move to the home folder first (an open folder can keep the drive busy: watchers,
+     * listings); then it is unmounted and powered off in the background.
+     */
+    void eject(Path root, String label) {
+        if (ejecting.contains(root)) {
+            return;
+        }
+        ejecting.add(root);
+        refreshTrees();
+        Bg.run(() -> ejector.drive(root), roots -> {
+            for (FileOperation op : OperationUi.running()) {
+                boolean uses = roots.stream().anyMatch(r -> op.targetDir() != null && op.targetDir().startsWith(r)
+                        || op.sources().stream().anyMatch(p -> p.startsWith(r)));
+                if (uses) {
+                    ejectFinished(List.of(root));
+                    Dialogs.error(stage, "Eject", "\"" + label + "\" is in use by a running file operation.\n"
+                            + "Wait for it to finish or cancel it, then try again.");
+                    return;
+                }
+            }
+            ejecting.addAll(roots);
+            refreshTrees();
+            List<FileTab> leaving = new ArrayList<>();
+            for (ExplorerSide s : List.of(left, right)) {
+                for (FileTab t : s.tabs()) {
+                    if (onAny(t.currentDir(), roots)) {
+                        t.navigateTo(OsUtil.home());
+                        leaving.add(t);
+                    }
+                }
+            }
+            whenLeft(leaving, roots, 50, () -> Bg.run(() -> {
+                ejector.eject(roots);
+                return roots;
+            }, done -> {
+                ejectFinished(roots);
+                Volumes.pollNow();
+                Dialogs.info(stage, "Eject", (roots.size() == 1 ? "\"" + label + "\""
+                        : "The drive with " + roots.stream().map(r -> "\"" + FsUtil.displayName(r) + "\"")
+                        .collect(Collectors.joining(" and "))) + " can now be safely removed.");
+            }, err -> {
+                ejectFinished(roots);
+                Dialogs.error(stage, "Eject", "Cannot eject \"" + label + "\":\n" + err.getMessage());
+            }));
+        }, err -> {
+            ejectFinished(List.of(root));
+            Dialogs.error(stage, "Eject", "Cannot eject \"" + label + "\":\n" + err.getMessage());
+        });
+    }
+
+    private static boolean onAny(Path dir, List<Path> roots) {
+        return dir != null && roots.stream().anyMatch(dir::startsWith);
+    }
+
+    private void refreshTrees() {
+        left.tree().refresh();
+        right.tree().refresh();
+    }
+
+    /** Runs {@code then} once no tab in {@code tabs} shows a folder on {@code roots} (or after {@code tries} × 100 ms). */
+    private void whenLeft(List<FileTab> tabs, List<Path> roots, int tries, Runnable then) {
+        boolean gone = tabs.stream().noneMatch(t -> onAny(t.currentDir(), roots));
+        if (gone || tries <= 0) {
+            then.run();
+            return;
+        }
+        PauseTransition wait = new PauseTransition(Duration.millis(100));
+        wait.setOnFinished(e -> whenLeft(tabs, roots, tries - 1, then));
+        wait.play();
+    }
+
+    private void ejectFinished(List<Path> roots) {
+        ejecting.removeAll(roots);
+        refreshTrees();
     }
 
     List<MenuItem> bookmarksHeaderMenuItems() {

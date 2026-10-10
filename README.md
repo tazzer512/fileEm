@@ -37,6 +37,12 @@ mvn test -Dheadless=false   # watch the UI tests run on screen
 
 - **Folder tree**: Quick access (Home, Desktop, Documents, … including localized XDG folders on Linux)
   and all volumes/mounts with free space. Removable drives show up automatically (polled every 5 s).
+- **Safely remove drives**: USB sticks, SD cards and external disks get an eject button next to
+  their name in the tree (also *Eject* in their right-click menu). The whole drive is ejected, with
+  all its partitions. fileEm first moves tabs off it, refuses while a copy or move still uses it,
+  then unmounts it (writing out everything cached) and powers it off, and tells you when it can be
+  unplugged. Linux uses `udisksctl` (or
+  `gio`, else `umount`), macOS `diskutil eject`, Windows Explorer's Eject.
 - **Bookmarks**: Ctrl+D (or the bookmark button) bookmarks the current folder; bookmarks appear
   in their own tree section on both sides. Right-click a bookmark to rename, reorder or remove it,
   or use *Manage bookmarks* (Ctrl+Shift+B). Bookmarks are saved immediately.

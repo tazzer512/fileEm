@@ -6,7 +6,6 @@ import javafx.application.Platform;
 
 import java.awt.Desktop;
 import java.io.IOException;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -53,7 +52,7 @@ public final class Shell {
     public static void openTerminal(Path dir, Consumer<String> onError) {
         Bg.IO.execute(() -> {
             try {
-                List<String> cmd = terminalCommand(dir, System.getenv("TERMINAL"), Shell::onPath);
+                List<String> cmd = terminalCommand(dir, System.getenv("TERMINAL"), OsUtil::onPath);
                 if (cmd == null) {
                     throw new IOException("No terminal application was found. Set the TERMINAL environment variable.");
                 }
@@ -143,19 +142,6 @@ public final class Shell {
      */
     static String showItemsArgument(Path p) {
         return "['" + p.toUri().toString().replace("'", "%27") + "']";
-    }
-
-    private static boolean onPath(String program) {
-        String path = System.getenv("PATH");
-        if (path == null) {
-            return false;
-        }
-        for (String dir : path.split(java.io.File.pathSeparator)) {
-            if (!dir.isEmpty() && Files.isExecutable(Path.of(dir, program))) {
-                return true;
-            }
-        }
-        return false;
     }
 
     private static void report(Exception e, Consumer<String> onError) {

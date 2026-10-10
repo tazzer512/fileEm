@@ -146,6 +146,21 @@
     -fx-font-size: 0.85em;
 }
 
+/* eject button on removable drives: compact, so the row keeps its height */
+.folder-tree .eject-button {
+    -fx-padding: 0 3 0 3;
+    -fx-min-height: 0;
+    -fx-pref-height: 18;
+}
+
+.folder-tree .eject-button .ikonli-font-icon {
+    -fx-icon-color: -color-fg-muted;
+}
+
+.folder-tree .eject-button:hover .ikonli-font-icon {
+    -fx-icon-color: -color-accent-fg;
+}
+
 .folder-tree .tree-cell.context-target {
     -fx-border-color: -color-accent-emphasis;
     -fx-border-width: 1;

@@ -1,5 +1,6 @@
 package com.fileem.ui;
 
+import atlantafx.base.theme.Styles;
 import com.fileem.Bookmarks;
 import com.fileem.fs.Volumes;
 import com.fileem.fs.Volumes.Volume;
@@ -12,6 +13,7 @@ import javafx.collections.ListChangeListener;
 import javafx.collections.ObservableList;
 import javafx.css.PseudoClass;
 import javafx.geometry.Pos;
+import javafx.scene.control.Button;
 import javafx.scene.control.ContextMenu;
 import javafx.scene.control.Label;
 import javafx.scene.control.TreeCell;
@@ -172,7 +174,8 @@ final class FolderTree extends TreeView<TreeNode> {
 
     // ---- volumes ----
 
-    private void syncVolumes(List<Volume> volumes) {
+    /** Shows {@code volumes} under the Computer header (package-private: tests pass their own). */
+    void syncVolumes(List<Volume> volumes) {
         Map<Path, FolderItem> existing = new HashMap<>();
         for (TreeItem<TreeNode> c : volumesHeader.getChildren()) {
             existing.put(c.getValue().path(), (FolderItem) c);
@@ -186,7 +189,8 @@ final class FolderTree extends TreeView<TreeNode> {
             };
             String extra = v.free() >= 0 && v.total() > 0
                     ? Formats.size(v.free()) + " free of " + Formats.size(v.total()) : null;
-            TreeNode node = new TreeNode(TreeNode.Kind.VOLUME, v.root(), v.label(), icon, "icon-volume", extra);
+            TreeNode node = new TreeNode(TreeNode.Kind.VOLUME, v.root(), v.label(), icon, "icon-volume", extra,
+                    v.ejectable());
             FolderItem item = existing.get(v.root());
             if (item == null) {
                 item = new FolderItem(node);
@@ -421,13 +425,25 @@ final class FolderTree extends TreeView<TreeNode> {
         private final FontIcon icon = Icons.icon("mdi2f-folder");
         private final Label name = new Label();
         private final Label extra = new Label();
-        private final HBox box = new HBox(6, icon, name, extra);
+        private final Button eject = new Button(null, Icons.icon("mdi2e-eject", 14));
+        private final HBox box = new HBox(6, icon, name, eject, extra); // eject before the free space, which gets cut off first
         private final javafx.scene.control.Tooltip tooltip = new javafx.scene.control.Tooltip();
 
         FolderCell() {
             box.setAlignment(Pos.CENTER_LEFT);
             extra.getStyleClass().add("tree-extra");
             name.setMinWidth(0);
+            eject.getStyleClass().addAll(Styles.BUTTON_ICON, Styles.FLAT, "eject-button");
+            eject.setFocusTraversable(false);
+            eject.setTooltip(new javafx.scene.control.Tooltip("Eject (safely remove)"));
+            // a press must not reach the cell: selecting the drive would navigate onto it
+            eject.addEventHandler(MouseEvent.MOUSE_PRESSED, MouseEvent::consume);
+            eject.setOnAction(e -> {
+                TreeNode n = getItem();
+                if (n != null && n.ejectable()) {
+                    main.eject(n.path(), n.label());
+                }
+            });
 
             ContextMenu menu = Views.dynamicContextMenu(this, () -> {
                 TreeNode n = getItem();
@@ -498,9 +514,14 @@ final class FolderTree extends TreeView<TreeNode> {
                 Icons.apply(icon, n.icon(), n.iconClass());
             }
             name.setText(n.label());
-            extra.setText(n.extra() == null ? "" : n.extra());
-            extra.setVisible(n.extra() != null);
-            extra.setManaged(n.extra() != null);
+            boolean ejecting = n.ejectable() && main.isEjecting(n.path());
+            String extraText = ejecting ? "Ejecting…" : n.extra();
+            extra.setText(extraText == null ? "" : extraText);
+            extra.setVisible(extraText != null);
+            extra.setManaged(extraText != null);
+            eject.setVisible(n.ejectable());
+            eject.setManaged(n.ejectable());
+            eject.setDisable(ejecting);
             if (getGraphic() != box) {
                 // setGraphic makes the skin re-run CSS on the disclosure arrow, so only when needed
                 setGraphic(box);

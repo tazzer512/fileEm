@@ -4,9 +4,13 @@ import com.fileem.util.FsUtil;
 
 import java.nio.file.Path;
 
-/** Value of a folder-tree item. */
-record TreeNode(Kind kind, Path path, String label, String icon, String iconClass, String extra) {
+/** Value of a folder-tree item. {@code ejectable}: a volume that can be safely removed (USB, SD card). */
+record TreeNode(Kind kind, Path path, String label, String icon, String iconClass, String extra, boolean ejectable) {
     enum Kind { HEADER, BOOKMARK_HEADER, QUICK, BOOKMARK, VOLUME, FOLDER, LOADING }
+
+    TreeNode(Kind kind, Path path, String label, String icon, String iconClass, String extra) {
+        this(kind, path, label, icon, iconClass, extra, false);
+    }
 
     static TreeNode folder(Path p) {
         return new TreeNode(Kind.FOLDER, p, FsUtil.displayName(p), "mdi2f-folder", "icon-folder", null);

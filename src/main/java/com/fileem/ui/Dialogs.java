@@ -57,6 +57,17 @@ public final class Dialogs {
         return a.showAndWait().filter(b -> b == move || b == copy).map(b -> b == move);
     }
 
+    /** A short notice that doesn't block (the app stays usable while it shows). */
+    static Alert info(Window owner, String title, String message) {
+        Alert a = new Alert(Alert.AlertType.INFORMATION, message, ButtonType.OK);
+        prepare(a, owner);
+        a.initModality(javafx.stage.Modality.NONE);
+        a.setTitle(title);
+        a.setHeaderText(null);
+        a.show();
+        return a;
+    }
+
     public static void error(Window owner, String title, String message) {
         Alert a = new Alert(Alert.AlertType.ERROR, message, ButtonType.OK);
         prepare(a, owner);

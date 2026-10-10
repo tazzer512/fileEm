@@ -24,6 +24,7 @@ import org.testfx.framework.junit5.ApplicationExtension;
 import org.testfx.framework.junit5.Start;
 import org.testfx.util.WaitForAsyncUtils;
 
+import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
@@ -1047,6 +1048,140 @@ class MainWindowUiTest {
         for (String forbidden : List.of("Cut", "Copy", "Rename…", "Delete permanently", "Compress to ZIP")) {
             assertFalse(hasCommand(vol, forbidden), forbidden + " must not be offered for a drive");
         }
+    }
+
+    // ---- eject ----
+
+    /** Content texts of the open dialogs. */
+    private List<String> dialogTexts() {
+        return fx(() -> otherWindows(stage).stream()
+                .filter(w -> w.isShowing() && w.getScene() != null
+                        && w.getScene().getRoot() instanceof javafx.scene.control.DialogPane)
+                .map(w -> ((javafx.scene.control.DialogPane) w.getScene().getRoot()).getContentText())
+                .filter(java.util.Objects::nonNull).toList());
+    }
+
+    /** Shows a fake removable drive at {@code root} in the left tree. */
+    private TreeNode fakeDrive(FxRobot robot, Path root) {
+        var vol = new com.fileem.fs.Volumes.Volume(root, "STICK", com.fileem.fs.Volumes.Kind.REMOVABLE, 1, 2, true);
+        robot.interact(() -> window.left().tree().syncVolumes(List.of(vol)));
+        return new TreeNode(TreeNode.Kind.VOLUME, root, "STICK", "mdi2u-usb-flash-drive", "icon-volume", null, true);
+    }
+
+    @Test
+    void onlyRemovableDrivesOfferEject(FxRobot robot) throws Exception {
+        Path root = Files.createDirectories(tmp.resolve("stick"));
+        TreeNode drive = fakeDrive(robot, root);
+        assertTrue(hasCommand(fx(() -> window.treeMenuItems(drive)), "Eject"));
+        TreeNode disk = new TreeNode(TreeNode.Kind.VOLUME, root, "Disk", "mdi2h-harddisk", "icon-volume", null);
+        assertFalse(hasCommand(fx(() -> window.treeMenuItems(disk)), "Eject"));
+        assertFalse(hasCommand(fx(() -> window.treeMenuItems(TreeNode.folder(root))), "Eject"));
+        // the drive's row in the tree has an eject button (scrolled into view: rows are virtualized)
+        robot.interact(() -> {
+            FolderTree tree = window.left().tree();
+            for (var header : tree.getRoot().getChildren()) {
+                for (var item : header.getChildren()) {
+                    if (root.equals(item.getValue().path())) {
+                        tree.scrollTo(tree.getRow(item));
+                    }
+                }
+            }
+        });
+        waitUntil("eject button shown", () -> robot.lookup(".eject-button").queryAll().stream()
+                .anyMatch(n -> n.isVisible() && n.getScene() == stage.getScene()));
+    }
+
+    @Test
+    void ejectMovesTabsOffTheDriveFirstThenEjectsAndConfirms(FxRobot robot) throws Exception {
+        Path root = Files.createDirectories(tmp.resolve("stick2/photos"));
+        Path driveRoot = root.getParent();
+        TreeNode drive = fakeDrive(robot, driveRoot);
+        FileTab tab = leftTab();
+        open(robot, tab, root);
+        List<Path> ejected = new java.util.concurrent.CopyOnWriteArrayList<>();
+        List<Path> tabDirWhenEjecting = new java.util.concurrent.CopyOnWriteArrayList<>();
+        CountDownLatch release = new CountDownLatch(1);
+        robot.interact(() -> window.setEjector(r -> {
+            tabDirWhenEjecting.add(WaitForAsyncUtils.asyncFx(tab::currentDir).get());
+            release.await();
+            ejected.addAll(r);
+        }));
+
+        fireMenuItem(fx(() -> window.treeMenuItems(drive)), "Eject");
+        waitUntil("ejecting", () -> !tabDirWhenEjecting.isEmpty());
+        assertFalse(tabDirWhenEjecting.get(0).startsWith(driveRoot), "the tab left the drive before ejecting");
+        assertTrue(fx(() -> window.isEjecting(driveRoot)));
+        assertTrue(fx(() -> window.treeMenuItems(drive).stream()
+                .anyMatch(i -> "Eject".equals(i.getText()) && i.isDisable())), "no second eject meanwhile");
+
+        release.countDown();
+        waitUntil("safe to remove notice", () -> dialogTexts().stream().anyMatch(t -> t.contains("can now be safely removed")));
+        assertEquals(List.of(driveRoot), ejected);
+        assertFalse(fx(() -> window.isEjecting(driveRoot)));
+        robot.clickOn("OK");
+    }
+
+    @Test
+    void ejectIsRefusedWhileAnOperationUsesTheDrive(FxRobot robot) throws Exception {
+        var release = new CountDownLatch(1);
+        try {
+            FileOperation op = blockedCopy("busy", release);
+            TreeNode drive = fakeDrive(robot, op.targetDir());
+            List<Path> ejected = new java.util.concurrent.CopyOnWriteArrayList<>();
+            robot.interact(() -> window.setEjector(ejected::addAll));
+            waitUntil("operation running", () -> OperationUi.running().contains(op));
+
+            fireMenuItem(fx(() -> window.treeMenuItems(drive)), "Eject");
+            waitUntil("refusal shown", () -> dialogTexts().stream().anyMatch(t -> t.contains("in use by a running file operation")));
+            assertTrue(ejected.isEmpty(), "nothing was ejected");
+            assertFalse(fx(() -> window.isEjecting(op.targetDir())));
+            robot.clickOn("OK");
+        } finally {
+            release.countDown();
+        }
+    }
+
+    @Test
+    void ejectRemovesTheWholeDriveAndMovesTabsOffEveryPartition(FxRobot robot) throws Exception {
+        Path photos = Files.createDirectories(tmp.resolve("photos"));
+        Path storage = Files.createDirectories(tmp.resolve("storage/sub"));
+        Path storageRoot = storage.getParent();
+        TreeNode drive = fakeDrive(robot, photos);
+        FileTab tab = leftTab();
+        open(robot, tab, storage); // a tab on the other partition of the same drive
+        List<List<Path>> ejected = new java.util.concurrent.CopyOnWriteArrayList<>();
+        List<Path> tabDirWhenEjecting = new java.util.concurrent.CopyOnWriteArrayList<>();
+        robot.interact(() -> window.setEjector(new MainWindow.Ejector() {
+            @Override
+            public List<Path> drive(Path root) {
+                return List.of(photos, storageRoot);
+            }
+
+            @Override
+            public void eject(List<Path> roots) throws Exception {
+                tabDirWhenEjecting.add(WaitForAsyncUtils.asyncFx(tab::currentDir).get());
+                ejected.add(roots);
+            }
+        }));
+        fireMenuItem(fx(() -> window.treeMenuItems(drive)), "Eject");
+        waitUntil("notice", () -> dialogTexts().stream().anyMatch(t -> t.contains("can now be safely removed")));
+        assertEquals(List.of(List.of(photos, storageRoot)), ejected);
+        assertFalse(tabDirWhenEjecting.get(0).startsWith(storageRoot), "the tab left the other partition first");
+        assertTrue(dialogTexts().stream().anyMatch(t -> t.contains("\"photos\" and \"storage\"")), dialogTexts().toString());
+        robot.clickOn("OK");
+    }
+
+    @Test
+    void aFailedEjectShowsTheReasonAndCanBeRetried(FxRobot robot) throws Exception {
+        Path root = Files.createDirectories(tmp.resolve("stick3"));
+        TreeNode drive = fakeDrive(robot, root);
+        robot.interact(() -> window.setEjector(r -> {
+            throw new IOException("The drive is in use.");
+        }));
+        fireMenuItem(fx(() -> window.treeMenuItems(drive)), "Eject");
+        waitUntil("error shown", () -> dialogTexts().stream().anyMatch(t -> t.contains("The drive is in use.")));
+        assertFalse(fx(() -> window.isEjecting(root)), "can be tried again");
+        robot.clickOn("OK");
     }
 
     @Test
