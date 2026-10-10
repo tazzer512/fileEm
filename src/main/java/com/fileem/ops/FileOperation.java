@@ -4,6 +4,8 @@ import com.fileem.fs.Trash;
 import com.fileem.util.Formats;
 import com.fileem.util.FsUtil;
 import com.fileem.util.OsUtil;
+import javafx.beans.property.ReadOnlyBooleanProperty;
+import javafx.beans.property.ReadOnlyBooleanWrapper;
 import javafx.concurrent.Task;
 
 import java.io.BufferedOutputStream;
@@ -35,7 +37,11 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Enumeration;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ThreadLocalRandom;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.locks.Condition;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 import java.util.zip.ZipOutputStream;
@@ -94,6 +100,21 @@ public final class FileOperation extends Task<Void> {
     private Charset zipCharset = StandardCharsets.UTF_8;
     private long done;
 
+    /**
+     * Pausing: the worker blocks at its next cancel check until resumed or cancelled. A Lock rather
+     * than synchronized/wait, so a waiting worker never pins a carrier if it runs on a virtual thread.
+     */
+    private final ReentrantLock pauseLock = new ReentrantLock();
+    private final Condition unpaused = pauseLock.newCondition();
+    /** Opens when call() has returned, i.e. after cleanup of a cancelled or failed run. */
+    private final CountDownLatch finished = new CountDownLatch(1);
+    private volatile boolean started;
+    private final ReadOnlyBooleanWrapper pausedState = new ReadOnlyBooleanWrapper(this, "paused");
+    private volatile boolean paused;
+    private volatile boolean waitingWhilePaused;
+    /** The last message, readable on the worker thread (Task.getMessage is FX-thread only). */
+    private String lastMessage = "";
+
     private static final class Cancelled extends RuntimeException {
         Cancelled() {
             super(null, null, false, false);
@@ -124,6 +145,64 @@ public final class FileOperation extends Task<Void> {
         return targetDir;
     }
 
+    /**
+     * Pauses the operation: it stops at the next item or chunk (a file under 8 MB being copied is
+     * finished first) and waits, holding no locks on the files, until {@link #resume} or cancel.
+     * Call on the FX thread (it updates {@link #pausedProperty}).
+     */
+    public void pause() {
+        paused = true;
+        pausedState.set(true);
+    }
+
+    public void resume() {
+        pauseLock.lock();
+        try {
+            paused = false;
+            unpaused.signalAll();
+        } finally {
+            pauseLock.unlock();
+        }
+        pausedState.set(false);
+    }
+
+    public boolean isPaused() {
+        return paused;
+    }
+
+    public ReadOnlyBooleanProperty pausedProperty() {
+        return pausedState.getReadOnlyProperty();
+    }
+
+    /** Whether the worker is currently stopped at a pause point (it may still be finishing a step after pause()). */
+    public boolean isWaitingWhilePaused() {
+        return waitingWhilePaused;
+    }
+
+    @Override
+    public boolean cancel(boolean mayInterruptIfRunning) {
+        boolean cancelled = super.cancel(mayInterruptIfRunning);
+        pauseLock.lock();
+        try {
+            unpaused.signalAll(); // a paused worker wakes up and stops
+        } finally {
+            pauseLock.unlock();
+        }
+        return cancelled;
+    }
+
+    /**
+     * Waits until the worker has stopped, including the cleanup after a cancel (temp files removed,
+     * displaced items restored). Returns false on timeout. An operation that never started counts as
+     * stopped once it is cancelled or done.
+     */
+    public boolean awaitStopped(long timeout, TimeUnit unit) throws InterruptedException {
+        if (!started && isDone()) {
+            return true;
+        }
+        return finished.await(timeout, unit);
+    }
+
     /** One line per item that could not be processed. */
     public List<String> errors() {
         synchronized (errors) {
@@ -133,6 +212,15 @@ public final class FileOperation extends Task<Void> {
 
     @Override
     protected Void call() throws Exception {
+        started = true;
+        try {
+            return work();
+        } finally {
+            finished.countDown();
+        }
+    }
+
+    private Void work() throws Exception {
         updateMessage("Preparing…");
         try {
             List<Path> work = new ArrayList<>();
@@ -938,10 +1026,42 @@ public final class FileOperation extends Task<Void> {
         updateProgress(Math.min(done, total), total);
     }
 
+    /** The worker's checkpoint between items and chunks: stops when cancelled, waits while paused. */
     private void checkCancel() {
         if (isCancelled()) {
             throw new Cancelled();
         }
+        if (paused) {
+            waitWhilePaused();
+        }
+    }
+
+    @Override
+    protected void updateMessage(String message) {
+        lastMessage = message;
+        super.updateMessage(message);
+    }
+
+    private void waitWhilePaused() {
+        String message = lastMessage;
+        updateMessage("Paused");
+        pauseLock.lock();
+        try {
+            waitingWhilePaused = true;
+            while (paused && !isCancelled()) {
+                unpaused.await();
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new Cancelled();
+        } finally {
+            waitingWhilePaused = false;
+            pauseLock.unlock();
+        }
+        if (isCancelled()) {
+            throw new Cancelled();
+        }
+        updateMessage(message);
     }
 
     private void error(Path p, IOException e) {

@@ -27,7 +27,6 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.function.Function;
@@ -40,8 +39,6 @@ final class FileTable extends TableView<FileEntry> {
     private final MainWindow main;
     private final FileTab tab;
     private final Marquee marquee;
-    private final StringBuilder typeAhead = new StringBuilder();
-    private long lastTyped;
 
     FileTable(MainWindow main, FileTab tab) {
         this.main = main;
@@ -77,7 +74,7 @@ final class FileTable extends TableView<FileEntry> {
         restoreColumns(main.session());
 
         setRowFactory(tv -> new FileRow());
-        addEventHandler(KeyEvent.KEY_TYPED, this::onKeyTyped);
+        addEventHandler(KeyEvent.KEY_TYPED, tab::typeAhead);
         marquee = new Marquee(this);
 
         Views.dynamicContextMenu(this, () -> main.fileMenuItems(tab));
@@ -146,37 +143,6 @@ final class FileTable extends TableView<FileEntry> {
 
     void ensureVisible(int index) {
         Views.ensureVisible(this, index);
-    }
-
-    private void onKeyTyped(KeyEvent e) {
-        String ch = e.getCharacter();
-        if (ch.isEmpty() || e.isControlDown() || e.isAltDown() || e.isMetaDown() || e.isShortcutDown()) {
-            return;
-        }
-        char c = ch.charAt(0);
-        if (Character.isISOControl(c)) {
-            return;
-        }
-        long now = System.currentTimeMillis();
-        if (now - lastTyped > 1000) {
-            typeAhead.setLength(0);
-        }
-        lastTyped = now;
-        if (typeAhead.isEmpty() && c == ' ') {
-            return;
-        }
-        typeAhead.append(ch);
-        String prefix = typeAhead.toString().toLowerCase(Locale.ROOT);
-        List<FileEntry> items = getItems();
-        for (int i = 0; i < items.size(); i++) {
-            if (items.get(i).name().toLowerCase(Locale.ROOT).startsWith(prefix)) {
-                getSelectionModel().clearAndSelect(i);
-                getFocusModel().focus(i);
-                ensureVisible(i);
-                break;
-            }
-        }
-        e.consume();
     }
 
     // ---- column persistence ----

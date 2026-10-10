@@ -38,7 +38,7 @@ Treat it as part of every change, not an afterthought:
   `jdk.localedata`). `tools/install-linux.sh` installs it per user with a `.desktop` entry named
   after the window class (`com.fileem.FileEmApp`; renaming `FileEmApp` breaks the dock icon,
   `PackagingTest` checks). Icons: `tools/make-icon.py` writes `src/packaging/` and the window icons.
-- `mvn test`: about 130 tests, a bit over a minute. UI tests run **headless on Monocle** (configured in
+- `mvn test`: about 160 tests, a bit over a minute. UI tests run **headless on Monocle** (configured in
   the pom's `headless-ui-tests` profile), so no display is needed.
   - `mvn test -Dtest=FileOperationTest`: a single class. `-Dtest='!MainWindowUiTest'` skips
     the slow UI tests while iterating, but run the full suite before finishing.
@@ -59,9 +59,12 @@ src/test/java/com/fileem/
   ui/IconsTest         app icon sizes load; dialogs get the icon
   util/                NaturalOrderTest, FormatsTest (fixes Locale.US), FsUtilTest
   fs/                  FileEntryTest, FileTypesTest, VolumesTest, DirWatcherTest
-  ops/FileOperationTest  copy/move/delete/trash semantics + integrity on failure/cancel
+  ops/FileOperationTest  copy/move/delete/trash semantics + integrity on failure/cancel, pause/resume
+  util/BgTest          virtual-thread I/O never blocked by stuck jobs, cancel drops results,
+                       operations run in parallel on platform threads
   ui/MainWindowUiTest  TestFX end-to-end: keyboard, dialogs, dual pane, clipboard, DnD, session,
-                       autosave, rubber-band selection, stacked progress window
+                       autosave, rubber-band selection, stacked progress window (pause/cancel),
+                       view modes (menu, keys, wheel, grid mouse/keys/box/DnD/menus, thumbnails)
 ```
 
 - `FileOperation` is a JavaFX `Task`: call `op.run()` synchronously on the test thread, but read
@@ -93,6 +96,8 @@ src/test/java/com/fileem/
   resets it. Keep that reset.
 - Known flake: `rightClickInTheTreeShowsAMenuWithoutNavigating` has failed once on the outline
   check and passed on rerun. Rerun before digging in; fix it if it fails again.
+- Grid UI tests: switch with `tab.setViewMode(..)`, click items at `FileGrid.screenCenterOf(i)`,
+  read cells via `cellFor(i)` / `visibleIndices()` / `lanes()`.
 - `Autosave` and the shutdown hook are only started by `FileEmApp`; tests drive
   `Autosave.saveInBackground()` directly with a temp `Session`. Never let a test write
   `OsUtil.configDir()`.
@@ -119,7 +124,9 @@ com.fileem.ops      FileOperation (copy/move/delete/trash Task), FileClipboard
 com.fileem.ui       MainWindow (toolbar, F-key bar, ALL commands + key handling)
                     └ ExplorerSide ×2 (left/right): FolderTree + TabPane of FileTab
                        └ FileTab: AddressBar + filter + FileTable + status line
-                       └ FileTable + Marquee (rubber-band selection, autoscroll)
+                       └ FileTable + Marquee (Details view: rubber band, autoscroll)
+                       └ FileGrid (the other ViewModes: virtualized grid on the table's models)
+                         + Thumbnails (image thumbnail LRU)
                     OperationUi (starts operations, conflict dialog)
                     ProgressWindow (one per main window; a row with its own Cancel per running op)
                     PropertiesDialog, BookmarksDialog, Dialogs, Dnd, Theme, Icons, Views, TreeNode
@@ -170,9 +177,19 @@ tools/                                  make-icon.py, install-linux.sh (per-user
 
 ## Conventions & invariants
 
-- **Threading**: use `Bg.run(work, onSuccess, onError)`; callbacks arrive on the FX thread. Async
-  loads use a generation counter (`loadGeneration`, `revealToken`) to drop stale results: keep
-  that pattern.
+- **Threading** (`Bg`): short blocking I/O (listings, tree loads, free space, launching programs)
+  goes through `Bg.run(work, onSuccess, onError)` on **virtual threads** (`Bg.IO`, one per task, so
+  a hung network mount never delays anything else); callbacks arrive on the FX thread. It returns a
+  `Future`: cancel stale work (`FileTab.startLoad` cancels the previous listing) and call
+  `Bg.checkInterrupted()` in long loops. Cancelled work gets no callback. File operations run on
+  **platform threads** (`Bg.OPERATIONS`, one per operation, all in parallel): they are long and
+  sit in blocking file I/O, which pins virtual threads in JDK 21. Inside code that may run on a
+  virtual thread, block with `java.util.concurrent` locks, not `synchronized`/`wait` (pinning).
+  Async loads also use a generation counter (`loadGeneration`, `revealToken`) to drop stale
+  results: keep that pattern. A watcher refresh is skipped while a navigation is loading
+  (`navigating`), or it would replace the navigation's generation and drop it.
+- **No file system calls on the FX thread** in navigation paths, not even `Files.isRegularFile`:
+  on a dead network mount they hang the UI. Do them in the `Bg.run` job (see `FileTab.go`).
 - **Commands live in `MainWindow`** and act on the *active* side's active tab. Keyboard
   shortcuts are a single scene-level `KEY_PRESSED` **filter** (`MainWindow.onKey`), which skips
   most keys while a `TextInputControl` has focus. Add new shortcuts there, add them to the README
@@ -197,8 +214,12 @@ tools/                                  make-icon.py, install-linux.sh (per-user
   `MainWindow.fileMenuItems` / `treeMenuItems`; commands there take explicit paths so the tree and
   the list share them. Quick access, bookmark and volume tree items are shortcuts: no cut, rename,
   delete or duplicate. Right-click in the tree must not select (selection navigates).
-- **Drag & drop**: drops from other applications accept only COPY (a MOVE could let the source
-  delete originals before our async copy finishes). Keep `Dnd.canDrop` (check) separate from
+- **Drag & drop**: every drop goes through `MainWindow.drop` → `moveOrCopy`, which asks Move
+  (default) / Copy / Cancel after the drag ended (never show a dialog inside the drop event).
+  Internal drags are accepted as MOVE; drops from other applications are accepted as COPY even
+  when the user picks Move (our MOVE deletes sources itself, after copying; reporting MOVE could
+  let the source delete originals before our async copy finishes). In tests, answer with the
+  dialog's own buttons (`answerDrop`): the F-key bar also has "Move" and "Copy". Keep `Dnd.canDrop` (check) separate from
   `Dnd.accept` (check + accept modes): row handlers must not consume drops they can't handle.
 - **Cross-platform**: branch with `OsUtil.isWindows/isMac/isLinux`. Use `isShortcutDown()` for
   Ctrl/Cmd. Paths: compare with `Path.equals`/`startsWith` (case-insensitive on Windows), never
@@ -222,10 +243,28 @@ tools/                                  make-icon.py, install-linux.sh (per-user
   logout loses nothing. `Bookmarks` saves on every change. Writes are atomic (temp file + rename),
   and an older background write never replaces a newer save. New persisted state only needs to be
   put into the session from `saveSession` (or on change); don't add other save paths.
-- **Operations UI**: start every operation through `OperationUi.run/start`. An operation still
-  running after 350 ms gets a row in its owner's `ProgressWindow`; rows are removed when the
-  operation ends and the window closes with the last one. Each row's Cancel cancels only that
-  operation; Escape is the cancel button only while one row is shown; closing the window cancels all.
+- **Operations UI**: start every operation through `OperationUi.run/start` (it registers it in
+  `OperationUi.running()`). An operation still running after 350 ms gets a row in its owner's
+  `ProgressWindow`; rows are removed when the operation ends and the window closes with the last
+  one. Each row's Pause/Resume and Cancel act on that operation only; Escape is the cancel button
+  only while one row is shown; closing the window cancels all. Pause blocks the worker in
+  `FileOperation.checkCancel` (every item and chunk), so new loops must call `checkCancel()`.
+  **Conflicts are asked inline** in the operation's row (`OperationUi.askInProgressRow` →
+  `ProgressWindow.ask`), never with a modal dialog: a modal `showAndWait` blocks the whole app, and
+  with several operations the nested event loops can only return last-opened-first, so answering
+  the first question appears to hang. The operation's thread reads the file details and waits on a
+  `CompletableFuture`; the FX thread never blocks. Don't add modal dialogs to operation flows.
+  Closing the main window with operations running asks, then `OperationUi.cancelAllAndWait`
+  (waits on `FileOperation.awaitStopped`, i.e. until cleanup is done) before exiting; a shutdown
+  hook does the same for 3 s on SIGTERM/logout.
+- **View modes** (`ViewMode`, Explorer's eight, per tab, saved as `<side>.tab.<i>.view`): Details is
+  `FileTable`; the others are one `FileGrid` per tab (created on first use). The grid has no model
+  of its own: it draws `table.getItems()` and uses the table's selection and focus models, so
+  commands, status, restoreSelection and sorting need no view-specific code. Go through
+  `FileTab.view()`, `ensureVisible`, `focusTable` and `typeAhead` rather than the table directly.
+  `FileGrid` is virtualized (fixed slots, cells reused, unmanaged so the layer pane doesn't resize
+  them); keep per-layout work O(visible items) (e.g. List's column width is cached per items change).
+  Thumbnails (`Thumbnails`) load with JavaFX background loading into a pixel-bounded LRU cache.
 - **Rubber band** (`Marquee`): event filters on the table. A press on a row's name (icon + text)
   drags files; anywhere else (empty space, other columns) starts the box. Rows are tracked in
   content coordinates (index × row height) so autoscroll keeps the anchor. Shift adds, Ctrl/Cmd

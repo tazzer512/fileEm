@@ -3,6 +3,7 @@ package com.fileem.ui;
 import com.fileem.util.FsUtil;
 import javafx.application.Platform;
 import javafx.scene.control.Alert;
+import javafx.scene.control.ButtonBar;
 import javafx.scene.control.ButtonType;
 import javafx.scene.control.Dialog;
 import javafx.scene.control.Label;
@@ -39,6 +40,21 @@ public final class Dialogs {
         a.setTitle(title);
         a.setHeaderText(null);
         return a.showAndWait().filter(b -> b == ButtonType.OK).isPresent();
+    }
+
+    /**
+     * Asks what a drop should do: Move (the default button), Copy, or nothing. Returns true for move,
+     * false for copy, empty when cancelled.
+     */
+    static Optional<Boolean> moveOrCopy(Window owner, String what, Path target) {
+        ButtonType move = new ButtonType("Move", ButtonBar.ButtonData.OK_DONE);
+        ButtonType copy = new ButtonType("Copy", ButtonBar.ButtonData.OTHER);
+        Alert a = new Alert(Alert.AlertType.CONFIRMATION, null, move, copy, ButtonType.CANCEL);
+        prepare(a, owner);
+        a.setTitle("Move or copy");
+        a.setHeaderText("Move " + what + " to \"" + FsUtil.displayName(target) + "\"?");
+        a.setContentText("To: " + target + "\n\nChoose Copy to keep the originals where they are.");
+        return a.showAndWait().filter(b -> b == move || b == copy).map(b -> b == move);
     }
 
     public static void error(Window owner, String title, String message) {

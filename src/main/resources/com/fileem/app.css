@@ -191,3 +191,90 @@
     -fx-stroke-width: 1;
     -fx-stroke-dash-array: 3 3;
 }
+
+/* ---- progress window ---- */
+.progress-bar:paused > .bar {
+    -fx-background-color: -color-warning-emphasis;
+}
+
+/* ---- icon, list, tiles and content views (FileGrid) ---- */
+.file-grid {
+    -fx-background-color: -color-bg-default;
+}
+
+.file-grid .grid-item {
+    -fx-background-radius: 4;
+    -fx-background-insets: 1;
+    -fx-padding: 4;
+}
+
+.file-grid .grid-item.large-icons-item,
+.file-grid .grid-item.xl-icons-item,
+.file-grid .grid-item.medium-icons-item {
+    -fx-padding: 6 4 4 4;
+}
+
+.file-grid .grid-item.small-icons-item,
+.file-grid .grid-item.list-item {
+    -fx-padding: 0 4 0 4;
+}
+
+.file-grid .grid-item.content-item {
+    -fx-padding: 4 8 4 8;
+    -fx-border-color: transparent transparent -color-border-muted transparent;
+}
+
+.file-grid .grid-item:hover {
+    -fx-background-color: -color-bg-subtle;
+}
+
+.file-grid .grid-item:selected {
+    -fx-background-color: -color-accent-subtle;
+}
+
+.file-grid:focused .grid-item:selected {
+    -fx-background-color: -color-accent-muted;
+}
+
+.file-grid:focused .grid-item:lead {
+    -fx-border-color: -color-accent-emphasis;
+    -fx-border-width: 1;
+    -fx-border-radius: 4;
+    -fx-border-insets: 1;
+}
+
+.file-grid .grid-item:hidden-file {
+    -fx-opacity: 0.55;
+}
+
+.file-grid .grid-item.drop-target {
+    -fx-background-color: -color-accent-subtle;
+    -fx-border-color: -color-accent-emphasis;
+    -fx-border-width: 1;
+    -fx-border-radius: 4;
+    -fx-border-insets: 1;
+}
+
+.file-grid .item-detail {
+    -fx-text-fill: -color-fg-muted;
+    -fx-font-size: 0.9em;
+}
+
+.file-grid .grid-placeholder {
+    -fx-text-fill: -color-fg-muted;
+}
+
+.file-grid .marquee {
+    -fx-fill: -color-accent-muted;
+    -fx-stroke: -color-accent-emphasis;
+    -fx-stroke-width: 1;
+    -fx-stroke-dash-array: 3 3;
+}
+
+.conflict-question {
+    -fx-padding: 10;
+    -fx-background-color: -color-warning-subtle;
+    -fx-border-color: -color-warning-muted;
+    -fx-background-radius: 6;
+    -fx-border-radius: 6;
+}

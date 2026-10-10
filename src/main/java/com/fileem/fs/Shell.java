@@ -23,7 +23,7 @@ public final class Shell {
 
     /** Opens the file with its default application. Errors are reported on the FX thread. */
     public static void open(Path p, Consumer<String> onError) {
-        Bg.POOL.execute(() -> {
+        Bg.IO.execute(() -> {
             try {
                 if (OsUtil.isLinux()) {
                     try {
@@ -51,7 +51,7 @@ public final class Shell {
 
     /** Opens a terminal window in {@code dir}. */
     public static void openTerminal(Path dir, Consumer<String> onError) {
-        Bg.POOL.execute(() -> {
+        Bg.IO.execute(() -> {
             try {
                 List<String> cmd = terminalCommand(dir, System.getenv("TERMINAL"), Shell::onPath);
                 if (cmd == null) {
@@ -104,7 +104,7 @@ public final class Shell {
 
     /** Shows the item selected in the OS file manager (falls back to opening its folder). */
     public static void reveal(Path p, Consumer<String> onError) {
-        Bg.POOL.execute(() -> {
+        Bg.IO.execute(() -> {
             try {
                 if (OsUtil.isWindows()) {
                     exec("explorer.exe", "/select," + p);

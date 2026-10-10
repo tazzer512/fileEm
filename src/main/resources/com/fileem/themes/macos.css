@@ -226,3 +226,29 @@
 .main-window > .split-pane > .split-pane-divider {
     -fx-background-color: -fe-hairline;
 }
+
+/* ---- icon, list, tiles and content views: Finder-style selection ---- */
+.file-grid {
+    -fx-background-color: -fe-content;
+}
+
+.file-grid .grid-item {
+    -fx-background-radius: 6;
+}
+
+.file-grid .grid-item:hover {
+    -fx-background-color: transparent;
+}
+
+.file-grid .grid-item:selected {
+    -fx-background-color: -fe-selection-inactive;
+}
+
+.file-grid:focused .grid-item:selected {
+    -fx-background-color: -color-accent-emphasis;
+}
+
+.file-grid:focused .grid-item:selected .label,
+.file-grid:focused .grid-item:selected .item-detail {
+    -fx-text-fill: #ffffff;
+}

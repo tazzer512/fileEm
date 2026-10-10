@@ -41,13 +41,10 @@ final class Dnd {
         if (!canDrop(e, target)) {
             return false;
         }
-        // Drags from other applications are always copied: a "move" there could let the
-        // source delete the originals before our background copy has finished.
-        if (e.getGestureSource() != null) {
-            e.acceptTransferModes(TransferMode.COPY_OR_MOVE);
-        } else {
-            e.acceptTransferModes(TransferMode.COPY);
-        }
+        // A drop is a move (confirmed afterwards, with Copy as the alternative: MainWindow.moveOrCopy).
+        // Drags from other applications are accepted as a copy all the same: telling them "moved"
+        // could let them delete the originals before our background move has copied them.
+        e.acceptTransferModes(e.getGestureSource() != null ? TransferMode.MOVE : TransferMode.COPY);
         return true;
     }
 }

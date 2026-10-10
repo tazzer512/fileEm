@@ -529,4 +529,117 @@ class FileOperationTest {
         FileOperation unzip = run(Kind.EXTRACT, List.of(zip.result()), base, FAIL_ON_CONFLICT);
         assertEquals("real.txt", tree(unzip.result()));
     }
+
+    // ---- pause / resume ----
+
+    /** Runs {@code op} on its own thread, as the app's background pool does. */
+    private static Thread start(FileOperation op) {
+        Thread t = new Thread(op, "op-under-test");
+        t.setDaemon(true);
+        t.start();
+        return t;
+    }
+
+    private static void awaitPaused(FileOperation op) {
+        assertTimeoutPreemptively(Duration.ofSeconds(10), () -> {
+            while (!op.isWaitingWhilePaused()) {
+                Thread.onSpinWait();
+            }
+        });
+    }
+
+    private Set<String> names(Path dir) throws IOException {
+        try (Stream<Path> s = Files.list(dir)) {
+            return s.map(p -> p.getFileName().toString()).collect(Collectors.toSet());
+        }
+    }
+
+    @Test
+    void aPausedOperationWaitsAndThenFinishesOnResume() throws Exception {
+        List<Path> files = new ArrayList<>();
+        for (String n : List.of("a.txt", "b.txt", "c.txt")) {
+            files.add(Files.writeString(src.resolve(n), n));
+        }
+        FileOperation op = new FileOperation(Kind.COPY, files, dst, FAIL_ON_CONFLICT);
+        op.pause();
+        Thread t = start(op);
+        awaitPaused(op);
+        assertTrue(op.isPaused());
+        assertEquals(Set.of(), names(dst), "nothing is copied while paused");
+
+        op.resume();
+        assertTimeoutPreemptively(Duration.ofSeconds(10), () -> t.join());
+        assertFalse(op.isPaused());
+        assertEquals(Set.of("a.txt", "b.txt", "c.txt"), names(dst));
+        assertFalse(onFx(op::isCancelled));
+        assertProgressComplete(op);
+    }
+
+    @Test
+    void pausingStopsBetweenItemsAndResumeContinuesWithTheNextOne() throws Exception {
+        List<Path> files = new ArrayList<>();
+        for (String n : List.of("a.txt", "b.txt", "c.txt")) {
+            files.add(Files.writeString(src.resolve(n), n));
+        }
+        Files.writeString(dst.resolve("b.txt"), "existing");
+        FileOperation[] holder = new FileOperation[1];
+        // The conflict on b.txt pauses the operation, as a click on Pause would at that moment.
+        holder[0] = new FileOperation(Kind.COPY, files, dst, (s, d) -> {
+            holder[0].pause();
+            return new Decision(Resolution.SKIP, false);
+        });
+        FileOperation op = holder[0];
+        Thread t = start(op);
+        awaitPaused(op);
+        assertEquals(Set.of("a.txt", "b.txt"), names(dst), "a copied, b skipped, c waits");
+        assertEquals("existing", Files.readString(dst.resolve("b.txt")));
+
+        op.resume();
+        assertTimeoutPreemptively(Duration.ofSeconds(10), () -> t.join());
+        assertEquals("c.txt", Files.readString(dst.resolve("c.txt")));
+    }
+
+    @Test
+    void cancellingAPausedOperationStopsItAndLeavesNoPartialFiles() throws Exception {
+        Path big = src.resolve("big.bin");
+        Files.write(big, randomBytes(1 << 16, 7));
+        Path small = Files.writeString(src.resolve("small.txt"), "small");
+        FileOperation op = new FileOperation(Kind.MOVE, List.of(big, small), dst.resolve("sub"), FAIL_ON_CONFLICT);
+        Files.createDirectory(dst.resolve("sub"));
+        op.pause();
+        Thread t = start(op);
+        awaitPaused(op);
+
+        op.cancel();
+        assertTimeoutPreemptively(Duration.ofSeconds(10), () -> t.join());
+        assertTrue(onFx(op::isCancelled));
+        assertEquals(Set.of(), names(dst.resolve("sub")), "nothing moved, no .part files");
+        assertTrue(Files.exists(big) && Files.exists(small), "sources intact");
+    }
+
+    @Test
+    void awaitStoppedReturnsOnlyAfterTheCancelledWorkerCleanedUp() throws Exception {
+        Path a = Files.writeString(src.resolve("a.txt"), "a");
+        Path b = Files.writeString(src.resolve("b.txt"), "b");
+        FileOperation op = new FileOperation(Kind.COPY, List.of(a, b), dst, FAIL_ON_CONFLICT);
+        op.pause();
+        Thread t = start(op);
+        awaitPaused(op);
+        assertFalse(op.awaitStopped(50, java.util.concurrent.TimeUnit.MILLISECONDS), "still running while paused");
+
+        op.cancel();
+        assertTrue(op.awaitStopped(10, java.util.concurrent.TimeUnit.SECONDS));
+        assertFalse(t.isAlive() && op.isWaitingWhilePaused(), "worker left the pause");
+        assertEquals(Set.of(), names(dst), "no files and no .part leftovers");
+    }
+
+    @Test
+    void anOperationCancelledBeforeItStartedCountsAsStopped() throws Exception {
+        FileOperation op = new FileOperation(Kind.COPY, List.of(Files.writeString(src.resolve("a.txt"), "a")), dst,
+                FAIL_ON_CONFLICT);
+        op.cancel();
+        assertTrue(op.awaitStopped(1, java.util.concurrent.TimeUnit.SECONDS));
+        op.run(); // a cancelled task never runs
+        assertEquals(Set.of(), names(dst));
+    }
 }

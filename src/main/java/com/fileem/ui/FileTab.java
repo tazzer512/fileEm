@@ -17,11 +17,13 @@ import javafx.collections.transformation.FilteredList;
 import javafx.collections.transformation.SortedList;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
+import javafx.scene.Node;
 import javafx.scene.control.Label;
 import javafx.scene.control.Tab;
 import javafx.scene.control.Tooltip;
 import javafx.scene.input.KeyCode;
 import javafx.scene.input.KeyEvent;
+import javafx.scene.input.ScrollEvent;
 import javafx.scene.layout.BorderPane;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
@@ -38,8 +40,10 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Objects;
 import java.util.Set;
+import java.util.concurrent.Future;
 
 /** One tab of a side: address bar, filter, file list and status line for a single folder. */
 public final class FileTab extends BorderPane {
@@ -57,10 +61,19 @@ public final class FileTab extends BorderPane {
     private final Label status = new Label();
     private final InvalidationListener hiddenListener = o -> updatePredicate();
     private final List<Path> history = new ArrayList<>();
+    private final StringBuilder typeAhead = new StringBuilder();
+    private long lastTyped;
+    private ViewMode viewMode = ViewMode.DETAILS;
+    /** Created when a non-Details view is first used. */
+    private FileGrid grid;
+    private double wheelZoom;
 
     private Path currentDir;
     private int historyIndex = -1;
     private int loadGeneration;
+    /** The running listing (navigation or refresh), cancelled when a newer one starts. */
+    private Future<?> load;
+    private boolean navigating;
     private boolean refreshing;
     private boolean refreshPending;
     private volatile long lastListMillis;
@@ -116,6 +129,17 @@ public final class FileTab extends BorderPane {
         setTop(top);
         setCenter(table);
         setBottom(status);
+        // Ctrl+wheel steps through the view modes, as in Explorer
+        addEventFilter(ScrollEvent.SCROLL, e -> {
+            if (e.isShortcutDown() && e.getDeltaY() != 0 && isInside(e.getTarget(), getCenter())) {
+                wheelZoom += e.getDeltaY();
+                if (Math.abs(wheelZoom) >= 30) {
+                    setViewMode(viewMode.step(wheelZoom > 0 ? -1 : 1));
+                    wheelZoom = 0;
+                }
+                e.consume();
+            }
+        });
 
         tab.setContent(this);
         tab.setUserData(this);
@@ -146,6 +170,54 @@ public final class FileTab extends BorderPane {
         return table;
     }
 
+    ViewMode viewMode() {
+        return viewMode;
+    }
+
+    /** The icon/list view, or null while this tab has only used Details. */
+    FileGrid grid() {
+        return grid;
+    }
+
+    /** The node that shows the files in the current view mode. */
+    javafx.scene.control.Control view() {
+        return viewMode == ViewMode.DETAILS ? table : grid;
+    }
+
+    /** Switches how the files are shown; selection, focus and sort carry over. */
+    void setViewMode(ViewMode m) {
+        if (m == viewMode) {
+            return;
+        }
+        boolean hadFocus = view().isFocused();
+        viewMode = m;
+        if (m == ViewMode.DETAILS) {
+            setCenter(table);
+        } else {
+            if (grid == null) {
+                grid = new FileGrid(main, this, table);
+            }
+            grid.setMode(m);
+            setCenter(grid);
+        }
+        int lead = table.getFocusModel().getFocusedIndex();
+        if (hadFocus) {
+            focusTable();
+        }
+        if (lead >= 0) {
+            javafx.application.Platform.runLater(() -> ensureVisible(lead));
+        }
+    }
+
+    private static boolean isInside(Object target, Node container) {
+        for (Node n = target instanceof Node node ? node : null; n != null; n = n.getParent()) {
+            if (n == container) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     boolean canGoBack() {
         return historyIndex > 0;
     }
@@ -165,11 +237,7 @@ public final class FileTab extends BorderPane {
         if (p == null) {
             return;
         }
-        if (Files.isRegularFile(p) && p.getParent() != null) {
-            go(p.getParent(), p, true);
-        } else {
-            go(p, null, true);
-        }
+        go(p, null, true, 0, true); // whether p is a file is checked off the FX thread (slow mounts)
     }
 
     void back() {
@@ -209,14 +277,14 @@ public final class FileTab extends BorderPane {
 
     /** Reloads the listing, keeping the selection (or selecting {@code select} when given). */
     void refresh(Path select) {
-        if (currentDir == null) {
-            return;
+        if (currentDir == null || navigating) {
+            return; // a navigation in flight lists its folder fresh anyway; don't drop it
         }
         Path dir = currentDir;
         List<Path> keep = select != null ? List.of(select) : selectedPaths();
         int gen = ++loadGeneration;
         refreshing = true;
-        Bg.run(() -> timedList(dir), entries -> {
+        startLoad(Bg.run(() -> timedList(dir), entries -> {
             finishRefresh();
             if (gen != loadGeneration) {
                 return;
@@ -233,14 +301,20 @@ public final class FileTab extends BorderPane {
             if (gen != loadGeneration) {
                 return;
             }
-            Path existing = dir.getParent();
-            while (existing != null && !Files.isDirectory(existing)) {
-                existing = existing.getParent();
-            }
-            if (existing != null) {
-                go(existing, null, true);
-            }
-        });
+            // the folder is gone: go to its nearest existing parent (found off the FX thread)
+            go(dir, null, true, 0, false, true);
+        }));
+    }
+
+    /** Starts a listing, cancelling the previous one: its result is stale and its work wasted. */
+    private void startLoad(Future<?> next) {
+        if (load != null) {
+            load.cancel(true);
+        }
+        load = next;
+    }
+
+    private record Listing(Path dir, Path select, List<FileEntry> entries) {
     }
 
     private void finishRefresh() {
@@ -268,16 +342,47 @@ public final class FileTab extends BorderPane {
     }
 
     private void go(Path dir, Path select, boolean record, int historyStep) {
-        Path target = dir.toAbsolutePath().normalize();
+        go(dir, select, record, historyStep, false, false);
+    }
+
+    private void go(Path dir, Path select, boolean record, int historyStep, boolean mayBeFile) {
+        go(dir, select, record, historyStep, mayBeFile, false);
+    }
+
+    /**
+     * Loads a folder. All file system checks run in the background job: {@code mayBeFile} opens the
+     * parent of a file with the file selected; {@code nearestExisting} walks up to a folder that exists.
+     */
+    private void go(Path dir, Path select, boolean record, int historyStep, boolean mayBeFile, boolean nearestExisting) {
+        Path requested = dir.toAbsolutePath().normalize();
         Path previous = currentDir;
-        Path selectAfter = select != null ? select
-                : previous != null && target.equals(previous.getParent()) ? previous : null;
         int gen = ++loadGeneration;
+        navigating = true;
         status.setText("Loading…");
-        Bg.run(() -> timedList(target), entries -> {
+        startLoad(Bg.run(() -> {
+            Path target = requested;
+            Path sel = select;
+            if (nearestExisting) {
+                while (target != null && !Files.isDirectory(target)) {
+                    target = target.getParent();
+                }
+                if (target == null) {
+                    throw new NoSuchFileException(requested.toString());
+                }
+            } else if (mayBeFile && requested.getParent() != null && Files.isRegularFile(requested)) {
+                sel = requested;
+                target = requested.getParent();
+            }
+            return new Listing(target, sel, timedList(target));
+        }, listing -> {
             if (gen != loadGeneration) {
                 return;
             }
+            navigating = false;
+            Path target = listing.dir();
+            List<FileEntry> entries = listing.entries();
+            Path selectAfter = listing.select() != null ? listing.select()
+                    : previous != null && target.equals(previous.getParent()) ? previous : null;
             boolean changed = !target.equals(previous);
             currentDir = target;
             if (record) {
@@ -298,6 +403,9 @@ public final class FileTab extends BorderPane {
                     table.getFocusModel().focus(0);
                     table.scrollTo(0);
                 }
+                if (grid != null) {
+                    grid.scrollToStart();
+                }
             }
             updateStatus();
             side.tabNavigated(this);
@@ -305,16 +413,20 @@ public final class FileTab extends BorderPane {
             if (gen != loadGeneration) {
                 return;
             }
+            navigating = false;
             updateStatus();
             if (previous == null) {
                 Path home = OsUtil.home();
-                if (!target.equals(home)) {
+                if (!requested.equals(home)) {
                     go(home, null, true);
                 }
                 return;
             }
-            Dialogs.error(getScene() != null ? getScene().getWindow() : null, "Open folder", describe(target, err));
-        });
+            if (nearestExisting) {
+                return; // nothing above the vanished folder exists either; keep showing what we have
+            }
+            Dialogs.error(getScene() != null ? getScene().getWindow() : null, "Open folder", describe(requested, err));
+        }));
     }
 
     private static String describe(Path dir, Exception e) {
@@ -341,6 +453,9 @@ public final class FileTab extends BorderPane {
         List<FileEntry> out = new ArrayList<>();
         try (DirectoryStream<Path> ds = Files.newDirectoryStream(dir)) {
             for (Path p : ds) {
+                if ((out.size() & 255) == 0) {
+                    Bg.checkInterrupted(); // navigated away: stop reading a big folder
+                }
                 out.add(FileEntry.read(p));
             }
         }
@@ -395,6 +510,7 @@ public final class FileTab extends BorderPane {
 
     void dispose() {
         loadGeneration++;
+        startLoad(null);
         closeWatch();
         main.showHiddenProperty().removeListener(hiddenListener);
     }
@@ -426,7 +542,7 @@ public final class FileTab extends BorderPane {
         if (first >= 0) {
             table.getFocusModel().focus(first);
             if (scroll) {
-                table.ensureVisible(first);
+                ensureVisible(first);
             }
         }
     }
@@ -435,8 +551,48 @@ public final class FileTab extends BorderPane {
         table.getSelectionModel().selectAll();
     }
 
+    /** Scrolls the current view just enough to show item {@code index}. */
+    void ensureVisible(int index) {
+        if (viewMode == ViewMode.DETAILS) {
+            table.ensureVisible(index);
+        } else {
+            grid.ensureVisible(index);
+        }
+    }
+
+    /** Type-ahead find in either view: typing a name's first letters selects it. */
+    void typeAhead(KeyEvent e) {
+        String ch = e.getCharacter();
+        if (ch.isEmpty() || e.isControlDown() || e.isAltDown() || e.isMetaDown() || e.isShortcutDown()) {
+            return;
+        }
+        char c = ch.charAt(0);
+        if (Character.isISOControl(c)) {
+            return;
+        }
+        long now = System.currentTimeMillis();
+        if (now - lastTyped > 1000) {
+            typeAhead.setLength(0);
+        }
+        lastTyped = now;
+        if (typeAhead.isEmpty() && c == ' ') {
+            return;
+        }
+        typeAhead.append(ch);
+        String prefix = typeAhead.toString().toLowerCase(Locale.ROOT);
+        for (int i = 0; i < sorted.size(); i++) {
+            if (sorted.get(i).name().toLowerCase(Locale.ROOT).startsWith(prefix)) {
+                table.getSelectionModel().clearAndSelect(i);
+                table.getFocusModel().focus(i);
+                ensureVisible(i);
+                break;
+            }
+        }
+        e.consume();
+    }
+
     void focusTable() {
-        table.requestFocus();
+        view().requestFocus();
         if (table.getFocusModel().getFocusedIndex() < 0 && !sorted.isEmpty()) {
             table.getFocusModel().focus(0);
         }

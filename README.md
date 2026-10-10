@@ -43,11 +43,22 @@ mvn test -Dheadless=false   # watch the UI tests run on screen
 - **File list**: Name, Size, Type, Date modified by default; Date created, Date accessed, Extension and
   Attributes/permissions can be turned on from the `⋮` header menu. Click headers to sort (folders stay
   on top, natural "file2 < file10" order). Column widths, order, visibility and sort are remembered.
+- **View modes** like Windows Explorer, per tab, from the View button in the toolbar, the
+  right-click menu on empty space, Ctrl+Shift+1…8 or Ctrl+mouse wheel: Extra large / Large / Medium /
+  Small icons, List, Details, Tiles and Content. The big icon views show thumbnails of images (PNG,
+  JPEG, GIF, BMP). Selection, sorting, keyboard navigation, the selection box and drag & drop work in
+  every view. New tabs open in the view you're using; each tab's view is remembered.
 - **Tabs** on each side, **dual pane** (F9), breadcrumb address bar (click or Ctrl+L to type a path),
   live filter box with `*` / `?` wildcards, type-ahead find, auto-refresh when folder contents change.
-- **Operations** run in the background with a progress window (concurrent operations stack in it, each with its own Cancel): copy, move, delete to
-  Trash, permanent delete, rename, new folder. Conflicts ask Replace / Skip / Keep both / Cancel
-  (optionally for all).
+- **Operations** (copy, move, delete to Trash, permanent delete, compress, extract) each run on their
+  own thread, all at the same time: starting one never stops or slows down the others. They share
+  one progress window, stacked, each with its own **Pause/Resume** and **Cancel**. Pausing stops at
+  the next file or 16 MB chunk. Name conflicts are asked right in the operation's progress row
+  (Replace / Skip / Keep both, optionally for all), so the rest of the app and other operations keep
+  working while a question waits. Quitting while operations run asks first, then stops them cleanly (no half-written files).
+- **Responsive**: folders are listed on virtual threads, so a slow or hanging network folder never
+  blocks the window or other folders, and leaving a big folder before it finished loading stops
+  reading it.
 - **Safe file operations**: copies are written to a temp file, size-checked, then renamed into
   place, so a failed or cancelled copy never damages an existing file. Moves between drives are
   flushed to disk before the source is deleted. Links are never followed, special files are
@@ -57,9 +68,10 @@ mvn test -Dheadless=false   # watch the UI tests run on screen
   side, duplicate, compress to ZIP / extract here, new folder / text file, rename, trash, delete,
   bookmark, sort by, show hidden files, copy path, properties. Quick access folders, bookmarks and
   drives in the tree can't be cut, renamed or deleted from there.
-- **Drag & drop** between sides, tabs, the tree and other applications. Inside fileEm the OS modifier
-  keys choose copy or move; drops from other applications are always copied. Files are dragged by
-  their icon or name.
+- **Drag & drop** between sides, tabs, the tree and other applications. A drop **moves** the files,
+  after asking: *Move* (default), *Copy* to keep the originals, or *Cancel*. Moves only delete an
+  original after its copy succeeded, also for files dropped from other applications. Files are
+  dragged by their icon or name.
 - **Selection box**: drag from empty space, or from a row outside its name, to draw a dotted box that
   selects every row it touches (Shift adds to the selection, Ctrl/Cmd toggles; the list scrolls when
   dragging past its edge).
@@ -99,6 +111,8 @@ mvn test -Dheadless=false   # watch the UI tests run on screen
 | Ctrl+D | Bookmark / un-bookmark the current folder |
 | Ctrl+Shift+B | Manage bookmarks |
 | F9 | Toggle dual pane |
+| Ctrl+Shift+1…8, Ctrl+wheel | View: Extra large, Large, Medium, Small icons, List, Details, Tiles, Content |
+| Arrows, Home/End, PgUp/PgDn | Move in the list or grid (Shift extends, Ctrl moves without selecting, Ctrl+Space toggles) |
 
 On macOS, Ctrl is Cmd; Cmd+Backspace deletes and Cmd+Up/Down go up/open.
 

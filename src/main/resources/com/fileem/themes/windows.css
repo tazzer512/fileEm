@@ -211,3 +211,20 @@
 .main-window > .split-pane > .split-pane-divider {
     -fx-background-color: -fe-divider;
 }
+
+/* ---- icon, list, tiles and content views: same surface and selection as the rows ---- */
+.file-grid {
+    -fx-background-color: -fe-layer;
+}
+
+.file-grid .grid-item:hover {
+    -fx-background-color: -fe-row-hover;
+}
+
+.file-grid .grid-item:selected {
+    -fx-background-color: -fe-selection;
+}
+
+.file-grid:focused .grid-item:selected {
+    -fx-background-color: -fe-selection-focused;
+}

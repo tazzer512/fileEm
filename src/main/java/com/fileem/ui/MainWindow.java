@@ -39,7 +39,6 @@ import javafx.scene.input.ClipboardContent;
 import javafx.scene.input.DragEvent;
 import javafx.scene.input.KeyCode;
 import javafx.scene.input.KeyEvent;
-import javafx.scene.input.TransferMode;
 import javafx.scene.layout.BorderPane;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
@@ -64,6 +63,7 @@ public final class MainWindow extends BorderPane {
     private final BooleanProperty showHidden = new SimpleBooleanProperty();
     private final BooleanProperty dual = new SimpleBooleanProperty();
     private MenuButton themeMenu;
+    private MenuButton viewMenu;
     private final SplitPane sides = new SplitPane();
     private final ExplorerSide left;
     private final ExplorerSide right;
@@ -222,15 +222,58 @@ public final class MainWindow extends BorderPane {
         dualToggle.selectedProperty().bindBidirectional(dual);
         Button theme = iconButton("mdi2t-theme-light-dark", "Light / dark mode", Theme::toggle);
         themeMenu = buildThemeMenu();
+        viewMenu = buildViewMenu();
 
         Region spacer = new Region();
         HBox.setHgrow(spacer, Priority.ALWAYS);
 
         ToolBar bar = new ToolBar(backButton, forwardButton, upButton, refresh, sep(),
                 newFolder, cut, copy, paste, rename, delete, props, sep(), newTab, bookmarkButton,
-                spacer, hidden, dualToggle, themeMenu, theme);
+                spacer, viewMenu, hidden, dualToggle, themeMenu, theme);
         bar.getStyleClass().add("main-toolbar");
         return bar;
+    }
+
+    /** Toolbar menu that picks the active tab's view mode. */
+    MenuButton viewMenu() {
+        return viewMenu;
+    }
+
+    private MenuButton buildViewMenu() {
+        MenuButton menu = new MenuButton(null, Icons.icon("mdi2v-view-grid-outline", 18));
+        menu.getStyleClass().addAll(Styles.BUTTON_ICON, Styles.FLAT, "view-menu");
+        menu.setTooltip(new Tooltip("View (Ctrl+Shift+1…8, Ctrl+wheel)"));
+        menu.setFocusTraversable(false);
+        // rebuilt on every opening so the mark follows the active tab
+        menu.setOnShowing(e -> menu.getItems().setAll(viewItems(tab())));
+        menu.getItems().setAll(viewItems(tab()));
+        menu.setOnHidden(e -> {
+            FileTab t = tab();
+            if (t != null) {
+                t.focusTable();
+            }
+        });
+        return menu;
+    }
+
+    /** Explorer's view modes for a tab, with the current one checked. */
+    private List<MenuItem> viewItems(FileTab t) {
+        List<MenuItem> items = new ArrayList<>();
+        ToggleGroup group = new ToggleGroup();
+        for (ViewMode m : ViewMode.values()) {
+            RadioMenuItem item = new RadioMenuItem(m.label() + "  (Ctrl+Shift+" + (m.ordinal() + 1) + ")",
+                    Icons.icon(m.icon()));
+            item.setId("view-" + m.id());
+            item.setToggleGroup(group);
+            item.setSelected(t != null && t.viewMode() == m);
+            item.setOnAction(e -> {
+                if (t != null) {
+                    t.setViewMode(m);
+                }
+            });
+            items.add(item);
+        }
+        return items;
     }
 
     /** Toolbar menu that picks the theme family and the light or dark mode. */
@@ -342,7 +385,7 @@ public final class MainWindow extends BorderPane {
     private void onKey(KeyEvent e) {
         Node focus = getScene().getFocusOwner();
         boolean typing = focus instanceof TextInputControl;
-        boolean inList = !typing && isInside(focus, FileTable.class);
+        boolean inList = !typing && (isInside(focus, FileTable.class) || isInside(focus, FileGrid.class));
         boolean inTree = !typing && isInside(focus, FolderTree.class);
         KeyCode c = e.getCode();
         boolean shortcut = e.isShortcutDown();
@@ -369,6 +412,9 @@ public final class MainWindow extends BorderPane {
             action = this::refreshActive;
         } else if (c == KeyCode.F9) {
             action = () -> dual.set(!dual.get());
+        } else if (shortcut && shift && !alt && viewModeForKey(c) != null) {
+            ViewMode m = viewModeForKey(c);
+            action = () -> tab().setViewMode(m);
         } else if (!typing) {
             if (c == KeyCode.TAB && !shortcut && !alt && !shift && dual.get() && (inList || inTree)) {
                 action = this::switchSide;
@@ -407,6 +453,22 @@ public final class MainWindow extends BorderPane {
             e.consume();
             action.run();
         }
+    }
+
+    /** Explorer's Ctrl+Shift+1…8: digit n picks the n-th view mode. */
+    private static ViewMode viewModeForKey(KeyCode c) {
+        int digit = switch (c) {
+            case DIGIT1, NUMPAD1 -> 1;
+            case DIGIT2, NUMPAD2 -> 2;
+            case DIGIT3, NUMPAD3 -> 3;
+            case DIGIT4, NUMPAD4 -> 4;
+            case DIGIT5, NUMPAD5 -> 5;
+            case DIGIT6, NUMPAD6 -> 6;
+            case DIGIT7, NUMPAD7 -> 7;
+            case DIGIT8, NUMPAD8 -> 8;
+            default -> 0;
+        };
+        return digit == 0 ? null : ViewMode.values()[digit - 1];
     }
 
     private static boolean isInside(Node n, Class<?> type) {
@@ -717,10 +779,23 @@ public final class MainWindow extends BorderPane {
 
     void drop(DragEvent e, Path target) {
         List<Path> files = Dnd.files(e.getDragboard());
-        TransferMode mode = e.getTransferMode();
         e.setDropCompleted(true);
         e.consume();
-        Platform.runLater(() -> runOperation(mode == TransferMode.MOVE ? Kind.MOVE : Kind.COPY, files, target));
+        // Ask once the drag has ended: a dialog can't run inside the drop event.
+        Platform.runLater(() -> moveOrCopy(files, target));
+    }
+
+    /**
+     * Dropped files are moved, after a confirmation that also offers Copy. Our own MOVE deletes a
+     * source only after its copy succeeded, so this is safe for drops from other applications too
+     * (those are accepted as a copy, so the other application never deletes anything itself).
+     */
+    void moveOrCopy(List<Path> files, Path target) {
+        if (files.isEmpty() || target == null) {
+            return;
+        }
+        Dialogs.moveOrCopy(stage, describe(files), target)
+                .ifPresent(move -> runOperation(move ? Kind.MOVE : Kind.COPY, files, target));
     }
 
     FileOperation runOperation(Kind kind, List<Path> sources, Path target) {
@@ -813,8 +888,11 @@ public final class MainWindow extends BorderPane {
         paste.setDisable(!FileClipboard.hasFiles());
         items.add(paste);
         items.add(new SeparatorMenuItem());
-        items.add(newMenu(dir));
+        Menu view = new Menu("View", Icons.icon("mdi2v-view-grid-outline"));
+        view.getItems().setAll(viewItems(t));
+        items.add(view);
         items.add(sortMenu(t.table()));
+        items.add(newMenu(dir));
         CheckMenuItem hidden = new CheckMenuItem("Show hidden files");
         hidden.setSelected(showHidden.get());
         hidden.setOnAction(e -> showHidden.set(hidden.isSelected()));

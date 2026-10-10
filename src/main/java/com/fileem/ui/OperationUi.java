@@ -1,6 +1,5 @@
 package com.fileem.ui;
 
-import atlantafx.base.theme.Styles;
 import com.fileem.ops.FileOperation;
 import com.fileem.ops.FileOperation.Decision;
 import com.fileem.ops.FileOperation.Kind;
@@ -11,13 +10,6 @@ import com.fileem.util.FsUtil;
 import javafx.animation.PauseTransition;
 import javafx.application.Platform;
 import javafx.concurrent.Worker;
-import javafx.scene.control.Alert;
-import javafx.scene.control.ButtonBar;
-import javafx.scene.control.ButtonType;
-import javafx.scene.control.CheckBox;
-import javafx.scene.control.Label;
-import javafx.scene.layout.GridPane;
-import javafx.scene.layout.VBox;
 import javafx.stage.Window;
 import javafx.util.Duration;
 
@@ -28,20 +20,54 @@ import java.nio.file.Path;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.util.HashSet;
 import java.util.List;
-import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
-import java.util.concurrent.FutureTask;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 
 /** Runs a {@link FileOperation} with a row in the shared {@link ProgressWindow} and conflict prompts. */
-final class OperationUi {
+public final class OperationUi {
+    /** Operations started and not yet finished, so quitting can stop them cleanly. */
+    private static final Set<FileOperation> RUNNING = ConcurrentHashMap.newKeySet();
+
     private OperationUi() {
+    }
+
+    /** Operations that are running, paused or waiting for an answer. */
+    public static List<FileOperation> running() {
+        return List.copyOf(RUNNING);
+    }
+
+    /**
+     * Cancels every running operation and waits up to {@code timeout} for all of them to stop,
+     * including their cleanup (temp files removed, displaced items restored). Call off the FX thread.
+     * Returns whether all stopped in time.
+     */
+    public static boolean cancelAllAndWait(java.time.Duration timeout) {
+        List<FileOperation> ops = running();
+        ops.forEach(FileOperation::cancel);
+        long deadline = System.nanoTime() + timeout.toNanos();
+        try {
+            for (FileOperation op : ops) {
+                long left = deadline - System.nanoTime();
+                if (left <= 0 || !op.awaitStopped(left, TimeUnit.NANOSECONDS)) {
+                    return false;
+                }
+            }
+            return true;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return false;
+        }
     }
 
     /** Starts the operation; {@code onDone} gets the folders whose contents changed. */
     static FileOperation run(Window owner, Kind kind, List<Path> sources, Path target, Consumer<Set<Path>> onDone) {
-        FileOperation op = new FileOperation(kind, sources, target, (s, t) -> askOnFxThread(owner, s, t));
+        FileOperation[] self = new FileOperation[1];
+        FileOperation op = new FileOperation(kind, sources, target, (s, t) -> askInProgressRow(owner, self[0], s, t));
+        self[0] = op;
         start(owner, op, sources, target, onDone);
         return op;
     }
@@ -51,6 +77,7 @@ final class OperationUi {
         String title = title(op.kind(), sources, target);
         op.stateProperty().addListener((obs, old, state) -> {
             if (state == Worker.State.SUCCEEDED || state == Worker.State.FAILED || state == Worker.State.CANCELLED) {
+                RUNNING.remove(op);
                 ProgressWindow.finished(owner, op);
                 Set<Path> affected = new HashSet<>();
                 if (target != null) {
@@ -72,7 +99,8 @@ final class OperationUi {
                 }
             }
         });
-        Bg.POOL.execute(op);
+        RUNNING.add(op);
+        Bg.OPERATIONS.execute(op);
         // Quick operations never show up; slower ones join the owner's progress window.
         PauseTransition delay = new PauseTransition(Duration.millis(350));
         delay.setOnFinished(e -> {
@@ -95,51 +123,30 @@ final class OperationUi {
         };
     }
 
-    private static Decision askOnFxThread(Window owner, Path source, Path target) throws InterruptedException {
-        FutureTask<Decision> task = new FutureTask<>(() -> askConflict(owner, source, target));
-        Platform.runLater(task);
+    /** What a conflict prompt shows; built on the operation's thread (it reads file attributes). */
+    record Conflict(String question, String source, String existing) {
+    }
+
+    /**
+     * Asks how to resolve a name conflict, from the operation's own thread. The question appears in
+     * the operation's row of the progress window: not a modal dialog, so the rest of the app and other
+     * operations stay usable, and several operations can each wait for an answer independently
+     * (nested modal dialogs could only be answered last-opened-first). Cancelling the operation
+     * interrupts the wait.
+     */
+    static Decision askInProgressRow(Window owner, FileOperation op, Path source, Path target)
+            throws InterruptedException {
+        boolean dir = Files.isDirectory(target, LinkOption.NOFOLLOW_LINKS);
+        Conflict c = new Conflict("The destination already has " + (dir ? "a folder" : "a file") + " named \""
+                + FsUtil.displayName(target) + "\".", describe(source), describe(target));
+        String title = title(op.kind(), op.sources(), op.targetDir());
+        CompletableFuture<Decision> answer = new CompletableFuture<>();
+        Platform.runLater(() -> ProgressWindow.ask(owner, op, title, c, answer));
         try {
-            return task.get();
+            return answer.get();
         } catch (ExecutionException e) {
             return new Decision(Resolution.CANCEL, false);
         }
-    }
-
-    private static Decision askConflict(Window owner, Path source, Path target) {
-        Alert a = new Alert(Alert.AlertType.WARNING);
-        Dialogs.prepare(a, owner);
-        a.setTitle("Replace or skip");
-        boolean dir = Files.isDirectory(target, LinkOption.NOFOLLOW_LINKS);
-        a.setHeaderText("The destination already has " + (dir ? "a folder" : "a file") + " named \""
-                + FsUtil.displayName(target) + "\".");
-
-        GridPane grid = new GridPane();
-        grid.setHgap(12);
-        grid.setVgap(6);
-        grid.addRow(0, bold("Source:"), new Label(describe(source)));
-        grid.addRow(1, bold("Existing:"), new Label(describe(target)));
-        CheckBox all = new CheckBox("Do this for all remaining conflicts");
-        VBox content = new VBox(12, grid, all);
-        a.getDialogPane().setContent(content);
-
-        ButtonType replace = new ButtonType("Replace", ButtonBar.ButtonData.OK_DONE);
-        ButtonType skip = new ButtonType("Skip", ButtonBar.ButtonData.NO);
-        ButtonType both = new ButtonType("Keep both", ButtonBar.ButtonData.OTHER);
-        ButtonType cancel = new ButtonType("Cancel", ButtonBar.ButtonData.CANCEL_CLOSE);
-        a.getButtonTypes().setAll(replace, skip, both, cancel);
-
-        Optional<ButtonType> r = a.showAndWait();
-        Resolution res = r.map(b -> b == replace ? Resolution.OVERWRITE
-                : b == skip ? Resolution.SKIP
-                : b == both ? Resolution.KEEP_BOTH
-                : Resolution.CANCEL).orElse(Resolution.CANCEL);
-        return new Decision(res, all.isSelected());
-    }
-
-    private static Label bold(String text) {
-        Label l = new Label(text);
-        l.getStyleClass().add(Styles.TEXT_BOLD);
-        return l;
     }
 
     private static String describe(Path p) {

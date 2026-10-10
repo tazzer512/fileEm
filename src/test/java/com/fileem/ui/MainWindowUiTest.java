@@ -372,6 +372,59 @@ class MainWindowUiTest {
         assertEquals("existing", Files.readString(to.resolve("a.txt")));
     }
 
+    /**
+     * Regression: conflict questions used to be nested modal dialogs, so with two operations asking,
+     * answering the first did nothing until the second was answered, and the whole app was blocked.
+     */
+    @Test
+    void conflictQuestionsOfConcurrentOperationsAreAnsweredIndependentlyWithoutBlockingTheApp(FxRobot robot)
+            throws Exception {
+        Path from1 = folderWith("q1from", "a.txt");
+        Path to1 = folderWith("q1to", "a.txt");
+        Path from2 = folderWith("q2from", "b.txt");
+        Path to2 = folderWith("q2to", "b.txt");
+        Files.writeString(to2.resolve("b.txt"), "old");
+        FileOperation first = fx(() -> window.runOperation(FileOperation.Kind.COPY, List.of(from1.resolve("a.txt")), to1));
+        FileOperation second = fx(() -> window.runOperation(FileOperation.Kind.COPY, List.of(from2.resolve("b.txt")), to2));
+        waitUntil("both ask", () -> ProgressWindow.of(stage) != null
+                && ProgressWindow.of(stage).isAsking(first) && ProgressWindow.of(stage).isAsking(second));
+        ProgressWindow w = fx(() -> ProgressWindow.of(stage));
+        assertTrue(otherWindows(stage).stream().noneMatch(win -> win instanceof Stage st
+                && st.getModality() != javafx.stage.Modality.NONE), "no modal dialog");
+
+        // the main window stays usable while they wait (a modal dialog would swallow this click)
+        Node newTabButton = robot.lookup(".main-toolbar .button").queryAll().stream()
+                .filter(n -> n instanceof javafx.scene.control.Button b && b.getTooltip() != null
+                        && b.getTooltip().getText().startsWith("New tab"))
+                .findFirst().orElseThrow();
+        robot.clickOn(newTabButton);
+        waitUntil("new tab while asking", () -> window.left().tabs().size() == 2);
+
+        robot.clickOn(fx(() -> w.conflictButton(first, "Skip")));
+        waitUntil("first finished while the second still asks", () -> first.getState() == Worker.State.SUCCEEDED);
+        assertTrue(fx(() -> w.isAsking(second)));
+
+        robot.clickOn(fx(() -> w.conflictButton(second, "Replace")));
+        waitUntil("second replaced", () -> second.getState() == Worker.State.SUCCEEDED);
+        assertEquals("b.txt", Files.readString(to2.resolve("b.txt")));
+        waitUntil("window closed", () -> ProgressWindow.of(stage) == null);
+    }
+
+    @Test
+    void cancellingAnOperationThatAsksAboutAConflictKeepsTheExistingFile(FxRobot robot) throws Exception {
+        Path from = folderWith("qcfrom", "a.txt");
+        Path to = folderWith("qcto", "a.txt");
+        Files.writeString(to.resolve("a.txt"), "existing");
+        FileOperation op = fx(() -> window.runOperation(FileOperation.Kind.COPY, List.of(from.resolve("a.txt")), to));
+        waitUntil("asks", () -> ProgressWindow.of(stage) != null && ProgressWindow.of(stage).isAsking(op));
+        ProgressWindow w = fx(() -> ProgressWindow.of(stage));
+        assertTrue(fx(() -> w.pauseButton(op).isDisabled()), "nothing to pause while waiting for an answer");
+        robot.clickOn(fx(() -> w.cancelButton(op)));
+        waitUntil("cancelled", op::isCancelled);
+        waitUntil("window closed", () -> ProgressWindow.of(stage) == null);
+        assertEquals("existing", Files.readString(to.resolve("a.txt")));
+    }
+
     @Test
     void copyAndPasteThroughTheClipboard(FxRobot robot) throws Exception {
         Path from = folderWith("clipfrom", "c.txt");
@@ -471,7 +524,46 @@ class MainWindowUiTest {
         Node source = nameText(robot, "drag.txt");
         Node target = rowNode(robot, "into");
         robot.drag(source).dropTo(target);
-        waitUntil("dropped into folder", () -> Files.exists(dir.resolve("into/drag.txt")));
+        answerDrop(robot, "Move");
+        waitUntil("moved into folder", () -> Files.exists(dir.resolve("into/drag.txt")));
+        waitUntil("original gone", () -> !Files.exists(dir.resolve("drag.txt")));
+    }
+
+    /** Answers the Move / Copy / Cancel question that every drop asks. */
+    private void answerDrop(FxRobot robot, String button) {
+        waitUntil("move or copy question", () -> otherWindows(stage).stream()
+                .anyMatch(w -> w instanceof Stage st && "Move or copy".equals(st.getTitle())));
+        // only the dialog's buttons: the F-key bar also has "Move" and "Copy"
+        Node b = robot.lookup(".dialog-pane .button").queryAll().stream()
+                .filter(n -> n instanceof javafx.scene.control.Button x && x.getText().equals(button))
+                .findFirst().orElseThrow(() -> new AssertionError("no " + button + " button"));
+        robot.clickOn(b);
+        WaitForAsyncUtils.waitForFxEvents();
+    }
+
+    @Test
+    void choosingCopyAfterADropKeepsTheOriginal(FxRobot robot) throws Exception {
+        Path dir = folderWith("dndcopy", "keep.txt", "into/");
+        FileTab tab = leftTab();
+        open(robot, tab, dir);
+        select(robot, tab, "keep.txt");
+        robot.drag(nameText(robot, "keep.txt")).dropTo(rowNode(robot, "into"));
+        answerDrop(robot, "Copy");
+        waitUntil("copied", () -> Files.exists(dir.resolve("into/keep.txt")));
+        assertTrue(Files.exists(dir.resolve("keep.txt")), "the original stays");
+    }
+
+    @Test
+    void cancellingTheDropQuestionLeavesEverythingAlone(FxRobot robot) throws Exception {
+        Path dir = folderWith("dndcancel", "stay.txt", "into/");
+        FileTab tab = leftTab();
+        open(robot, tab, dir);
+        select(robot, tab, "stay.txt");
+        robot.drag(nameText(robot, "stay.txt")).dropTo(rowNode(robot, "into"));
+        answerDrop(robot, "Cancel");
+        assertTrue(OperationUi.running().isEmpty(), "no operation started");
+        assertTrue(Files.exists(dir.resolve("stay.txt")));
+        assertFalse(Files.exists(dir.resolve("into/stay.txt")));
     }
 
     private Node rowNode(FxRobot robot, String name) {
@@ -996,21 +1088,72 @@ class MainWindowUiTest {
         }
     }
 
-    /** Starts a copy that waits in its conflict handler until {@code release} opens. */
-    private FileOperation blockedCopy(String name, CountDownLatch release)
-            throws Exception {
-        Path src = folderWith(name + "-src", name + ".txt");
+    private FileOperation blockedCopy(String name, CountDownLatch release) throws Exception {
+        return blockedCopy(name, release, false);
+    }
+
+    /**
+     * Starts a copy that waits in its conflict handler until {@code release} opens. With {@code more},
+     * a second file follows the conflicting one, so the operation still has a step left to pause at.
+     */
+    private FileOperation blockedCopy(String name, CountDownLatch release, boolean more) throws Exception {
+        Path src = more ? folderWith(name + "-src", name + ".txt", name + "-2.txt") : folderWith(name + "-src", name + ".txt");
         Path dst = folderWith(name + "-dst", name + ".txt");
-        var op = new FileOperation(FileOperation.Kind.COPY,
-                List.of(src.resolve(name + ".txt")), dst, (s, t) -> {
-                    release.await();
-                    return new FileOperation.Decision(FileOperation.Resolution.SKIP, false);
-                });
+        List<Path> sources = more ? List.of(src.resolve(name + ".txt"), src.resolve(name + "-2.txt"))
+                : List.of(src.resolve(name + ".txt"));
+        var op = new FileOperation(FileOperation.Kind.COPY, sources, dst, (s, t) -> {
+            release.await();
+            return new FileOperation.Decision(FileOperation.Resolution.SKIP, false);
+        });
         fx(() -> {
-            OperationUi.start(stage, op, List.of(src.resolve(name + ".txt")), dst, dirs -> { });
+            OperationUi.start(stage, op, sources, dst, dirs -> { });
             return null;
         });
         return op;
+    }
+
+    @Test
+    void pauseButtonPausesAndResumesAnOperation(FxRobot robot) throws Exception {
+        var release = new CountDownLatch(1);
+        try {
+            var op = blockedCopy("paused", release, true);
+            waitUntil("operation shown", () -> ProgressWindow.of(stage) != null
+                    && ProgressWindow.of(stage).operations().contains(op));
+            ProgressWindow w = fx(() -> ProgressWindow.of(stage));
+            javafx.scene.control.Button pause = fx(() -> w.pauseButton(op));
+            assertEquals("Pause", fx(pause::getText));
+
+            robot.clickOn(pause);
+            waitUntil("paused", () -> op.isPaused() && "Resume".equals(pause.getText()));
+            release.countDown(); // the conflict is answered; the paused operation must now wait
+            waitUntil("waiting at the next step", op::isWaitingWhilePaused);
+            assertFalse(fx(op::isDone), "a paused operation does not finish");
+
+            robot.clickOn(pause);
+            waitUntil("resumed and finished", () -> !op.isPaused() && op.getState() == Worker.State.SUCCEEDED);
+            waitUntil("window closed", () -> ProgressWindow.of(stage) == null);
+        } finally {
+            release.countDown();
+        }
+    }
+
+    @Test
+    void cancellingAPausedOperationStopsIt(FxRobot robot) throws Exception {
+        var release = new CountDownLatch(1);
+        try {
+            var op = blockedCopy("pausedcancel", release, true);
+            waitUntil("operation shown", () -> ProgressWindow.of(stage) != null);
+            ProgressWindow w = fx(() -> ProgressWindow.of(stage));
+            robot.clickOn(fx(() -> w.pauseButton(op)));
+            waitUntil("paused", op::isPaused);
+            release.countDown();
+            waitUntil("waiting while paused", op::isWaitingWhilePaused);
+            robot.clickOn(fx(() -> w.cancelButton(op)));
+            waitUntil("cancelled", op::isCancelled);
+            waitUntil("window closed", () -> ProgressWindow.of(stage) == null);
+        } finally {
+            release.countDown();
+        }
     }
 
     @Test
@@ -1043,5 +1186,277 @@ class MainWindowUiTest {
         } finally {
             release.countDown();
         }
+    }
+
+    // ---- threading ----
+
+    @Test
+    void aWatcherRefreshDoesNotSwallowANavigationThatIsStillLoading(FxRobot robot) throws Exception {
+        Path a = folderWith("nav-a", "one.txt");
+        Path b = folderWith("nav-b", "two.txt");
+        FileTab tab = leftTab();
+        open(robot, tab, a);
+        // Both in one FX pulse: the refresh arrives while b is still being listed.
+        robot.interact(() -> {
+            tab.navigateTo(b);
+            tab.refresh();
+        });
+        waitUntil("navigation completed", () -> b.equals(tab.currentDir()));
+        assertEquals(List.of("two.txt"), names(tab));
+    }
+
+    @Test
+    void navigatingToAFileOpensItsFolderWithTheFileSelected(FxRobot robot) throws Exception {
+        Path dir = folderWith("navfile", "a.txt", "target.txt", "z.txt");
+        FileTab tab = leftTab();
+        robot.interact(() -> tab.navigateTo(dir.resolve("target.txt")));
+        waitUntil("folder shown", () -> dir.equals(tab.currentDir()));
+        assertEquals(List.of("target.txt"), selectedNames(tab));
+    }
+
+    @Test
+    void cancelAllAndWaitStopsEveryRunningOperationAndItsCleanup(FxRobot robot) throws Exception {
+        var release = new CountDownLatch(1);
+        try {
+            var first = blockedCopy("quit1", release, true);
+            var second = blockedCopy("quit2", release, true);
+            waitUntil("both registered", () -> OperationUi.running().containsAll(List.of(first, second)));
+            assertTrue(OperationUi.cancelAllAndWait(java.time.Duration.ofSeconds(10)));
+            assertTrue(first.awaitStopped(0, TimeUnit.SECONDS) && second.awaitStopped(0, TimeUnit.SECONDS));
+            waitUntil("registry empty and window closed", () -> OperationUi.running().isEmpty()
+                    && ProgressWindow.of(stage) == null);
+            assertFalse(Files.exists(tmp.resolve("quit1-dst/quit1-2.txt")), "the second file was never copied");
+        } finally {
+            release.countDown();
+        }
+    }
+
+    // ---- view modes ----
+
+    private FileGrid grid(FileTab tab) {
+        return fx(tab::grid);
+    }
+
+    private void setView(FxRobot robot, FileTab tab, ViewMode m) {
+        robot.interact(() -> tab.setViewMode(m));
+        WaitForAsyncUtils.waitForFxEvents();
+    }
+
+    private List<String> gridNames(FileTab tab) {
+        FileGrid g = grid(tab);
+        return fx(() -> g.visibleIndices().stream().map(i -> g.cellFor(i).nameText()).toList());
+    }
+
+    private javafx.geometry.Point2D itemPoint(FileTab tab, String name) {
+        FileGrid g = grid(tab);
+        int i = fx(() -> {
+            List<FileEntry> items = tab.table().getItems();
+            for (int k = 0; k < items.size(); k++) {
+                if (items.get(k).name().equals(name)) {
+                    return k;
+                }
+            }
+            throw new AssertionError("no item " + name);
+        });
+        return fx(() -> g.screenCenterOf(i));
+    }
+
+    @Test
+    void theViewMenuHasExplorersModesAndSwitchesTheFileView(FxRobot robot) throws Exception {
+        Path dir = folderWith("views", "sub/", "a.txt", "b.txt");
+        FileTab tab = leftTab();
+        open(robot, tab, dir);
+        select(robot, tab, "a.txt");
+        List<String> ids = fx(() -> window.viewMenu().getItems().stream().map(javafx.scene.control.MenuItem::getId).toList());
+        assertEquals(List.of("view-xl-icons", "view-large-icons", "view-medium-icons", "view-small-icons",
+                "view-list", "view-details", "view-tiles", "view-content"), ids);
+        for (ViewMode m : ViewMode.values()) {
+            robot.interact(() -> {
+                window.viewMenu().fire(); // opens it, which rebuilds the items for the active tab
+                window.viewMenu().getItems().stream().filter(i -> ("view-" + m.id()).equals(i.getId()))
+                        .findFirst().orElseThrow().fire();
+                window.viewMenu().hide();
+            });
+            WaitForAsyncUtils.waitForFxEvents();
+            assertEquals(m, fx(tab::viewMode));
+            if (m == ViewMode.DETAILS) {
+                assertTrue(fx(() -> tab.getCenter() == tab.table()));
+            } else {
+                assertTrue(fx(() -> tab.getCenter() == tab.grid()));
+                assertEquals(List.of("sub", "a.txt", "b.txt"), gridNames(tab), m + " shows the items in order");
+            }
+            assertEquals(List.of("a.txt"), selectedNames(tab), "the selection carries over to " + m);
+        }
+    }
+
+    @Test
+    void ctrlShiftDigitsAndCtrlWheelSwitchTheView(FxRobot robot) throws Exception {
+        FileTab tab = leftTab();
+        open(robot, tab, folderWith("keys-view", "a.txt"));
+        robot.push(KeyCode.SHORTCUT, KeyCode.SHIFT, KeyCode.DIGIT1);
+        waitUntil("extra large icons", () -> tab.viewMode() == ViewMode.EXTRA_LARGE_ICONS);
+        robot.push(KeyCode.SHORTCUT, KeyCode.SHIFT, KeyCode.DIGIT7);
+        waitUntil("tiles", () -> tab.viewMode() == ViewMode.TILES);
+        robot.push(KeyCode.SHORTCUT, KeyCode.SHIFT, KeyCode.DIGIT6);
+        waitUntil("details", () -> tab.viewMode() == ViewMode.DETAILS);
+
+        // Ctrl+wheel up: bigger (toward Extra large icons), down: toward Content
+        robot.interact(() -> javafx.event.Event.fireEvent(tab.view(), scroll(tab.view(), 40)));
+        assertEquals(ViewMode.LIST, fx(tab::viewMode));
+        robot.interact(() -> javafx.event.Event.fireEvent(tab.view(), scroll(tab.view(), -40)));
+        assertEquals(ViewMode.DETAILS, fx(tab::viewMode));
+    }
+
+    private static javafx.scene.input.ScrollEvent scroll(Node target, double deltaY) {
+        boolean mac = OsUtil.isMac();
+        return new javafx.scene.input.ScrollEvent(javafx.scene.input.ScrollEvent.SCROLL, 10, 10, 10, 10,
+                false, !mac, false, mac, false, false, 0, deltaY, 0, deltaY,
+                javafx.scene.input.ScrollEvent.HorizontalTextScrollUnits.NONE, 0,
+                javafx.scene.input.ScrollEvent.VerticalTextScrollUnits.NONE, 0, 0, null);
+    }
+
+    @Test
+    void clickingInTheGridSelectsLikeExplorerAndDoubleClickOpens(FxRobot robot) throws Exception {
+        Path dir = folderWith("gridclick", "sub/", "a.txt", "b.txt", "c.txt");
+        FileTab tab = leftTab();
+        open(robot, tab, dir);
+        setView(robot, tab, ViewMode.LARGE_ICONS);
+        robot.clickOn(itemPoint(tab, "a.txt"));
+        assertEquals(List.of("a.txt"), selectedNames(tab));
+        robot.press(KeyCode.CONTROL).clickOn(itemPoint(tab, "c.txt")).release(KeyCode.CONTROL);
+        assertEquals(List.of("a.txt", "c.txt"), selectedNames(tab));
+        robot.press(KeyCode.SHIFT).clickOn(itemPoint(tab, "b.txt")).release(KeyCode.SHIFT);
+        assertEquals(List.of("b.txt", "c.txt"), selectedNames(tab), "shift selects from the last clicked item");
+        assertTrue(fx(() -> grid(tab).isFocused()));
+        robot.doubleClickOn(itemPoint(tab, "sub"));
+        waitUntil("opened sub", () -> dir.resolve("sub").equals(tab.currentDir()));
+    }
+
+    @Test
+    void arrowKeysFollowTheGridLayout(FxRobot robot) throws Exception {
+        String[] files = new String[40];
+        for (int i = 0; i < files.length; i++) {
+            files[i] = String.format("f%02d.txt", i);
+        }
+        FileTab tab = leftTab();
+        open(robot, tab, folderWith("gridkeys", files));
+        setView(robot, tab, ViewMode.MEDIUM_ICONS);
+        robot.interact(tab::focusTable);
+        select(robot, tab, "f00.txt");
+        robot.interact(() -> tab.grid().requestFocus());
+        int lanes = fx(() -> grid(tab).lanes());
+        assertTrue(lanes > 1, "several icons per row");
+        robot.type(KeyCode.RIGHT);
+        assertEquals(List.of("f01.txt"), selectedNames(tab));
+        robot.type(KeyCode.DOWN);
+        assertEquals(List.of(files[1 + lanes]), selectedNames(tab), "Down moves one row");
+        robot.press(KeyCode.SHIFT).type(KeyCode.LEFT).release(KeyCode.SHIFT);
+        assertEquals(List.of(files[lanes], files[1 + lanes]), selectedNames(tab), "Shift extends");
+        robot.type(KeyCode.END);
+        assertEquals(List.of("f39.txt"), selectedNames(tab));
+
+        setView(robot, tab, ViewMode.LIST);
+        robot.interact(() -> tab.grid().requestFocus());
+        select(robot, tab, "f00.txt");
+        int rows = fx(() -> grid(tab).lanes());
+        robot.type(KeyCode.DOWN);
+        assertEquals(List.of("f01.txt"), selectedNames(tab), "List runs down the column");
+        robot.type(KeyCode.RIGHT);
+        assertEquals(List.of(files[Math.min(39, 1 + rows)]), selectedNames(tab), "Right moves one column");
+    }
+
+    @Test
+    void aBoxDraggedInTheGridSelectsTheItemsItTouches(FxRobot robot) throws Exception {
+        Path dir = folderWith("gridband", "a.txt", "b.txt", "c.txt");
+        FileTab tab = leftTab();
+        open(robot, tab, dir);
+        setView(robot, tab, ViewMode.LARGE_ICONS);
+        javafx.geometry.Point2D c = itemPoint(tab, "c.txt");
+        javafx.geometry.Point2D b = itemPoint(tab, "b.txt");
+        // start in the empty space right of the last icon, drag left into b
+        robot.moveTo(c.getX() + 300, c.getY());
+        robot.press(javafx.scene.input.MouseButton.PRIMARY);
+        robot.moveTo(c.getX() + 100, c.getY() + 5);
+        robot.moveTo(b);
+        assertTrue(fx(() -> grid(tab).lookup(".marquee").isVisible()), "the box shows while dragging");
+        robot.release(javafx.scene.input.MouseButton.PRIMARY);
+        assertEquals(List.of("b.txt", "c.txt"), selectedNames(tab));
+        assertFalse(fx(() -> grid(tab).lookup(".marquee").isVisible()));
+        robot.clickOn(c.getX() + 300, c.getY());
+        assertEquals(List.of(), selectedNames(tab), "a click on empty space clears the selection");
+    }
+
+    @Test
+    void dragAFileOntoAFolderInTheGrid(FxRobot robot) throws Exception {
+        Path dir = folderWith("griddnd", "into/", "drag.txt");
+        FileTab tab = leftTab();
+        open(robot, tab, dir);
+        setView(robot, tab, ViewMode.TILES);
+        robot.clickOn(itemPoint(tab, "drag.txt"));
+        robot.drag(itemPoint(tab, "drag.txt"), javafx.scene.input.MouseButton.PRIMARY).dropTo(itemPoint(tab, "into"));
+        answerDrop(robot, "Move");
+        waitUntil("moved into folder", () -> Files.exists(dir.resolve("into/drag.txt"))
+                && !Files.exists(dir.resolve("drag.txt")));
+    }
+
+    @Test
+    void gridContextMenusTargetTheItemOrTheFolder(FxRobot robot) throws Exception {
+        Path dir = folderWith("gridmenu", "a.txt", "b.txt");
+        FileTab tab = leftTab();
+        open(robot, tab, dir);
+        setView(robot, tab, ViewMode.CONTENT);
+        robot.rightClickOn(itemPoint(tab, "b.txt"));
+        assertEquals(List.of("b.txt"), selectedNames(tab), "right-click selects the item");
+        assertTrue(hasItem(fx(() -> window.fileMenuItems(tab)), "Open"));
+        robot.interact(() -> tab.table().getSelectionModel().clearSelection());
+        FileGrid g = grid(tab);
+        requestContextMenu(robot, g);
+        waitUntil("menu shown", () -> g.getContextMenu().isShowing());
+        assertTrue(hasItem(fx(() -> g.getContextMenu().getItems()), "View"), "the folder menu offers the views");
+        robot.interact(() -> g.getContextMenu().hide());
+    }
+
+    @Test
+    void typeAheadWorksInTheGrid(FxRobot robot) throws Exception {
+        FileTab tab = leftTab();
+        open(robot, tab, folderWith("gridtype", "apple.txt", "notes.txt", "zebra.txt"));
+        setView(robot, tab, ViewMode.SMALL_ICONS);
+        robot.interact(tab::focusTable);
+        robot.write("no");
+        assertEquals(List.of("notes.txt"), selectedNames(tab));
+    }
+
+    @Test
+    void imagesShowAsThumbnailsInTheBigIconViews(FxRobot robot) throws Exception {
+        Path dir = folderWith("thumbs", "plain.txt");
+        java.awt.image.BufferedImage img = new java.awt.image.BufferedImage(64, 40, java.awt.image.BufferedImage.TYPE_INT_RGB);
+        javax.imageio.ImageIO.write(img, "png", dir.resolve("pic.png").toFile());
+        FileTab tab = leftTab();
+        open(robot, tab, dir);
+        setView(robot, tab, ViewMode.LARGE_ICONS);
+        FileGrid g = grid(tab);
+        waitUntil("thumbnail loaded", () -> g.cellFor(0).nameText().equals("pic.png") && g.cellFor(0).showsThumbnail());
+        assertFalse(fx(() -> g.cellFor(1).showsThumbnail()), "other files keep their type icon");
+        setView(robot, tab, ViewMode.SMALL_ICONS);
+        assertFalse(fx(() -> grid(tab).cellFor(0).showsThumbnail()), "small views use icons");
+    }
+
+    @Test
+    void viewModesAreSavedPerTabAndNewTabsUseTheCurrentOne(FxRobot robot) throws Exception {
+        Path a = folderWith("va");
+        FileTab first = leftTab();
+        open(robot, first, a);
+        setView(robot, first, ViewMode.TILES);
+        robot.push(KeyCode.SHORTCUT, KeyCode.T);
+        waitUntil("second tab", () -> window.left().tabs().size() == 2);
+        FileTab second = fx(() -> window.left().tabs().get(1));
+        assertEquals(ViewMode.TILES, fx(second::viewMode), "new tab inherits the view");
+        setView(robot, second, ViewMode.LIST);
+        robot.interact(window::saveSession);
+
+        MainWindow restored = fx(() -> new MainWindow(new Stage(), session));
+        waitUntil("tabs restored", () -> restored.left().tabs().size() == 2);
+        assertEquals(List.of(ViewMode.TILES, ViewMode.LIST),
+                fx(() -> restored.left().tabs().stream().map(FileTab::viewMode).toList()));
     }
 }

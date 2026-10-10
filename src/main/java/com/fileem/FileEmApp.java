@@ -1,13 +1,19 @@
 package com.fileem;
 
+import com.fileem.ui.Dialogs;
 import com.fileem.ui.Icons;
+import com.fileem.ui.OperationUi;
+import com.fileem.util.Bg;
 import com.fileem.ui.MainWindow;
 import com.fileem.ui.Theme;
 import javafx.application.Application;
+import javafx.application.Platform;
 import javafx.geometry.Rectangle2D;
 import javafx.scene.Scene;
 import javafx.stage.Screen;
 import javafx.stage.Stage;
+
+import java.time.Duration;
 
 public class FileEmApp extends Application {
     private Session session;
@@ -44,9 +50,38 @@ public class FileEmApp extends Application {
         }
         stage.setMaximized(session.getBool("window.maximized", false));
         autosave = new Autosave(session, () -> collectSession(stage));
-        stage.setOnCloseRequest(e -> autosave.saveNow());
+        stage.setOnCloseRequest(e -> {
+            autosave.saveNow();
+            if (!OperationUi.running().isEmpty()) {
+                e.consume();
+                quitAfterOperations(stage);
+            }
+        });
         stage.show();
         autosave.start();
+        // On logout or kill: stop running operations so they clean up their temp files first.
+        Runtime.getRuntime().addShutdownHook(new Thread(
+                () -> OperationUi.cancelAllAndWait(Duration.ofSeconds(3)), "fileem-ops-shutdown"));
+    }
+
+    /**
+     * Closing while files are being copied, moved or deleted: ask, then cancel the operations and wait
+     * for their cleanup (no half-written files left behind) before quitting.
+     */
+    private void quitAfterOperations(Stage stage) {
+        int n = OperationUi.running().size();
+        String what = n == 1 ? "An operation is" : n + " operations are";
+        if (!Dialogs.confirm(stage, "Operations running",
+                what + " still running.\n\nStop " + (n == 1 ? "it" : "them") + " and quit? Files already "
+                        + "copied or moved stay where they are; nothing is left half-written.")) {
+            return;
+        }
+        stage.getScene().getRoot().setDisable(true);
+        stage.setTitle("Stopping operations… — fileEm");
+        Bg.IO.execute(() -> {
+            OperationUi.cancelAllAndWait(Duration.ofSeconds(15));
+            Platform.runLater(Platform::exit);
+        });
     }
 
     @Override

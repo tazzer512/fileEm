@@ -300,3 +300,24 @@
 .scroll-bar {
     -fx-background-color: transparent;
 }
+
+/* ---- icon, list, tiles and content views: glass tiles on the aurora ---- */
+.file-grid {
+    -fx-background-color: transparent;
+}
+
+.file-grid .grid-item {
+    -fx-background-radius: 10;
+}
+
+.file-grid .grid-item:hover {
+    -fx-background-color: -fe-glass;
+}
+
+.file-grid .grid-item:selected {
+    -fx-background-color: -fe-selection;
+}
+
+.file-grid:focused .grid-item:selected {
+    -fx-background-color: -fe-selection-focused;
+}
