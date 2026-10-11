@@ -24,8 +24,10 @@ import org.kordamp.ikonli.javafx.FontIcon;
 import java.nio.file.Path;
 import java.nio.file.attribute.FileTime;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -108,6 +110,20 @@ final class FileTable extends TableView<FileEntry> {
         Comparator<FileEntry> byName = (a, b) -> NaturalOrder.INSTANCE.compare(a.name(), b.name());
         Comparator<FileEntry> user = getComparator();
         return user == null ? dirsFirst.thenComparing(byName) : dirsFirst.thenComparing(user).thenComparing(byName);
+    }
+
+    /** The columns offered in the Sort by menus, by id, in menu order. */
+    static final Map<String, String> SORT_COLUMNS = sortColumns();
+
+    private static Map<String, String> sortColumns() {
+        Map<String, String> m = new LinkedHashMap<>();
+        m.put("name", "Name");
+        m.put("size", "Size");
+        m.put("type", "Type");
+        m.put("modified", "Date modified");
+        m.put("created", "Date created");
+        m.put("extension", "Extension");
+        return Collections.unmodifiableMap(m);
     }
 
     /** Id of the primary sort column, or null when unsorted. */

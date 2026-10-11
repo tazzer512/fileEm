@@ -66,7 +66,7 @@ command when it isn't installed:
   `jdk.localedata`). `tools/install-linux.sh` installs it per user with a `.desktop` entry named
   after the window class (`com.fileem.FileEmApp`; renaming `FileEmApp` breaks the dock icon,
   `PackagingTest` checks). Icons: `tools/make-icon.py` writes `src/packaging/` and the window icons.
-- `mvn test`: about 190 tests, a bit over a minute. UI tests run **headless on Monocle** (configured in
+- `mvn test`: about 200 tests, a bit over a minute. UI tests run **headless on Monocle** (configured in
   the pom's `headless-ui-tests` profile), so no display is needed.
   - `mvn test -Dtest=FileOperationTest`: a single class. `-Dtest='!MainWindowUiTest'` skips
     the slow UI tests while iterating, but run the full suite before finishing.
@@ -156,7 +156,7 @@ com.fileem.fs       FileEntry (row snapshot), FileTypes, Volumes (mount polling)
 com.fileem.ops      FileOperation (copy/move/delete/trash Task), FileClipboard
 com.fileem.ui       MainWindow (toolbar, F-key bar, ALL commands + key handling)
                     └ ExplorerSide ×2 (left/right): FolderTree + TabPane of FileTab
-                       └ FileTab: AddressBar + filter + FileTable + status line
+                       └ FileTab: AddressBar + view/sort MenuButtons + filter + FileTable + status line
                        └ FileTable + Marquee (Details view: rubber band, autoscroll)
                        └ FileGrid (the other ViewModes: virtualized grid on the table's models)
                          + Thumbnails (image thumbnail LRU)
@@ -319,6 +319,10 @@ tools/                                  make-icon.py, install-linux.sh (per-user
   `FileGrid` is virtualized (fixed slots, cells reused, unmanaged so the layer pane doesn't resize
   them); keep per-layout work O(visible items) (e.g. List's column width is cached per items change).
   Thumbnails (`Thumbnails`) load with JavaFX background loading into a pixel-bounded LRU cache.
+  Each tab's bar has a view and a sort `MenuButton` (`FileTab.viewButton()/sortButton()`) whose items
+  come from `MainWindow.viewItems(tab)` / `sortItems(table)` (shared with the right-click menu;
+  sort columns are `FileTable.SORT_COLUMNS`), rebuilt on every opening; their icons follow the view
+  mode and the sort direction.
   Item size (+ / −, Ctrl++ / Ctrl+−): only `ViewMode.resizable()` views (icon views, Tiles). Each step
   scales the icon by 1.25 within 16–320 px (`ViewMode.iconSize(steps)`); the cell grows by the same
   amount and keeps its text area. `FileTab` keeps steps per view (`<side>.tab.<i>.size` =

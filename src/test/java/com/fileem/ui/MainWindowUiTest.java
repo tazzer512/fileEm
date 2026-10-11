@@ -1457,6 +1457,74 @@ class MainWindowUiTest {
         WaitForAsyncUtils.waitForFxEvents();
     }
 
+    // ---- view and sort buttons in the tab bar ----
+
+    /** Opens {@code button}'s menu (which rebuilds its items), fires the item with {@code text}, closes it. */
+    private void pick(FxRobot robot, javafx.scene.control.MenuButton button, String text) {
+        robot.interact(() -> {
+            button.fire();
+            button.getItems().stream().filter(i -> i.getText() != null && i.getText().startsWith(text))
+                    .findFirst().orElseThrow(() -> new AssertionError("no item " + text)).fire();
+            button.hide();
+        });
+        WaitForAsyncUtils.waitForFxEvents();
+    }
+
+    private static String iconOf(javafx.scene.control.MenuButton b) {
+        return fx(() -> ((org.kordamp.ikonli.javafx.FontIcon) b.getGraphic()).getIconLiteral());
+    }
+
+    @Test
+    void viewAndSortButtonsSitBetweenTheAddressBarAndTheFilter(FxRobot robot) throws Exception {
+        FileTab tab = leftTab();
+        List<String> bar = fx(() -> {
+            var row = (javafx.scene.layout.HBox) tab.viewButton().getParent();
+            return row.getChildren().stream().map(n -> n instanceof AddressBar ? "address"
+                    : n == tab.viewButton() ? "view" : n == tab.sortButton() ? "sort"
+                    : n.getStyleClass().contains("filter-field") ? "filter" : "?").toList();
+        });
+        assertEquals(List.of("address", "view", "sort", "filter"), bar);
+    }
+
+    @Test
+    void theViewButtonSwitchesThisTabsViewAndShowsItsIcon(FxRobot robot) throws Exception {
+        Path dir = folderWith("viewbtn", "a.txt", "b.txt");
+        FileTab tab = leftTab();
+        open(robot, tab, dir);
+        assertEquals(ViewMode.DETAILS.icon(), iconOf(tab.viewButton()));
+        pick(robot, tab.viewButton(), "Tiles");
+        assertEquals(ViewMode.TILES, fx(tab::viewMode));
+        assertEquals(ViewMode.TILES.icon(), iconOf(tab.viewButton()));
+        // the menu marks the current view
+        robot.interact(() -> tab.viewButton().fire());
+        assertTrue(fx(() -> tab.viewButton().getItems().stream().anyMatch(i -> "view-tiles".equals(i.getId())
+                && ((javafx.scene.control.RadioMenuItem) i).isSelected())));
+        robot.interact(() -> tab.viewButton().hide());
+        // a shortcut changes the icon too
+        robot.push(KeyCode.SHORTCUT, KeyCode.SHIFT, KeyCode.DIGIT2);
+        waitUntil("large icons", () -> tab.viewMode() == ViewMode.LARGE_ICONS);
+        assertEquals(ViewMode.LARGE_ICONS.icon(), iconOf(tab.viewButton()));
+    }
+
+    @Test
+    void theSortButtonSortsAndShowsTheDirection(FxRobot robot) throws Exception {
+        Path dir = folderWith("sortbtn");
+        Files.write(dir.resolve("small.txt"), new byte[10]);
+        Files.write(dir.resolve("big.txt"), new byte[5000]);
+        Files.write(dir.resolve("mid.txt"), new byte[700]);
+        FileTab tab = leftTab();
+        open(robot, tab, dir);
+        assertEquals("mdi2s-sort-ascending", iconOf(tab.sortButton()));
+
+        pick(robot, tab.sortButton(), "Size");
+        waitUntil("by size", () -> names(tab).equals(List.of("small.txt", "mid.txt", "big.txt")));
+        pick(robot, tab.sortButton(), "Descending");
+        waitUntil("by size, descending", () -> names(tab).equals(List.of("big.txt", "mid.txt", "small.txt")));
+        assertEquals("mdi2s-sort-descending", iconOf(tab.sortButton()));
+        assertEquals("Sort by Size, descending", fx(() -> tab.sortButton().getTooltip().getText()));
+        assertEquals("size", fx(() -> tab.table().sortColumnId()));
+    }
+
     // ---- item size (+ / -) ----
 
     private static boolean shown(javafx.scene.control.Button b) {

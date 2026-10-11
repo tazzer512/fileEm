@@ -262,7 +262,7 @@ public final class MainWindow extends BorderPane {
     }
 
     /** Explorer's view modes for a tab, with the current one checked. */
-    private List<MenuItem> viewItems(FileTab t) {
+    List<MenuItem> viewItems(FileTab t) {
         List<MenuItem> items = new ArrayList<>();
         ToggleGroup group = new ToggleGroup();
         for (ViewMode m : ViewMode.values()) {
@@ -933,19 +933,24 @@ public final class MainWindow extends BorderPane {
 
     private Menu sortMenu(FileTable table) {
         Menu menu = new Menu("Sort by", Icons.icon("mdi2s-sort"));
+        menu.getItems().setAll(sortItems(table));
+        return menu;
+    }
+
+    /** The sort choices for a tab's list: column, then direction, with the current ones checked. */
+    List<MenuItem> sortItems(FileTable table) {
+        List<MenuItem> items = new ArrayList<>();
         String current = table.sortColumnId();
         boolean ascending = table.sortAscending();
         ToggleGroup columns = new ToggleGroup();
-        String[][] options = {{"name", "Name"}, {"size", "Size"}, {"type", "Type"}, {"modified", "Date modified"},
-                {"created", "Date created"}, {"extension", "Extension"}};
-        for (String[] o : options) {
-            RadioMenuItem r = new RadioMenuItem(o[1]);
+        FileTable.SORT_COLUMNS.forEach((id, label) -> {
+            RadioMenuItem r = new RadioMenuItem(label);
             r.setToggleGroup(columns);
-            r.setSelected(o[0].equals(current));
-            r.setOnAction(e -> table.sortBy(o[0], table.sortAscending()));
-            menu.getItems().add(r);
-        }
-        menu.getItems().add(new SeparatorMenuItem());
+            r.setSelected(id.equals(current));
+            r.setOnAction(e -> table.sortBy(id, table.sortAscending()));
+            items.add(r);
+        });
+        items.add(new SeparatorMenuItem());
         ToggleGroup direction = new ToggleGroup();
         RadioMenuItem asc = new RadioMenuItem("Ascending");
         RadioMenuItem desc = new RadioMenuItem("Descending");
@@ -956,8 +961,9 @@ public final class MainWindow extends BorderPane {
         String column = current != null ? current : "name";
         asc.setOnAction(e -> table.sortBy(column, true));
         desc.setOnAction(e -> table.sortBy(column, false));
-        menu.getItems().addAll(asc, desc);
-        return menu;
+        items.add(asc);
+        items.add(desc);
+        return items;
     }
 
     /**

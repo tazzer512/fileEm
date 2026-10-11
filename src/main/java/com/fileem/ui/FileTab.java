@@ -21,6 +21,8 @@ import javafx.geometry.Pos;
 import javafx.scene.Node;
 import javafx.scene.control.Button;
 import javafx.scene.control.Label;
+import javafx.scene.control.MenuButton;
+import javafx.scene.control.MenuItem;
 import javafx.scene.control.Tab;
 import javafx.scene.control.Tooltip;
 import javafx.scene.input.KeyCode;
@@ -30,6 +32,7 @@ import javafx.scene.layout.BorderPane;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
 import javafx.util.Duration;
+import org.kordamp.ikonli.javafx.FontIcon;
 
 import java.io.IOException;
 import java.nio.file.AccessDeniedException;
@@ -49,6 +52,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.Future;
+import java.util.function.Supplier;
 
 /** One tab of a side: address bar, filter, file list and status line for a single folder. */
 public final class FileTab extends BorderPane {
@@ -71,6 +75,8 @@ public final class FileTab extends BorderPane {
     private ViewMode viewMode = ViewMode.DETAILS;
     /** + / - size steps per view (icon views and Tiles); missing means the view's own size. */
     private final Map<ViewMode, Integer> sizeSteps = new EnumMap<>(ViewMode.class);
+    private final MenuButton viewButton = new MenuButton(null, Icons.icon(ViewMode.DETAILS.icon()));
+    private final MenuButton sortButton = new MenuButton(null, Icons.icon("mdi2s-sort-ascending"));
     private final Button smaller = new Button(null, Icons.icon("mdi2m-magnify-minus-outline"));
     private final Button bigger = new Button(null, Icons.icon("mdi2m-magnify-plus-outline"));
     /** Created when a non-Details view is first used. */
@@ -129,7 +135,13 @@ public final class FileTab extends BorderPane {
             }
         });
 
-        HBox top = new HBox(6, address, filter);
+        setUpMenuButton(viewButton, "view-button", "View (Ctrl+Shift+1…8, Ctrl+wheel)",
+                () -> main.viewItems(this));
+        setUpMenuButton(sortButton, "sort-button", "Sort by", () -> main.sortItems(table));
+        sorted.comparatorProperty().addListener(o -> updateSortButton());
+        updateSortButton();
+
+        HBox top = new HBox(6, address, viewButton, sortButton, filter);
         top.setAlignment(Pos.CENTER_LEFT);
         top.setPadding(new Insets(6, 6, 6, 6));
         HBox.setHgrow(address, Priority.ALWAYS);
@@ -227,6 +239,7 @@ public final class FileTab extends BorderPane {
             setCenter(grid);
         }
         updateSizeButtons();
+        ((FontIcon) viewButton.getGraphic()).setIconLiteral(m.icon());
         int lead = table.getFocusModel().getFocusedIndex();
         if (hadFocus) {
             focusTable();
@@ -234,6 +247,35 @@ public final class FileTab extends BorderPane {
         if (lead >= 0) {
             javafx.application.Platform.runLater(() -> ensureVisible(lead));
         }
+    }
+
+    // ---- view and sort buttons (between the address bar and the filter) ----
+
+    /** An icon-only menu button whose items are rebuilt on every opening, so the checks are current. */
+    private void setUpMenuButton(MenuButton b, String styleClass, String tooltip, Supplier<List<MenuItem>> items) {
+        b.getStyleClass().addAll(Styles.BUTTON_ICON, Styles.FLAT, styleClass);
+        b.setTooltip(new Tooltip(tooltip));
+        b.setFocusTraversable(false);
+        b.getItems().setAll(items.get()); // never empty when it opens
+        b.setOnShowing(e -> b.getItems().setAll(items.get()));
+        b.setOnHidden(e -> focusTable());
+    }
+
+    /** The sort button shows the direction (ascending or descending). */
+    private void updateSortButton() {
+        boolean asc = table.sortAscending();
+        ((FontIcon) sortButton.getGraphic()).setIconLiteral(asc ? "mdi2s-sort-ascending" : "mdi2s-sort-descending");
+        String column = table.sortColumnId();
+        String label = column == null ? null : FileTable.SORT_COLUMNS.getOrDefault(column, column);
+        sortButton.getTooltip().setText(label == null ? "Sort by" : "Sort by " + label + (asc ? ", ascending" : ", descending"));
+    }
+
+    MenuButton viewButton() {
+        return viewButton;
+    }
+
+    MenuButton sortButton() {
+        return sortButton;
     }
 
     // ---- item size (+ / -) ----

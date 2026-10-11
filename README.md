@@ -49,7 +49,10 @@ mvn test -Dheadless=false   # watch the UI tests run on screen
 - **File list**: Name, Size, Type, Date modified by default; Date created, Date accessed, Extension and
   Attributes/permissions can be turned on from the `⋮` header menu. Click headers to sort (folders stay
   on top, natural "file2 < file10" order). Column widths, order, visibility and sort are remembered.
-- **View modes** like Windows Explorer, per tab, from the View button in the toolbar, the
+- **View and Sort by buttons** in every tab, between the address bar and the filter box: the view
+  button shows the tab's current view and switches it; the sort button shows the direction and
+  picks the column (Name, Size, Type, Date modified, Date created, Extension) and the order.
+- **View modes** like Windows Explorer, per tab, from the View button in the toolbar or the tab, the
   right-click menu on empty space, Ctrl+Shift+1…8 or Ctrl+mouse wheel: Extra large / Large / Medium /
   Small icons, List, Details, Tiles and Content. The big icon views show thumbnails of images (PNG,
   JPEG, GIF, BMP). Selection, sorting, keyboard navigation, the selection box and drag & drop work in
