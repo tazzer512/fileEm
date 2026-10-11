@@ -362,11 +362,16 @@ public final class MainWindow extends BorderPane {
     }
 
     private Node buildFunctionBar() {
+        // copy and move go to the other side, so they need it shown
+        ButtonBase copy = fkey("F5", "Copy", () -> transferToOther(false));
+        ButtonBase move = fkey("F6", "Move", () -> transferToOther(true));
+        copy.disableProperty().bind(dual.not());
+        move.disableProperty().bind(dual.not());
         HBox bar = new HBox(4,
                 fkey("F2", "Rename", this::rename),
                 fkey("F3", "Preview", this::togglePreview),
-                fkey("F5", "Copy", () -> transferToOther(false)),
-                fkey("F6", "Move", () -> transferToOther(true)),
+                copy,
+                move,
                 fkey("F7", "New folder", this::newFolder),
                 fkey("F8", "Delete", () -> delete(false)),
                 fkey("F9", "Dual pane", () -> dual.set(!dual.get())),
@@ -736,16 +741,19 @@ public final class MainWindow extends BorderPane {
         }
     }
 
-    /** F5 / F6: copy or move the selection to the other side's folder (or a typed folder). */
+    /**
+     * F5 / F6: copy or move the selection to the other side's folder (or a typed folder). Only with
+     * the dual pane on: without a visible other side there is nothing to copy to.
+     */
     private void transferToOther(boolean move) {
         transferToOther(tab().selectedPaths(), move);
     }
 
     private void transferToOther(List<Path> sources, boolean move) {
-        if (sources.isEmpty()) {
+        if (sources.isEmpty() || !dual.get()) {
             return;
         }
-        Path initial = dual.get() ? otherSide(active).activeTab().currentDir() : tab().currentDir();
+        Path initial = otherSide(active).activeTab().currentDir();
         String verb = move ? "Move" : "Copy";
         Dialogs.askTarget(stage, verb, verb + " " + describe(sources) + " to:", initial).ifPresent(target ->
                 // checked in the background: a typed folder may be on a mount that hangs
@@ -929,8 +937,12 @@ public final class MainWindow extends BorderPane {
                     : item("Paste", "mdi2c-content-paste", this::paste));
         }
         items.add(new SeparatorMenuItem());
-        items.add(item("Copy to other side…  (F5)", "mdi2f-file-move", () -> transferToOther(sel, false)));
-        items.add(item("Move to other side…  (F6)", "mdi2f-file-move", () -> transferToOther(sel, true)));
+        MenuItem copyOver = item("Copy to other side…  (F5)", "mdi2f-file-move", () -> transferToOther(sel, false));
+        MenuItem moveOver = item("Move to other side…  (F6)", "mdi2f-file-move", () -> transferToOther(sel, true));
+        copyOver.setDisable(!dual.get());
+        moveOver.setDisable(!dual.get());
+        items.add(copyOver);
+        items.add(moveOver);
         items.add(item("Duplicate", "mdi2c-content-duplicate", () -> duplicate(sel)));
         items.add(new SeparatorMenuItem());
         items.add(item("Compress to ZIP", "mdi2a-archive-arrow-down-outline", () -> compress(sel)));

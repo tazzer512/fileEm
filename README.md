@@ -118,7 +118,7 @@ mvn test -Dheadless=false   # watch the UI tests run on screen
 | Tab | Switch side (dual pane) |
 | F2 | Rename |
 | F3 | Preview window on / off |
-| F5 / F6 | Copy / Move selection to the other side (target is editable) |
+| F5 / F6 | Copy / Move selection to the other side (target is editable; only with the dual pane on) |
 | F7, Ctrl+Shift+N | New folder |
 | Del, F8 | Move to Trash |
 | Shift+Del | Delete permanently |

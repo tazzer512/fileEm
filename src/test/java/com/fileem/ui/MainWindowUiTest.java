@@ -356,6 +356,44 @@ class MainWindowUiTest {
                 && names(leftTab()).equals(List.of("copy.txt")));
     }
 
+    /** Without the dual pane there is no other side: copy/move to it are greyed out and F5/F6 do nothing. */
+    @Test
+    void copyAndMoveToTheOtherSideNeedTheDualPane(FxRobot robot) throws Exception {
+        Path dir = folderWith("single", "a.txt");
+        FileTab tab = leftTab();
+        open(robot, tab, dir);
+        select(robot, tab, "a.txt");
+        assertFalse(window.isDual());
+
+        javafx.scene.control.Button copyKey = functionKey("Copy");
+        javafx.scene.control.Button moveKey = functionKey("Move");
+        assertTrue(fx(() -> findMenuItem(window.fileMenuItems(tab), "Copy to other side").isDisable()));
+        assertTrue(fx(() -> findMenuItem(window.fileMenuItems(tab), "Move to other side").isDisable()));
+        assertTrue(fx(copyKey::isDisable) && fx(moveKey::isDisable), "F-key bar buttons");
+        int windows = otherWindows(stage).size();
+        robot.type(KeyCode.F5);
+        robot.type(KeyCode.F6);
+        WaitForAsyncUtils.waitForFxEvents();
+        assertEquals(windows, otherWindows(stage).size(), "no target dialog");
+        assertEquals(List.of("a.txt"), names(tab));
+
+        robot.type(KeyCode.F9);
+        waitUntil("dual on", window::isDual);
+        assertFalse(fx(() -> findMenuItem(window.fileMenuItems(tab), "Copy to other side").isDisable()));
+        assertFalse(fx(() -> findMenuItem(window.fileMenuItems(tab), "Move to other side").isDisable()));
+        assertFalse(fx(copyKey::isDisable) || fx(moveKey::isDisable), "F-key bar buttons");
+        robot.type(KeyCode.F9);
+        waitUntil("dual off", () -> !window.isDual());
+        assertTrue(fx(copyKey::isDisable) && fx(moveKey::isDisable), "greyed out again");
+    }
+
+    private javafx.scene.control.Button functionKey(String label) {
+        return fx(() -> stage.getScene().getRoot().lookupAll(".button").stream()
+                .filter(n -> n instanceof javafx.scene.control.Button b && label.equals(b.getText())
+                        && b.getGraphic() instanceof javafx.scene.control.Label)
+                .map(n -> (javafx.scene.control.Button) n).findFirst().orElseThrow());
+    }
+
     @Test
     void conflictDialogKeepBoth(FxRobot robot) throws Exception {
         Path from = folderWith("cfrom", "a.txt");
