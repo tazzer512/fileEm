@@ -53,7 +53,11 @@ command when it isn't installed:
 
 ## Build, run, test
 
-- JDK 21, Maven. No module-info: the app runs from the classpath via `com.fileem.Launcher`
+- JDK 27 (with JavaFX 27), Maven. If the default JDK is older, point `JAVA_HOME` at a 27 (e.g.
+  sdkman's `27.0.0.0+35-tem`); an older JDK fails with "release version 27 not supported". JavaFX
+  loads native libraries, so every launch passes `--enable-native-access` (surefire `argLine`,
+  `javafx:run` options, jpackage `--java-options` for the `javafx.graphics` module; `PackagingTest`
+  checks). `.mvn/jvm.config` silences Maven's own final-field-mutation warning. No module-info: the app runs from the classpath via `com.fileem.Launcher`
   (a non-`Application` main class, which avoids the "JavaFX runtime components are missing" check).
 - `mvn -q compile`: must stay warning/error free.
 - `mvn javafx:run`: starts the app. It is a GUI; when running it non-interactively wrap it in
@@ -237,8 +241,9 @@ tools/                                  make-icon.py, install-linux.sh (per-user
   `Future`: cancel stale work (`FileTab.startLoad` cancels the previous listing) and call
   `Bg.checkInterrupted()` in long loops. Cancelled work gets no callback. File operations run on
   **platform threads** (`Bg.OPERATIONS`, one per operation, all in parallel): they are long and
-  sit in blocking file I/O, which pins virtual threads in JDK 21. Inside code that may run on a
-  virtual thread, block with `java.util.concurrent` locks, not `synchronized`/`wait` (pinning).
+  sit in blocking file I/O, which holds a virtual thread's carrier for the whole call (the JDK
+  only compensates with extra carriers). Since JDK 24 `synchronized`/`wait` no longer pin virtual
+  threads, so either style of locking is fine; the existing `java.util.concurrent` locks stay.
   Async loads also use a generation counter (`loadGeneration`, `revealToken`) to drop stale
   results: keep that pattern. A watcher refresh is skipped while a navigation is loading
   (`navigating`), or it would replace the navigation's generation and drop it. A navigation

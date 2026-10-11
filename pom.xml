@@ -10,9 +10,9 @@
     <name>fileEm</name>
 
     <properties>
-        <maven.compiler.release>21</maven.compiler.release>
+        <maven.compiler.release>27</maven.compiler.release>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-        <javafx.version>21.0.5</javafx.version>
+        <javafx.version>27</javafx.version>
         <ikonli.version>12.3.1</ikonli.version>
         <main.class>com.fileem.Launcher</main.class>
         <junit.version>5.11.4</junit.version>
@@ -82,7 +82,7 @@
                 <artifactId>maven-surefire-plugin</artifactId>
                 <version>3.5.3</version>
                 <configuration>
-                    <argLine>-Djava.awt.headless=true -Dtestfx.robot=glass -Dfileem.noLaunch=true ${ui.test.args}</argLine>
+                    <argLine>--enable-native-access=ALL-UNNAMED -Djava.awt.headless=true -Dtestfx.robot=glass -Dfileem.noLaunch=true ${ui.test.args}</argLine>
                 </configuration>
             </plugin>
             <plugin>
@@ -91,6 +91,8 @@
                 <version>0.0.8</version>
                 <configuration>
                     <mainClass>${main.class}</mainClass>
+                    <!-- JavaFX loads its native libraries itself (JDK 24+ warns, later releases block it) -->
+                    <options><option>--enable-native-access=ALL-UNNAMED</option></options>
                 </configuration>
             </plugin>
         </plugins>
@@ -241,6 +243,7 @@
                                         <argument>--main-class</argument><argument>${main.class}</argument>
                                         <argument>--module-path</argument><argument>${dist.dir}/javafx</argument>
                                         <argument>--add-modules</argument><argument>${dist.modules}</argument>
+                                        <argument>--java-options</argument><argument>--enable-native-access=javafx.graphics</argument>
                                         <argument>--jlink-options</argument><argument>--strip-debug --no-header-files --no-man-pages --strip-native-commands --compress=zip-6</argument>
                                         <argument>--dest</argument><argument>${dist.dir}/app</argument>
                                     </arguments>

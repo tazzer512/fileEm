@@ -5,7 +5,7 @@ detail view, with an optional second side for Norton Commander / Directory Opus 
 
 ## Run
 
-Requires JDK 21+ and Maven.
+Requires JDK 27+ and Maven.
 
 ```sh
 mvn javafx:run

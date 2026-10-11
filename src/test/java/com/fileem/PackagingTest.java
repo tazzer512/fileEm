@@ -40,4 +40,18 @@ class PackagingTest {
             assertTrue(modules.contains(m), m);
         }
     }
+
+    /**
+     * JavaFX loads its native libraries itself; from JDK 24 that needs native access, which later
+     * releases will refuse without the flag. Packaged, JavaFX is the javafx.graphics module; from
+     * Maven (run, tests) it is on the classpath.
+     */
+    @Test
+    void javaFxMayLoadItsNativeLibrariesEverywhereTheAppStarts() throws Exception {
+        String pom = Files.readString(Path.of("pom.xml"));
+        assertTrue(pom.contains("<argument>--java-options</argument><argument>--enable-native-access=javafx.graphics</argument>"),
+                "packaged app");
+        assertTrue(pom.contains("<option>--enable-native-access=ALL-UNNAMED</option>"), "mvn javafx:run");
+        assertTrue(pom.contains("<argLine>--enable-native-access=ALL-UNNAMED"), "tests");
+    }
 }
