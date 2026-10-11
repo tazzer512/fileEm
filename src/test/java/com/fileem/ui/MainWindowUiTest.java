@@ -12,6 +12,7 @@ import javafx.scene.Scene;
 import javafx.scene.control.TableColumn;
 import javafx.scene.control.TableRow;
 import javafx.scene.control.TreeItem;
+import javafx.scene.input.DragEvent;
 import javafx.scene.input.KeyCode;
 import javafx.stage.Stage;
 import javafx.stage.Window;
@@ -532,6 +533,38 @@ class MainWindowUiTest {
     }
 
     /** Answers the Move / Copy / Cancel question that every drop asks. */
+    /** DRAG_DONE as the source of a finished drag gets it. */
+    private static DragEvent dragDone(Object source) {
+        return new DragEvent(source, (javafx.event.EventTarget) source, DragEvent.DRAG_DONE, null, 0, 0, 0, 0,
+                javafx.scene.input.TransferMode.MOVE, source, null, null);
+    }
+
+    @Test
+    void theDropQuestionWaitsUntilOurOwnDragHasCompletelyEnded(FxRobot robot) throws Exception {
+        // Regression: the Move/Copy dialog opened while the drag's nested loop still held the mouse grab,
+        // so clicking Move did nothing (only Enter worked). It must wait for DRAG_DONE on the source.
+        var source = new javafx.scene.layout.Region();
+        int[] asked = {0};
+        robot.interact(() -> MainWindow.afterDrag(source, () -> asked[0]++));
+        WaitForAsyncUtils.waitForFxEvents();
+        assertEquals(0, asked[0], "not while the drag is still finishing");
+        robot.interact(() -> javafx.event.Event.fireEvent(source, dragDone(source)));
+        waitUntil("asked after DRAG_DONE", () -> asked[0] == 1);
+        robot.interact(() -> javafx.event.Event.fireEvent(source, dragDone(source)));
+        WaitForAsyncUtils.waitForFxEvents();
+        assertEquals(1, asked[0], "asked once");
+
+        // drags from other applications have no source here: ask right after the drop event
+        int[] external = {0};
+        robot.interact(() -> MainWindow.afterDrag(null, () -> external[0]++));
+        waitUntil("external drop asked", () -> external[0] == 1);
+
+        // a source that never reports DRAG_DONE (e.g. removed from the scene) still gets its answer
+        int[] lost = {0};
+        robot.interact(() -> MainWindow.afterDrag(new javafx.scene.layout.Region(), () -> lost[0]++));
+        waitUntil("asked after the timeout", () -> lost[0] == 1);
+    }
+
     private void answerDrop(FxRobot robot, String button) {
         waitUntil("move or copy question", () -> otherWindows(stage).stream()
                 .anyMatch(w -> w instanceof Stage st && "Move or copy".equals(st.getTitle())));
@@ -1457,6 +1490,168 @@ class MainWindowUiTest {
         WaitForAsyncUtils.waitForFxEvents();
     }
 
+    // ---- preview window ----
+
+    private PreviewWindow preview() {
+        return fx(window::preview);
+    }
+
+    private void previewOn(FxRobot robot) {
+        robot.interact(() -> window.preview().enabledProperty().set(true));
+        waitUntil("preview shown", () -> window.preview().stage().isShowing());
+    }
+
+    @Test
+    void thePreviewWindowIsSwitchedOnAndOffWithF3TheToolbarOrByClosingIt(FxRobot robot) throws Exception {
+        FileTab tab = leftTab();
+        open(robot, tab, folderWith("prevtoggle", "a.txt"));
+        PreviewWindow p = preview();
+        assertFalse(fx(() -> p.stage().isShowing()), "off by default");
+        robot.type(KeyCode.F3);
+        waitUntil("F3 shows it", () -> p.stage().isShowing());
+        javafx.scene.control.ToggleButton toggle = fx(() -> (javafx.scene.control.ToggleButton) stage.getScene().lookup("#preview-toggle"));
+        assertTrue(fx(toggle::isSelected), "the toolbar button follows");
+        robot.type(KeyCode.F3);
+        waitUntil("F3 hides it", () -> !p.stage().isShowing());
+        robot.clickOn(toggle);
+        waitUntil("the toolbar button shows it", () -> p.stage().isShowing());
+        robot.interact(() -> p.stage().fireEvent(new javafx.stage.WindowEvent(p.stage(), javafx.stage.WindowEvent.WINDOW_CLOSE_REQUEST)));
+        waitUntil("closing switches it off", () -> !p.stage().isShowing() && !p.enabledProperty().get() && !toggle.isSelected());
+    }
+
+    @Test
+    void anImagePreviewCanBeZoomedFittedAndPanned(FxRobot robot) throws Exception {
+        Path dir = folderWith("previmg", "a.txt");
+        java.awt.image.BufferedImage img = new java.awt.image.BufferedImage(2000, 1500, java.awt.image.BufferedImage.TYPE_INT_RGB);
+        javax.imageio.ImageIO.write(img, "png", dir.resolve("big.png").toFile());
+        FileTab tab = leftTab();
+        open(robot, tab, dir);
+        previewOn(robot);
+        PreviewWindow p = preview();
+        select(robot, tab, "big.png");
+        waitUntil("image shown", () -> p.image() != null && p.image().getWidth() == 2000);
+        assertTrue(fx(p::isFitting) && fx(p::zoom) < 1, "starts fitted to the window: " + fx(p::zoom));
+
+        robot.clickOn(fx(() -> p.button("preview-actual")));
+        assertEquals(1.0, fx(p::zoom), 1e-9);
+        robot.clickOn(fx(() -> p.button("preview-zoom-in")));
+        assertEquals(1.25, fx(p::zoom), 1e-9);
+        robot.clickOn(fx(() -> p.button("preview-zoom-out")));
+        robot.clickOn(fx(() -> p.button("preview-zoom-out")));
+        assertEquals(0.8, fx(p::zoom), 1e-9);
+
+        robot.clickOn(fx(() -> p.button("preview-actual")));
+        WaitForAsyncUtils.waitForFxEvents();
+        double h = fx(() -> p.scrollPane().getHvalue()), v = fx(() -> p.scrollPane().getVvalue());
+        robot.clickOn(fx(() -> p.button("preview-pan-right")));
+        robot.clickOn(fx(() -> p.button("preview-pan-down")));
+        assertTrue(fx(() -> p.scrollPane().getHvalue()) > h && fx(() -> p.scrollPane().getVvalue()) > v, "panned");
+        double right = fx(() -> p.scrollPane().getHvalue());
+        robot.clickOn(fx(() -> p.button("preview-pan-left")));
+        assertTrue(fx(() -> p.scrollPane().getHvalue()) < right, "panned back left");
+        robot.clickOn(fx(() -> p.button("preview-fit")));
+        assertTrue(fx(p::isFitting) && fx(p::zoom) < 1);
+    }
+
+    @Test
+    void textFilesShowTheirTextAndZoomChangesTheFont(FxRobot robot) throws Exception {
+        Path dir = folderWith("prevtxt");
+        Files.writeString(dir.resolve("notes.md"), "# Title\nsome notes");
+        Files.write(dir.resolve("data.bin"), new byte[]{0, 1, 2, 3});
+        Files.writeString(dir.resolve("README"), "plain text without an extension");
+        Files.createDirectory(dir.resolve("sub"));
+        FileTab tab = leftTab();
+        open(robot, tab, dir);
+        previewOn(robot);
+        PreviewWindow p = preview();
+        select(robot, tab, "notes.md");
+        waitUntil("text shown", () -> "# Title\nsome notes".equals(p.textContent()));
+        robot.clickOn(fx(() -> p.button("preview-zoom-in")));
+        assertEquals(1.25, fx(p::zoom), 1e-9);
+
+        select(robot, tab, "README");
+        waitUntil("unknown files are checked for text", () -> "plain text without an extension".equals(p.textContent()));
+        select(robot, tab, "data.bin");
+        waitUntil("binary: no preview", () -> p.messageText() != null && p.messageText().contains("No preview available"));
+        select(robot, tab, "sub");
+        waitUntil("folder", () -> p.messageText() != null && p.messageText().contains("Folder"));
+    }
+
+    @Test
+    void quickSelectionChangesOnlyLoadTheLastOne(FxRobot robot) throws Exception {
+        Path dir = folderWith("prevquick", "one.txt", "two.txt", "three.txt");
+        FileTab tab = leftTab();
+        open(robot, tab, dir);
+        previewOn(robot);
+        PreviewWindow p = preview();
+        robot.interact(() -> {
+            var sm = tab.table().getSelectionModel();
+            for (String n : List.of("one.txt", "two.txt", "three.txt")) {
+                sm.clearSelection();
+                for (int i = 0; i < tab.table().getItems().size(); i++) {
+                    if (tab.table().getItems().get(i).name().equals(n)) {
+                        sm.select(i);
+                    }
+                }
+            }
+        });
+        waitUntil("last one shown", () -> "three.txt".equals(p.textContent()));
+        assertEquals("three.txt", fx(() -> p.shown().name()));
+    }
+
+    @Test
+    void photoshopFilesArePreviewed(FxRobot robot) throws Exception {
+        Path dir = folderWith("prevpsd");
+        var bytes = new java.io.ByteArrayOutputStream();
+        var out = new java.io.DataOutputStream(bytes);
+        out.writeBytes("8BPS");
+        out.writeShort(1);
+        out.write(new byte[6]);
+        out.writeShort(3);
+        out.writeInt(1);
+        out.writeInt(3);
+        out.writeShort(8);
+        out.writeShort(3);
+        out.writeInt(0);
+        out.writeInt(0);
+        out.writeInt(0);
+        out.writeShort(0);
+        out.write(new byte[]{1, 2, 3, 4, 5, 6, 7, 8, 9});
+        Files.write(dir.resolve("art.psd"), bytes.toByteArray());
+        FileTab tab = leftTab();
+        open(robot, tab, dir);
+        previewOn(robot);
+        select(robot, tab, "art.psd");
+        waitUntil("psd image", () -> preview().image() != null && preview().image().getWidth() == 3);
+    }
+
+    @Test
+    void thePreviewIsRememberedInTheSession(FxRobot robot) throws Exception {
+        open(robot, leftTab(), folderWith("prevsession", "a.txt"));
+        previewOn(robot);
+        robot.interact(() -> {
+            window.preview().stage().setWidth(700);
+            window.preview().stage().setHeight(500);
+        });
+        robot.interact(window::saveSession);
+        assertTrue(session.getBool("preview.enabled", false));
+        Stage other = fx(Stage::new);
+        MainWindow restored = fx(() -> new MainWindow(other, session));
+        robot.interact(() -> {
+            other.setScene(new Scene(restored, 800, 600));
+            other.show();
+        });
+        try {
+            waitUntil("restored on", () -> restored.preview().stage().isShowing());
+            assertTrue(fx(() -> restored.preview().stage().getWidth()) > 600, "size restored");
+        } finally {
+            robot.interact(() -> {
+                restored.preview().enabledProperty().set(false);
+                other.close();
+            });
+        }
+    }
+
     // ---- view and sort buttons in the tab bar ----
 
     /** Opens {@code button}'s menu (which rebuilds its items), fires the item with {@code text}, closes it. */
@@ -1484,6 +1679,22 @@ class MainWindowUiTest {
                     : n.getStyleClass().contains("filter-field") ? "filter" : "?").toList();
         });
         assertEquals(List.of("address", "view", "sort", "filter"), bar);
+    }
+
+    @Test
+    void theFilterBoxIsAboutThirtyPercentNarrowerThanItsDefault(FxRobot robot) {
+        FileTab tab = leftTab();
+        double[] widths = fx(() -> {
+            var filter = (javafx.scene.control.TextField) tab.lookup(".filter-field");
+            double styled = filter.getWidth();
+            filter.setStyle("-fx-pref-width: -1;"); // the natural width of its 12 columns
+            filter.applyCss();
+            double natural = filter.prefWidth(-1);
+            filter.setStyle("");
+            return new double[]{styled, natural};
+        });
+        double ratio = widths[0] / widths[1];
+        assertTrue(ratio > 0.66 && ratio < 0.74, "filter is " + widths[0] + " of " + widths[1] + " px (" + ratio + ")");
     }
 
     @Test
@@ -1567,7 +1778,56 @@ class MainWindowUiTest {
         setView(robot, tab, ViewMode.EXTRA_LARGE_ICONS);
         robot.clickOn(tab.biggerButton());
         robot.clickOn(tab.biggerButton());
-        waitUntil("largest", () -> g.iconPx() == 300 && tab.biggerButton().isDisabled());
+        waitUntil("two steps", () -> g.iconPx() == 300 && !tab.biggerButton().isDisabled());
+        robot.clickOn(tab.biggerButton()); // the last step stops at the limit
+        waitUntil("largest", () -> g.iconPx() == ViewMode.MAX_ICON && tab.biggerButton().isDisabled());
+    }
+
+    @Test
+    void theSizeSliderSizesFreelyWithTheDefaultInTheMiddle(FxRobot robot) throws Exception {
+        Path dir = folderWith("slider", "a.txt");
+        FileTab tab = leftTab();
+        open(robot, tab, dir);
+        setView(robot, tab, ViewMode.DETAILS);
+        assertFalse(fx(() -> tab.sizeSlider().isVisible()), "no slider in Details");
+        setView(robot, tab, ViewMode.LARGE_ICONS);
+        javafx.scene.control.Slider slider = tab.sizeSlider();
+        assertTrue(fx(slider::isVisible));
+        assertEquals(0.0, fx(slider::getValue), 1e-9, "the middle is the default size");
+
+        robot.interact(() -> slider.setValue(1));
+        assertEquals(ViewMode.MAX_ICON, (int) fx(() -> grid(tab).iconPx()), "right end: biggest");
+        assertTrue(fx(() -> tab.biggerButton().isDisabled()));
+        robot.interact(() -> slider.setValue(-1));
+        assertEquals(ViewMode.MIN_ICON, (int) fx(() -> grid(tab).iconPx()), "left end: smallest");
+        robot.interact(() -> slider.setValue(0.5));
+        int half = fx(() -> grid(tab).iconPx());
+        assertTrue(half > 96 && half < ViewMode.MAX_ICON, "in between: " + half);
+        robot.interact(() -> slider.setValue(0.02));
+        assertEquals(96, (int) fx(() -> grid(tab).iconPx()), "near the middle snaps to the default");
+
+        // the buttons move the slider along
+        robot.clickOn(tab.biggerButton());
+        assertEquals(120, (int) fx(() -> grid(tab).iconPx()));
+        assertTrue(fx(slider::getValue) > 0.1);
+        // each view has its own position
+        setView(robot, tab, ViewMode.TILES);
+        assertEquals(0.0, fx(slider::getValue), 1e-9);
+        setView(robot, tab, ViewMode.LARGE_ICONS);
+        assertTrue(fx(slider::getValue) > 0.1);
+    }
+
+    @Test
+    void fractionalSizesSurviveTheSession(FxRobot robot) throws Exception {
+        FileTab tab = leftTab();
+        open(robot, tab, folderWith("fraction", "a.txt"));
+        setView(robot, tab, ViewMode.MEDIUM_ICONS);
+        robot.interact(() -> tab.sizeSlider().setValue(0.37));
+        int px = fx(() -> grid(tab).iconPx());
+        robot.interact(window::saveSession);
+        MainWindow restored = fx(() -> new MainWindow(new Stage(), session));
+        FileTab again = fx(() -> restored.left().activeTab());
+        assertEquals(px, (int) fx(() -> again.grid().iconPx()));
     }
 
     @Test
@@ -1809,6 +2069,34 @@ class MainWindowUiTest {
         assertFalse(fx(() -> g.cellFor(1).showsThumbnail()), "other files keep their type icon");
         setView(robot, tab, ViewMode.SMALL_ICONS);
         assertFalse(fx(() -> grid(tab).cellFor(0).showsThumbnail()), "small views use icons");
+    }
+
+    @Test
+    void photoshopFilesShowAPreviewInTheIconViews(FxRobot robot) throws Exception {
+        Path dir = folderWith("psdthumb", "plain.txt");
+        // a 2×2 raw RGB Photoshop file: red
+        var bytes = new java.io.ByteArrayOutputStream();
+        var out = new java.io.DataOutputStream(bytes);
+        out.writeBytes("8BPS");
+        out.writeShort(1);
+        out.write(new byte[6]);
+        out.writeShort(3);
+        out.writeInt(2);
+        out.writeInt(2);
+        out.writeShort(8);
+        out.writeShort(3);
+        out.writeInt(0);
+        out.writeInt(0);
+        out.writeInt(0);
+        out.writeShort(0);
+        out.write(new byte[]{(byte) 255, (byte) 255, (byte) 255, (byte) 255, 0, 0, 0, 0, 0, 0, 0, 0});
+        Files.write(dir.resolve("art.psd"), bytes.toByteArray());
+        FileTab tab = leftTab();
+        open(robot, tab, dir);
+        setView(robot, tab, ViewMode.LARGE_ICONS);
+        FileGrid g = grid(tab);
+        waitUntil("psd preview shown", () -> g.cellFor(0).nameText().equals("art.psd") && g.cellFor(0).showsThumbnail());
+        assertFalse(fx(() -> g.cellFor(1).showsThumbnail()));
     }
 
     @Test

@@ -79,11 +79,13 @@ public final class MainWindow extends BorderPane {
     private Button upButton;
     private Button bookmarkButton;
     private final Bookmarks bookmarks;
+    private final PreviewWindow preview;
 
     public MainWindow(Stage stage, Session session) {
         this.stage = stage;
         this.session = session;
         this.bookmarks = new Bookmarks(session);
+        this.preview = new PreviewWindow(stage, session);
         getStyleClass().add("main-window");
         showHidden.set(session.getBool("showHidden", false));
         showHidden.addListener((o, a, v) -> session.put("showHidden", v));
@@ -103,6 +105,10 @@ public final class MainWindow extends BorderPane {
         dual.addListener((o, a, v) -> layoutSides());
         sides.getItems().setAll(left);
         layoutSides();
+        if (session.getBool("preview.enabled", false)) {
+            // once the window is on screen, so the preview can be placed next to it
+            stage.addEventHandler(javafx.stage.WindowEvent.WINDOW_SHOWN, e -> preview.enabledProperty().set(true));
+        }
 
         sceneProperty().addListener((o, old, scene) -> {
             if (scene != null) {
@@ -193,6 +199,18 @@ public final class MainWindow extends BorderPane {
         upButton.setDisable(!t.canGoUp());
         stage.setTitle(t.currentDir() == null ? "fileEm" : FsUtil.displayName(t.currentDir()) + " — fileEm");
         updateBookmarkButton();
+        selectionChanged(t);
+    }
+
+    /** The selection of tab {@code t} changed: the preview follows the active tab. */
+    void selectionChanged(FileTab t) {
+        if (t.side() == active && t == active.activeTab()) {
+            preview.select(t.previewEntry());
+        }
+    }
+
+    PreviewWindow preview() {
+        return preview;
     }
 
     private void updateBookmarkButton() {
@@ -223,6 +241,9 @@ public final class MainWindow extends BorderPane {
 
         ToggleButton hidden = toggle("mdi2e-eye", "Show hidden files (Ctrl+H)");
         hidden.selectedProperty().bindBidirectional(showHidden);
+        ToggleButton previewToggle = toggle("mdi2f-file-eye-outline", "Preview window (F3)");
+        previewToggle.selectedProperty().bindBidirectional(preview.enabledProperty());
+        previewToggle.setId("preview-toggle");
         ToggleButton dualToggle = toggle("mdi2v-view-split-vertical", "Dual pane (F9)");
         dualToggle.selectedProperty().bindBidirectional(dual);
         Button theme = iconButton("mdi2t-theme-light-dark", "Light / dark mode", Theme::toggle);
@@ -234,7 +255,7 @@ public final class MainWindow extends BorderPane {
 
         ToolBar bar = new ToolBar(backButton, forwardButton, upButton, refresh, sep(),
                 newFolder, cut, copy, paste, rename, delete, props, sep(), newTab, bookmarkButton,
-                spacer, viewMenu, hidden, dualToggle, themeMenu, theme);
+                spacer, viewMenu, previewToggle, hidden, dualToggle, themeMenu, theme);
         bar.getStyleClass().add("main-toolbar");
         return bar;
     }
@@ -343,6 +364,7 @@ public final class MainWindow extends BorderPane {
     private Node buildFunctionBar() {
         HBox bar = new HBox(4,
                 fkey("F2", "Rename", this::rename),
+                fkey("F3", "Preview", this::togglePreview),
                 fkey("F5", "Copy", () -> transferToOther(false)),
                 fkey("F6", "Move", () -> transferToOther(true)),
                 fkey("F7", "New folder", this::newFolder),
@@ -417,6 +439,8 @@ public final class MainWindow extends BorderPane {
             action = this::refreshActive;
         } else if (c == KeyCode.F9) {
             action = () -> dual.set(!dual.get());
+        } else if (c == KeyCode.F3 && !shortcut && !alt) {
+            action = this::togglePreview;
         } else if (shortcut && shift && !alt && viewModeForKey(c) != null) {
             ViewMode m = viewModeForKey(c);
             action = () -> tab().setViewMode(m);
@@ -792,8 +816,47 @@ public final class MainWindow extends BorderPane {
         List<Path> files = Dnd.files(e.getDragboard());
         e.setDropCompleted(true);
         e.consume();
-        // Ask once the drag has ended: a dialog can't run inside the drop event.
-        Platform.runLater(() -> moveOrCopy(files, target));
+        afterDrag(e.getGestureSource(), () -> moveOrCopy(files, target));
+    }
+
+    /** How long to wait for a drag's DRAG_DONE before asking anyway (the source node may be gone). */
+    static final Duration DRAG_DONE_TIMEOUT = Duration.seconds(2);
+
+    /**
+     * Runs {@code then} once the drag gesture is completely over. A dialog can't run inside the drop
+     * event, and for a drag that started in this app not even right after it: on Linux, JavaFX runs
+     * our own drags in a nested event loop that holds the mouse grab until the source gets DRAG_DONE.
+     * A dialog opened before that gets keyboard input (Enter works) but no mouse clicks: pressing its
+     * Move button did nothing. So for our own drags, wait for DRAG_DONE on the source (with a timeout
+     * in case it never comes); drags from other applications only need the current event to finish.
+     */
+    static void afterDrag(Object gestureSource, Runnable then) {
+        if (!(gestureSource instanceof Node source)) {
+            Platform.runLater(then);
+            return;
+        }
+        boolean[] ran = {false};
+        Runnable once = () -> {
+            if (!ran[0]) {
+                ran[0] = true;
+                then.run();
+            }
+        };
+        PauseTransition timeout = new PauseTransition(DRAG_DONE_TIMEOUT);
+        javafx.event.EventHandler<DragEvent> done = new javafx.event.EventHandler<>() {
+            @Override
+            public void handle(DragEvent ev) {
+                source.removeEventHandler(DragEvent.DRAG_DONE, this);
+                timeout.stop();
+                Platform.runLater(once); // after the drag's nested loop has returned
+            }
+        };
+        source.addEventHandler(DragEvent.DRAG_DONE, done);
+        timeout.setOnFinished(ev -> {
+            source.removeEventHandler(DragEvent.DRAG_DONE, done);
+            once.run();
+        });
+        timeout.play();
     }
 
     /**
@@ -1209,7 +1272,12 @@ public final class MainWindow extends BorderPane {
 
     // ---- session ----
 
+    private void togglePreview() {
+        preview.enabledProperty().set(!preview.enabledProperty().get());
+    }
+
     public void saveSession() {
+        preview.save(session);
         session.put("theme.name", Theme.family().id());
         session.put("theme.dark", Theme.isDark());
         session.put("dual", dual.get());

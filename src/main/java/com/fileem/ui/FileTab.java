@@ -23,6 +23,7 @@ import javafx.scene.control.Button;
 import javafx.scene.control.Label;
 import javafx.scene.control.MenuButton;
 import javafx.scene.control.MenuItem;
+import javafx.scene.control.Slider;
 import javafx.scene.control.Tab;
 import javafx.scene.control.Tooltip;
 import javafx.scene.input.KeyCode;
@@ -74,7 +75,10 @@ public final class FileTab extends BorderPane {
     private long lastTyped;
     private ViewMode viewMode = ViewMode.DETAILS;
     /** + / - size steps per view (icon views and Tiles); missing means the view's own size. */
-    private final Map<ViewMode, Integer> sizeSteps = new EnumMap<>(ViewMode.class);
+    private final Map<ViewMode, Double> sizeSteps = new EnumMap<>(ViewMode.class);
+    /** Item size: the middle is the view's own size, each half runs to the smallest / biggest size. */
+    private final Slider sizeSlider = new Slider(-1, 1, 0);
+    private boolean updatingSlider;
     private final MenuButton viewButton = new MenuButton(null, Icons.icon(ViewMode.DETAILS.icon()));
     private final MenuButton sortButton = new MenuButton(null, Icons.icon("mdi2s-sort-ascending"));
     private final Button smaller = new Button(null, Icons.icon("mdi2m-magnify-minus-outline"));
@@ -156,8 +160,27 @@ public final class FileTab extends BorderPane {
         bigger.setTooltip(new Tooltip("Bigger items (Ctrl++)"));
         smaller.setOnAction(e -> resizeItems(-1));
         bigger.setOnAction(e -> resizeItems(+1));
+        sizeSlider.getStyleClass().addAll(Styles.SMALL, "size-slider");
+        sizeSlider.setFocusTraversable(false);
+        sizeSlider.setPrefWidth(110);
+        sizeSlider.setMajorTickUnit(1); // a tick in the middle: the default size
+        sizeSlider.setShowTickMarks(true);
+        sizeSlider.setMinorTickCount(0);
+        sizeSlider.setTooltip(new Tooltip("Item size (middle: default)"));
+        sizeSlider.valueProperty().addListener((o, a, v) -> {
+            if (!updatingSlider) {
+                double p = Math.abs(v.doubleValue()) < 0.04 ? 0 : v.doubleValue(); // snaps to the middle
+                setItemSize(viewMode.stepsForSlider(p));
+            }
+        });
+        // double-click: back to the default size
+        sizeSlider.setOnMouseClicked(e -> {
+            if (e.getClickCount() == 2) {
+                setItemSize(0);
+            }
+        });
         HBox.setHgrow(status, Priority.ALWAYS);
-        HBox bottomBar = new HBox(2, status, smaller, bigger);
+        HBox bottomBar = new HBox(2, status, smaller, sizeSlider, bigger);
         bottomBar.setAlignment(Pos.CENTER_LEFT);
         bottomBar.getStyleClass().add("status-bar");
 
@@ -184,7 +207,11 @@ public final class FileTab extends BorderPane {
 
         main.showHiddenProperty().addListener(hiddenListener);
         filtered.addListener((ListChangeListener<FileEntry>) c -> updateStatus());
-        table.getSelectionModel().getSelectedItems().addListener((ListChangeListener<FileEntry>) c -> updateStatus());
+        table.getSelectionModel().getSelectedItems().addListener((ListChangeListener<FileEntry>) c -> {
+            updateStatus();
+            main.selectionChanged(this);
+        });
+        table.getFocusModel().focusedIndexProperty().addListener(o -> main.selectionChanged(this));
         updatePredicate();
 
         // a restored folder may be gone, or on a mount that hangs: find the nearest existing one off the FX thread
@@ -278,10 +305,10 @@ public final class FileTab extends BorderPane {
         return sortButton;
     }
 
-    // ---- item size (+ / -) ----
+    // ---- item size (- / slider / +) ----
 
-    private int sizeSteps(ViewMode m) {
-        return sizeSteps.getOrDefault(m, 0);
+    private double sizeSteps(ViewMode m) {
+        return sizeSteps.getOrDefault(m, 0.0);
     }
 
     /** Whether the items of the current view can get bigger (+1) or smaller (-1). */
@@ -291,28 +318,42 @@ public final class FileTab extends BorderPane {
 
     /** One size step bigger (+1) or smaller (-1), for the current view only (icon views and Tiles). */
     void resizeItems(int direction) {
-        if (!canResizeItems(direction)) {
+        if (canResizeItems(direction)) {
+            setItemSize(viewMode.clampSteps(sizeSteps(viewMode) + Integer.signum(direction)));
+        }
+    }
+
+    /** Sets the current view's size in (possibly fractional) steps, 0 being its own size. */
+    void setItemSize(double steps) {
+        if (!viewMode.resizable()) {
             return;
         }
-        int steps = sizeSteps(viewMode) + Integer.signum(direction);
-        if (steps == 0) {
+        double s = viewMode.clampSteps(steps);
+        if (Math.abs(s) < 1e-6) {
             sizeSteps.remove(viewMode);
+            s = 0;
         } else {
-            sizeSteps.put(viewMode, steps);
+            sizeSteps.put(viewMode, s);
         }
-        grid.setSizeSteps(steps);
+        grid.setSizeSteps(s);
         updateSizeButtons();
     }
 
-    /** The + / - buttons only show in views whose items can be resized. */
+    /** The - / slider / + controls only show in views whose items can be resized, and follow the size. */
     private void updateSizeButtons() {
         boolean show = viewMode.resizable();
-        for (Button b : List.of(smaller, bigger)) {
-            b.setVisible(show);
-            b.setManaged(show);
+        for (Node n : List.of(smaller, sizeSlider, bigger)) {
+            n.setVisible(show);
+            n.setManaged(show);
         }
         smaller.setDisable(!canResizeItems(-1));
         bigger.setDisable(!canResizeItems(+1));
+        updatingSlider = true;
+        try {
+            sizeSlider.setValue(viewMode.sliderForSteps(sizeSteps(viewMode)));
+        } finally {
+            updatingSlider = false;
+        }
     }
 
     Button smallerButton() {
@@ -323,13 +364,19 @@ public final class FileTab extends BorderPane {
         return bigger;
     }
 
-    /** The size steps for the session: "large-icons:2,tiles:-1" (views at their own size are left out). */
+    Slider sizeSlider() {
+        return sizeSlider;
+    }
+
+    /** The sizes for the session: "large-icons:2,tiles:-0.5" (views at their own size are left out). */
     String sizeStepsState() {
-        return sizeSteps.entrySet().stream().map(e -> e.getKey().id() + ":" + e.getValue())
+        return sizeSteps.entrySet().stream()
+                .map(e -> e.getKey().id() + ":" + String.format(Locale.ROOT, "%.3f", e.getValue())
+                        .replaceAll("\\.?0+$", ""))
                 .collect(java.util.stream.Collectors.joining(","));
     }
 
-    /** Restores {@link #sizeStepsState()}; unknown views and steps beyond the limits are ignored. */
+    /** Restores {@link #sizeStepsState()}; unknown views are ignored, sizes beyond the limits are clamped. */
     void restoreSizeSteps(String state) {
         sizeSteps.clear();
         if (state != null && !state.isBlank()) {
@@ -340,10 +387,9 @@ public final class FileTab extends BorderPane {
                 }
                 ViewMode m = ViewMode.byId(kv[0].strip());
                 try {
-                    int steps = Integer.parseInt(kv[1].strip());
-                    int icon = m.iconSize(steps);
-                    if (m.resizable() && m.id().equals(kv[0].strip()) && steps != 0
-                            && icon >= ViewMode.MIN_ICON && icon <= ViewMode.MAX_ICON) {
+                    double steps = m.clampSteps(Double.parseDouble(kv[1].strip()));
+                    if (m.resizable() && m.id().equals(kv[0].strip()) && Math.abs(steps) > 1e-6
+                            && Double.isFinite(steps)) {
                         sizeSteps.put(m, steps);
                     }
                 } catch (NumberFormatException ignored) {
@@ -689,6 +735,15 @@ public final class FileTab extends BorderPane {
     public List<Path> selectedPaths() {
         return table.getSelectionModel().getSelectedItems().stream()
                 .filter(Objects::nonNull).map(FileEntry::path).toList();
+    }
+
+    /** What the preview shows: the focused item when it is selected, else the first selected one. */
+    FileEntry previewEntry() {
+        FileEntry focused = table.getFocusModel().getFocusedItem();
+        if (focused != null && table.getSelectionModel().getSelectedItems().contains(focused)) {
+            return focused;
+        }
+        return table.getSelectionModel().getSelectedItems().stream().filter(Objects::nonNull).findFirst().orElse(null);
     }
 
     List<FileEntry> selectedEntries() {

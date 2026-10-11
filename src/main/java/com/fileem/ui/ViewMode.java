@@ -68,18 +68,52 @@ enum ViewMode {
                 || this == SMALL_ICONS || this == TILES;
     }
 
-    /** The icon size after {@code steps} size steps (0: the view's own size). */
-    int iconSize(int steps) {
-        return resizable() ? (int) Math.round(iconSize * Math.pow(SIZE_STEP, steps)) : iconSize;
+    /**
+     * The icon size after {@code steps} size steps (0: the view's own size). Steps may be fractional
+     * (the size slider); each whole step scales by {@link #SIZE_STEP}. Clamped to the limits.
+     */
+    int iconSize(double steps) {
+        return resizable() ? (int) Math.round(iconSize * Math.pow(SIZE_STEP, clampSteps(steps))) : iconSize;
     }
 
-    /** Whether one more step in {@code direction} (+1 bigger, -1 smaller) stays within the limits. */
-    boolean canResize(int steps, int direction) {
+    /** The fewest steps allowed (negative, or 0 when the view is already at the smallest size). */
+    double minSteps() {
+        return resizable() ? Math.min(0, Math.log((double) MIN_ICON / iconSize) / Math.log(SIZE_STEP)) : 0;
+    }
+
+    /** The most steps allowed. */
+    double maxSteps() {
+        return resizable() ? Math.max(0, Math.log((double) MAX_ICON / iconSize) / Math.log(SIZE_STEP)) : 0;
+    }
+
+    double clampSteps(double steps) {
+        return Math.max(minSteps(), Math.min(maxSteps(), steps));
+    }
+
+    /** Whether one more step in {@code direction} (+1 bigger, -1 smaller) changes anything. */
+    boolean canResize(double steps, int direction) {
         if (!resizable()) {
             return false;
         }
-        int next = iconSize(steps + Integer.signum(direction));
-        return next >= MIN_ICON && next <= MAX_ICON;
+        return direction > 0 ? steps < maxSteps() - 1e-6 : steps > minSteps() + 1e-6;
+    }
+
+    /**
+     * Size slider position (-1 … 1, 0 in the middle is the view's own size) to size steps: each half
+     * covers the range to its limit, so the middle always means the default size.
+     */
+    double stepsForSlider(double position) {
+        double p = Math.max(-1, Math.min(1, position));
+        return p < 0 ? -p * minSteps() : p * maxSteps();
+    }
+
+    /** The slider position that shows {@code steps}. */
+    double sliderForSteps(double steps) {
+        double s = clampSteps(steps);
+        if (s < 0) {
+            return minSteps() == 0 ? 0 : -s / minSteps();
+        }
+        return maxSteps() == 0 ? 0 : s / maxSteps();
     }
 
     /** The mode with {@code id}, or Details for unknown or missing ids. */

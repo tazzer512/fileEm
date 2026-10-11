@@ -49,16 +49,23 @@ mvn test -Dheadless=false   # watch the UI tests run on screen
 - **File list**: Name, Size, Type, Date modified by default; Date created, Date accessed, Extension and
   Attributes/permissions can be turned on from the `⋮` header menu. Click headers to sort (folders stay
   on top, natural "file2 < file10" order). Column widths, order, visibility and sort are remembered.
+- **Preview window** (F3 or the eye button in the toolbar): a separate, resizable window that shows
+  the selected file: images (also Photoshop files) with zoom in / out, fit, 100% and pan buttons
+  (or drag, Ctrl+wheel to zoom), text documents (the first 256 KB; zoom changes the font), and
+  details for folders and other files. It loads in the background, so browsing stays instant; quick
+  selection changes only load the last one. Closing it (or F3 / Escape) switches it off; whether it's
+  on, its size and position are remembered.
 - **View and Sort by buttons** in every tab, between the address bar and the filter box: the view
   button shows the tab's current view and switches it; the sort button shows the direction and
   picks the column (Name, Size, Type, Date modified, Date created, Extension) and the order.
 - **View modes** like Windows Explorer, per tab, from the View button in the toolbar or the tab, the
   right-click menu on empty space, Ctrl+Shift+1…8 or Ctrl+mouse wheel: Extra large / Large / Medium /
   Small icons, List, Details, Tiles and Content. The big icon views show thumbnails of images (PNG,
-  JPEG, GIF, BMP). Selection, sorting, keyboard navigation, the selection box and drag & drop work in
+  JPEG, GIF, BMP) and Photoshop files (PSD/PSB, read without loading the whole document). Selection, sorting, keyboard navigation, the selection box and drag & drop work in
   every view. New tabs open in the view you're using; each tab's view is remembered.
-  In the icon views and Tiles, the **− / +** buttons at the bottom right (or Ctrl+− / Ctrl++) make
-  the items smaller or bigger, in 25% steps; each view keeps its own size per tab.
+  In the icon views and Tiles, the **size slider** at the bottom right sizes the items freely (the
+  middle is the view's default size, double-click it to go back); the **− / +** buttons beside it
+  (or Ctrl+− / Ctrl++) step 25% at a time. Each view keeps its own size per tab.
 - **Tabs** on each side, **dual pane** (F9), breadcrumb address bar (click or Ctrl+L to type a path),
   live filter box with `*` / `?` wildcards, type-ahead find, auto-refresh when folder contents change.
 - **Operations** (copy, move, delete to Trash, permanent delete, compress, extract) each run on their
@@ -110,6 +117,7 @@ mvn test -Dheadless=false   # watch the UI tests run on screen
 | Alt+Left / Alt+Right | Back / Forward |
 | Tab | Switch side (dual pane) |
 | F2 | Rename |
+| F3 | Preview window on / off |
 | F5 / F6 | Copy / Move selection to the other side (target is editable) |
 | F7, Ctrl+Shift+N | New folder |
 | Del, F8 | Move to Trash |

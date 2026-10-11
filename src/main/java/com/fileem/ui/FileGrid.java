@@ -15,7 +15,6 @@ import javafx.scene.control.OverrunStyle;
 import javafx.scene.control.ScrollBar;
 import javafx.scene.control.SkinBase;
 import javafx.scene.control.TableView;
-import javafx.scene.image.Image;
 import javafx.scene.image.ImageView;
 import javafx.scene.input.ClipboardContent;
 import javafx.scene.input.DragEvent;
@@ -153,11 +152,12 @@ final class FileGrid extends Control {
     }
 
     /** + / - size steps of the current view (0: its own size). */
-    private int sizeSteps;
+    private double sizeSteps;
 
     /** Makes the items {@code steps} size steps bigger (or smaller, negative) than the view's own size. */
-    void setSizeSteps(int steps) {
-        if (steps == sizeSteps) {
+    void setSizeSteps(double steps) {
+        if (mode.iconSize(steps) == mode.iconSize(sizeSteps)) {
+            sizeSteps = steps;
             return;
         }
         sizeSteps = steps;
@@ -172,7 +172,7 @@ final class FileGrid extends Control {
         }
     }
 
-    int sizeSteps() {
+    double sizeSteps() {
         return sizeSteps;
     }
 
@@ -873,8 +873,8 @@ final class FileGrid extends Control {
         private final ViewMode cellMode = mode;
         private final int iconPx = iconPx();
         private FileEntry entry;
-        private Image image;
-        private final javafx.beans.value.ChangeListener<Number> imageProgress = (o, a, p) -> showImageIfReady();
+        /** Counts thumbnail requests, so a late answer for a file this cell no longer shows is dropped. */
+        private int thumbRequest;
 
         ItemCell() {
             getStyleClass().addAll("grid-item", cellMode.id() + "-item");
@@ -942,22 +942,17 @@ final class FileGrid extends Control {
                     // name only
                 }
             }
-            if (image != null) {
-                image.progressProperty().removeListener(imageProgress);
-            }
-            // big enough icons show the image itself (also Small icons or Tiles made big with +)
-            image = iconPx >= ViewMode.THUMBNAIL_MIN ? Thumbnails.get(e, iconPx) : null;
             iconBox.getChildren().setAll(icon);
-            if (image != null) {
-                image.progressProperty().addListener(imageProgress);
-                showImageIfReady();
-            }
-        }
-
-        private void showImageIfReady() {
-            if (image != null && image.getProgress() >= 1 && !image.isError()) {
-                thumb.setImage(image);
-                iconBox.getChildren().setAll(thumb);
+            thumb.setImage(null);
+            int request = ++thumbRequest;
+            // big enough icons show the image itself (also Small icons or Tiles made big)
+            if (iconPx >= ViewMode.THUMBNAIL_MIN) {
+                Thumbnails.request(e, iconPx, img -> {
+                    if (request == thumbRequest && entry == e) {
+                        thumb.setImage(img);
+                        iconBox.getChildren().setAll(thumb);
+                    }
+                });
             }
         }
 

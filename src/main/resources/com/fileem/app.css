@@ -114,6 +114,11 @@
     -fx-border-width: 1;
 }
 
+/* the tab's filter box: 30% narrower than its 12-column default, in em so it follows the font */
+.file-tab .filter-field {
+    -fx-pref-width: 10em;
+}
+
 /* the tab's bottom line: status text plus the item size buttons (icon views and Tiles) */
 .status-bar {
     -fx-background-color: -color-bg-subtle;

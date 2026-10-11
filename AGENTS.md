@@ -66,7 +66,7 @@ command when it isn't installed:
   `jdk.localedata`). `tools/install-linux.sh` installs it per user with a `.desktop` entry named
   after the window class (`com.fileem.FileEmApp`; renaming `FileEmApp` breaks the dock icon,
   `PackagingTest` checks). Icons: `tools/make-icon.py` writes `src/packaging/` and the window icons.
-- `mvn test`: about 200 tests, a bit over a minute. UI tests run **headless on Monocle** (configured in
+- `mvn test`: about 225 tests, a bit over a minute. UI tests run **headless on Monocle** (configured in
   the pom's `headless-ui-tests` profile), so no display is needed.
   - `mvn test -Dtest=FileOperationTest`: a single class. `-Dtest='!MainWindowUiTest'` skips
     the slow UI tests while iterating, but run the full suite before finishing.
@@ -87,6 +87,8 @@ src/test/java/com/fileem/
   ui/IconsTest         app icon sizes load; dialogs get the icon
   util/                NaturalOrderTest, FormatsTest (fixes Locale.US), FsUtilTest
   fs/                  FileEntryTest, FileTypesTest, DirWatcherTest,
+                       PsdReaderTest (modes, depths, RLE/raw, PSB, JPEG fallback, damaged files),
+                       PreviewTest (kinds by name, text vs binary, truncation, encodings),
                        ShellTest (terminal launch commands per platform), VolumesTest (listing,
                        eject commands, mount table parsing)
   ops/FileOperationTest  copy/move/delete/trash semantics + integrity on failure/cancel, pause/resume
@@ -96,6 +98,7 @@ src/test/java/com/fileem/
   ui/MainWindowUiTest  TestFX end-to-end: keyboard, dialogs, dual pane, clipboard, DnD, session,
                        autosave, rubber-band selection, stacked progress window (pause/cancel),
                        eject (menu/button, tabs leave first, refused while busy, errors),
+                       preview window (toggle, image zoom/fit/pan, text, quick selection, PSD, session),
                        view modes (menu, keys, wheel, grid mouse/keys/box/DnD/menus, thumbnails)
 ```
 
@@ -163,6 +166,7 @@ com.fileem.ui       MainWindow (toolbar, F-key bar, ALL commands + key handling)
                     OperationUi (starts operations, conflict dialog)
                     ProgressWindow (one per main window; a row per running op with Pause/Resume,
                       Cancel and inline conflict questions)
+                    PreviewWindow (one per main window: previews the active tab's selection)
                     PropertiesDialog, BookmarksDialog, Dialogs, Dnd, Theme, Icons, Views, TreeNode
 src/main/resources/com/fileem/app.css   author stylesheet on top of AtlantaFX
 src/main/resources/com/fileem/themes/   theme overlays: <id>.css shapes, <id>-light/-dark.css colors
@@ -270,7 +274,10 @@ tools/                                  make-icon.py, install-linux.sh (per-user
   Internal drags are accepted as MOVE; drops from other applications are accepted as COPY even
   when the user picks Move (our MOVE deletes sources itself, after copying; reporting MOVE could
   let the source delete originals before our async copy finishes). In tests, answer with the
-  dialog's own buttons (`answerDrop`): the F-key bar also has "Move" and "Copy". Keep `Dnd.canDrop` (check) separate from
+  dialog's own buttons (`answerDrop`): the F-key bar also has "Move" and "Copy". The question is
+  asked through `MainWindow.afterDrag`: for our own drags only after DRAG_DONE reaches the source
+  (2 s timeout). On Linux JavaFX runs our drags in a nested loop that keeps the mouse grab until then;
+  a dialog opened earlier took Enter but no mouse clicks (Move "did nothing"). Keep `Dnd.canDrop` (check) separate from
   `Dnd.accept` (check + accept modes): row handlers must not consume drops they can't handle.
 - **Cross-platform**: branch with `OsUtil.isWindows/isMac/isLinux`. Use `isShortcutDown()` for
   Ctrl/Cmd. Paths: compare with `Path.equals`/`startsWith` (case-insensitive on Windows), never
@@ -323,12 +330,31 @@ tools/                                  make-icon.py, install-linux.sh (per-user
   come from `MainWindow.viewItems(tab)` / `sortItems(table)` (shared with the right-click menu;
   sort columns are `FileTable.SORT_COLUMNS`), rebuilt on every opening; their icons follow the view
   mode and the sort direction.
-  Item size (+ / −, Ctrl++ / Ctrl+−): only `ViewMode.resizable()` views (icon views, Tiles). Each step
-  scales the icon by 1.25 within 16–320 px (`ViewMode.iconSize(steps)`); the cell grows by the same
-  amount and keeps its text area. `FileTab` keeps steps per view (`<side>.tab.<i>.size` =
-  `large-icons:2,tiles:-1`) and gives them to `FileGrid.setSizeSteps`, which rebuilds its cells (they
-  take their icon size when created). Icons of 48 px and up show thumbnails. The status line is an
+  Item size (slider, + / −, Ctrl++ / Ctrl+−): only `ViewMode.resizable()` views (icon views, Tiles).
+  Sizes are fractional steps; each whole step scales the icon by 1.25, clamped to 16–320 px
+  (`ViewMode.iconSize(steps)`, `minSteps/maxSteps`). The slider runs -1…1 with the view's default in
+  the middle, each half mapped to its limit (`stepsForSlider` / `sliderForSteps`; snaps to 0 near the
+  middle). The cell grows by the icon's change and keeps its text area. `FileTab` keeps steps per view
+  (`<side>.tab.<i>.size` = `large-icons:2,tiles:-0.5`) and gives them to `FileGrid.setSizeSteps`,
+  which rebuilds its cells only when the pixel size changes (cells take their icon size when created).
+  Icons of 48 px and up show thumbnails. `Thumbnails.request(entry, px, callback)` loads at fixed
+  sizes (`loadSize`: multiples of 32) so the slider doesn't re-decode per pixel; JavaFX formats use
+  background loading, PSD/PSB go through `fs/PsdReader` on two daemon threads (composite image,
+  sampled rows only; falls back to the embedded JPEG; failures remembered per file version). Cells
+  drop late callbacks with a request counter. The status line is an
   HBox (`.status-bar`: themes style its background there, text stays on `.status-label`).
+- **Preview window** (`PreviewWindow`, F3 / toolbar toggle `#preview-toggle`, session `preview.*`):
+  an owned, non-modal Stage. `FileTab` reports selection and focus changes to
+  `MainWindow.selectionChanged`, which forwards the active tab's `previewEntry()` (focused item if
+  selected, else the first selected); `tabChanged` does too. `select` waits `SETTLE` (120 ms) so arrow
+  keys through a folder load only the last item, and every load bumps a generation and cancels the
+  previous one (`Bg` future / `Image.cancel`). Kinds come from `fs/Preview` (FX-free:
+  `kindOf`, `readText` with binary sniffing, UTF-8 then Latin-1, 256 KB). Images: the header size is
+  read first (`imageSize`, ImageIO) because JavaFX *enlarges* to a requested size; decode at natural
+  size or bounded to 4096 px with background loading. PSD: `PsdReader` at 2048 px. Zoom = image scale
+  or font scale; fit never enlarges; pan buttons move a quarter of the viewport. Showing it hands focus
+  back to the main window. Closing it, F3 or Escape switches it off. Tests: `preview()` hooks
+  (`kind`, `image`, `textContent`, `messageText`, `button(id)`, `scrollPane`).
 - **Rubber band** (`Marquee` in Details, built into `FileGrid` in the other views): event filters
   on the table. A press on a row's name (icon + text, plus a few pixels of slack) drags files; anywhere else (empty space, other columns) starts the box. Rows are tracked in
   content coordinates (index × row height) so autoscroll keeps the anchor. Shift adds, Ctrl/Cmd
