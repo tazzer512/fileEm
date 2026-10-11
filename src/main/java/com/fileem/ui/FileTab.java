@@ -1,6 +1,7 @@
 package com.fileem.ui;
 
 import atlantafx.base.controls.CustomTextField;
+import atlantafx.base.theme.Styles;
 import com.fileem.fs.DirWatcher;
 import com.fileem.fs.FileEntry;
 import com.fileem.util.Bg;
@@ -18,6 +19,7 @@ import javafx.collections.transformation.SortedList;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.Node;
+import javafx.scene.control.Button;
 import javafx.scene.control.Label;
 import javafx.scene.control.Tab;
 import javafx.scene.control.Tooltip;
@@ -39,9 +41,11 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
+import java.util.EnumMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.Future;
@@ -65,6 +69,10 @@ public final class FileTab extends BorderPane {
     private final StringBuilder typeAhead = new StringBuilder();
     private long lastTyped;
     private ViewMode viewMode = ViewMode.DETAILS;
+    /** + / - size steps per view (icon views and Tiles); missing means the view's own size. */
+    private final Map<ViewMode, Integer> sizeSteps = new EnumMap<>(ViewMode.class);
+    private final Button smaller = new Button(null, Icons.icon("mdi2m-magnify-minus-outline"));
+    private final Button bigger = new Button(null, Icons.icon("mdi2m-magnify-plus-outline"));
     /** Created when a non-Details view is first used. */
     private FileGrid grid;
     private double wheelZoom;
@@ -128,10 +136,23 @@ public final class FileTab extends BorderPane {
 
         status.getStyleClass().add("status-label");
         status.setMaxWidth(Double.MAX_VALUE);
+        for (Button b : List.of(smaller, bigger)) {
+            b.getStyleClass().addAll(Styles.BUTTON_ICON, Styles.FLAT, "size-button");
+            b.setFocusTraversable(false);
+        }
+        smaller.setTooltip(new Tooltip("Smaller items (Ctrl+−)"));
+        bigger.setTooltip(new Tooltip("Bigger items (Ctrl++)"));
+        smaller.setOnAction(e -> resizeItems(-1));
+        bigger.setOnAction(e -> resizeItems(+1));
+        HBox.setHgrow(status, Priority.ALWAYS);
+        HBox bottomBar = new HBox(2, status, smaller, bigger);
+        bottomBar.setAlignment(Pos.CENTER_LEFT);
+        bottomBar.getStyleClass().add("status-bar");
 
         setTop(top);
         setCenter(table);
-        setBottom(status);
+        setBottom(bottomBar);
+        updateSizeButtons();
         // Ctrl+wheel steps through the view modes, as in Explorer
         addEventFilter(ScrollEvent.SCROLL, e -> {
             if (e.isShortcutDown() && e.getDeltaY() != 0 && isInside(e.getTarget(), getCenter())) {
@@ -202,8 +223,10 @@ public final class FileTab extends BorderPane {
                 grid = new FileGrid(main, this, table);
             }
             grid.setMode(m);
+            grid.setSizeSteps(sizeSteps(m));
             setCenter(grid);
         }
+        updateSizeButtons();
         int lead = table.getFocusModel().getFocusedIndex();
         if (hadFocus) {
             focusTable();
@@ -211,6 +234,85 @@ public final class FileTab extends BorderPane {
         if (lead >= 0) {
             javafx.application.Platform.runLater(() -> ensureVisible(lead));
         }
+    }
+
+    // ---- item size (+ / -) ----
+
+    private int sizeSteps(ViewMode m) {
+        return sizeSteps.getOrDefault(m, 0);
+    }
+
+    /** Whether the items of the current view can get bigger (+1) or smaller (-1). */
+    boolean canResizeItems(int direction) {
+        return viewMode.canResize(sizeSteps(viewMode), direction);
+    }
+
+    /** One size step bigger (+1) or smaller (-1), for the current view only (icon views and Tiles). */
+    void resizeItems(int direction) {
+        if (!canResizeItems(direction)) {
+            return;
+        }
+        int steps = sizeSteps(viewMode) + Integer.signum(direction);
+        if (steps == 0) {
+            sizeSteps.remove(viewMode);
+        } else {
+            sizeSteps.put(viewMode, steps);
+        }
+        grid.setSizeSteps(steps);
+        updateSizeButtons();
+    }
+
+    /** The + / - buttons only show in views whose items can be resized. */
+    private void updateSizeButtons() {
+        boolean show = viewMode.resizable();
+        for (Button b : List.of(smaller, bigger)) {
+            b.setVisible(show);
+            b.setManaged(show);
+        }
+        smaller.setDisable(!canResizeItems(-1));
+        bigger.setDisable(!canResizeItems(+1));
+    }
+
+    Button smallerButton() {
+        return smaller;
+    }
+
+    Button biggerButton() {
+        return bigger;
+    }
+
+    /** The size steps for the session: "large-icons:2,tiles:-1" (views at their own size are left out). */
+    String sizeStepsState() {
+        return sizeSteps.entrySet().stream().map(e -> e.getKey().id() + ":" + e.getValue())
+                .collect(java.util.stream.Collectors.joining(","));
+    }
+
+    /** Restores {@link #sizeStepsState()}; unknown views and steps beyond the limits are ignored. */
+    void restoreSizeSteps(String state) {
+        sizeSteps.clear();
+        if (state != null && !state.isBlank()) {
+            for (String part : state.split(",")) {
+                String[] kv = part.split(":");
+                if (kv.length != 2) {
+                    continue;
+                }
+                ViewMode m = ViewMode.byId(kv[0].strip());
+                try {
+                    int steps = Integer.parseInt(kv[1].strip());
+                    int icon = m.iconSize(steps);
+                    if (m.resizable() && m.id().equals(kv[0].strip()) && steps != 0
+                            && icon >= ViewMode.MIN_ICON && icon <= ViewMode.MAX_ICON) {
+                        sizeSteps.put(m, steps);
+                    }
+                } catch (NumberFormatException ignored) {
+                    // skip
+                }
+            }
+        }
+        if (grid != null) {
+            grid.setSizeSteps(sizeSteps(viewMode));
+        }
+        updateSizeButtons();
     }
 
     private static boolean isInside(Object target, Node container) {

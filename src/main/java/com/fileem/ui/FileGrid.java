@@ -152,6 +152,35 @@ final class FileGrid extends Control {
         return mode;
     }
 
+    /** + / - size steps of the current view (0: its own size). */
+    private int sizeSteps;
+
+    /** Makes the items {@code steps} size steps bigger (or smaller, negative) than the view's own size. */
+    void setSizeSteps(int steps) {
+        if (steps == sizeSteps) {
+            return;
+        }
+        sizeSteps = steps;
+        // cells take their icon size when created, like their mode: start with fresh ones
+        layer.getChildren().removeIf(n -> n instanceof ItemCell);
+        active.clear();
+        pool.clear();
+        markDirty();
+        int lead = model.getFocusModel().getFocusedIndex();
+        if (lead >= 0) {
+            javafx.application.Platform.runLater(() -> ensureVisible(lead));
+        }
+    }
+
+    int sizeSteps() {
+        return sizeSteps;
+    }
+
+    /** The icon size of the current view and size steps. */
+    int iconPx() {
+        return mode.iconSize(sizeSteps);
+    }
+
     void setMode(ViewMode m) {
         if (m == mode) {
             return;
@@ -272,8 +301,22 @@ final class FileGrid extends Control {
         return c;
     }
 
-    /** Slot size per view; List fits the longest names (within limits). */
+    /** Slot size per view (grown or shrunk with the icon for + / -); List fits the longest names (within limits). */
     private void measureCells(double width, int n) {
+        measureBaseCells(width, n);
+        if (mode.resizable()) {
+            int delta = iconPx() - mode.iconSize(); // the text area keeps its size
+            cellW += delta;
+            cellH += delta;
+            if (mode == ViewMode.TILES) {
+                cellH = Math.max(cellH, 56); // three lines of text
+            } else if (mode == ViewMode.SMALL_ICONS) {
+                cellH = Math.max(cellH, 24);
+            }
+        }
+    }
+
+    private void measureBaseCells(double width, int n) {
         switch (mode) {
             case EXTRA_LARGE_ICONS -> {
                 cellW = 228;
@@ -828,13 +871,14 @@ final class FileGrid extends Control {
         private final Label right1 = new Label();
         private final Label right2 = new Label();
         private final ViewMode cellMode = mode;
+        private final int iconPx = iconPx();
         private FileEntry entry;
         private Image image;
         private final javafx.beans.value.ChangeListener<Number> imageProgress = (o, a, p) -> showImageIfReady();
 
         ItemCell() {
             getStyleClass().addAll("grid-item", cellMode.id() + "-item");
-            int size = cellMode.iconSize();
+            int size = iconPx;
             // inline, so the stylesheets' -fx-icon-size for list icons can't shrink it
             icon.setStyle("-fx-icon-size: " + size + "px;");
             thumb.setFitWidth(size);
@@ -901,7 +945,8 @@ final class FileGrid extends Control {
             if (image != null) {
                 image.progressProperty().removeListener(imageProgress);
             }
-            image = cellMode.showsThumbnails() ? Thumbnails.get(e, cellMode.iconSize()) : null;
+            // big enough icons show the image itself (also Small icons or Tiles made big with +)
+            image = iconPx >= ViewMode.THUMBNAIL_MIN ? Thumbnails.get(e, iconPx) : null;
             iconBox.getChildren().setAll(icon);
             if (image != null) {
                 image.progressProperty().addListener(imageProgress);
@@ -923,7 +968,7 @@ final class FileGrid extends Control {
             double y = in.getTop();
             double w = getWidth() - in.getLeft() - in.getRight();
             double h = getHeight() - in.getTop() - in.getBottom();
-            int size = cellMode.iconSize();
+            int size = iconPx;
             if (cellMode.textBelowIcon()) {
                 layoutInArea(iconBox, x, y, w, size, 0, HPos.CENTER, VPos.CENTER);
                 double textTop = y + size + 4;

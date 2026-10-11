@@ -54,6 +54,8 @@ mvn test -Dheadless=false   # watch the UI tests run on screen
   Small icons, List, Details, Tiles and Content. The big icon views show thumbnails of images (PNG,
   JPEG, GIF, BMP). Selection, sorting, keyboard navigation, the selection box and drag & drop work in
   every view. New tabs open in the view you're using; each tab's view is remembered.
+  In the icon views and Tiles, the **− / +** buttons at the bottom right (or Ctrl+− / Ctrl++) make
+  the items smaller or bigger, in 25% steps; each view keeps its own size per tab.
 - **Tabs** on each side, **dual pane** (F9), breadcrumb address bar (click or Ctrl+L to type a path),
   live filter box with `*` / `?` wildcards, type-ahead find, auto-refresh when folder contents change.
 - **Operations** (copy, move, delete to Trash, permanent delete, compress, extract) each run on their
@@ -121,6 +123,7 @@ mvn test -Dheadless=false   # watch the UI tests run on screen
 | Ctrl+Shift+B | Manage bookmarks |
 | F9 | Toggle dual pane |
 | Ctrl+Shift+1…8, Ctrl+wheel | View: Extra large, Large, Medium, Small icons, List, Details, Tiles, Content |
+| Ctrl++ / Ctrl+− | Bigger / smaller items (icon views and Tiles) |
 | Arrows, Home/End, PgUp/PgDn | Move in the list or grid (Shift extends, Ctrl moves without selecting, Ctrl+Space toggles) |
 
 On macOS, Ctrl is Cmd; Cmd+Backspace deletes and Cmd+Up/Down go up/open.

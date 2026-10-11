@@ -1457,6 +1457,80 @@ class MainWindowUiTest {
         WaitForAsyncUtils.waitForFxEvents();
     }
 
+    // ---- item size (+ / -) ----
+
+    private static boolean shown(javafx.scene.control.Button b) {
+        return fx(() -> b.isVisible() && b.isManaged());
+    }
+
+    @Test
+    void sizeButtonsShowOnlyInIconViewsAndTiles(FxRobot robot) throws Exception {
+        Path dir = folderWith("sizebtn", "a.txt");
+        FileTab tab = leftTab();
+        open(robot, tab, dir);
+        for (ViewMode m : ViewMode.values()) {
+            setView(robot, tab, m);
+            boolean expected = m == ViewMode.EXTRA_LARGE_ICONS || m == ViewMode.LARGE_ICONS
+                    || m == ViewMode.MEDIUM_ICONS || m == ViewMode.SMALL_ICONS || m == ViewMode.TILES;
+            assertEquals(expected, shown(tab.biggerButton()), m + " +");
+            assertEquals(expected, shown(tab.smallerButton()), m + " -");
+        }
+    }
+
+    @Test
+    void plusAndMinusResizeTheItemsWithinLimits(FxRobot robot) throws Exception {
+        Path dir = folderWith("sizes", "a.txt", "b.txt");
+        FileTab tab = leftTab();
+        open(robot, tab, dir);
+        setView(robot, tab, ViewMode.LARGE_ICONS);
+        FileGrid g = grid(tab);
+        double width = fx(() -> g.cellFor(0).getWidth());
+        assertEquals(96, (int) fx(g::iconPx));
+
+        robot.clickOn(tab.biggerButton());
+        waitUntil("bigger", () -> g.iconPx() == 120 && g.cellFor(0).getWidth() > width);
+        robot.clickOn(tab.smallerButton());
+        robot.clickOn(tab.smallerButton());
+        waitUntil("smaller", () -> g.iconPx() == 77 && g.cellFor(0).getWidth() < width);
+
+        // limits: Small icons can't shrink below 16 px; Extra large stops before 320 px
+        setView(robot, tab, ViewMode.SMALL_ICONS);
+        assertTrue(fx(() -> tab.smallerButton().isDisabled()));
+        setView(robot, tab, ViewMode.EXTRA_LARGE_ICONS);
+        robot.clickOn(tab.biggerButton());
+        robot.clickOn(tab.biggerButton());
+        waitUntil("largest", () -> g.iconPx() == 300 && tab.biggerButton().isDisabled());
+    }
+
+    @Test
+    void eachViewKeepsItsOwnSizeAndTheShortcutsWork(FxRobot robot) throws Exception {
+        Path dir = folderWith("sizeview", "a.txt");
+        FileTab tab = leftTab();
+        open(robot, tab, dir);
+        setView(robot, tab, ViewMode.TILES);
+        robot.push(KeyCode.SHORTCUT, KeyCode.EQUALS);
+        waitUntil("tiles bigger", () -> grid(tab).iconPx() == 60);
+        setView(robot, tab, ViewMode.MEDIUM_ICONS);
+        assertEquals(48, (int) fx(() -> grid(tab).iconPx()), "another view keeps its own size");
+        robot.push(KeyCode.SHORTCUT, KeyCode.MINUS);
+        waitUntil("medium smaller", () -> grid(tab).iconPx() == 38);
+        setView(robot, tab, ViewMode.TILES);
+        assertEquals(60, (int) fx(() -> grid(tab).iconPx()), "switching back restores the size");
+
+        setView(robot, tab, ViewMode.DETAILS);
+        robot.push(KeyCode.SHORTCUT, KeyCode.EQUALS); // no effect in Details
+        setView(robot, tab, ViewMode.TILES);
+        assertEquals(60, (int) fx(() -> grid(tab).iconPx()));
+
+        robot.interact(window::saveSession);
+        MainWindow restored = fx(() -> new MainWindow(new Stage(), session));
+        FileTab again = fx(() -> restored.left().activeTab());
+        assertEquals(ViewMode.TILES, fx(again::viewMode));
+        assertEquals(60, (int) fx(() -> again.grid().iconPx()), "the size is saved in the session");
+        robot.interact(() -> again.setViewMode(ViewMode.MEDIUM_ICONS));
+        assertEquals(38, (int) fx(() -> again.grid().iconPx()));
+    }
+
     private List<String> gridNames(FileTab tab) {
         FileGrid g = grid(tab);
         return fx(() -> g.visibleIndices().stream().map(i -> g.cellFor(i).nameText()).toList());

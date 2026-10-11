@@ -319,6 +319,12 @@ tools/                                  make-icon.py, install-linux.sh (per-user
   `FileGrid` is virtualized (fixed slots, cells reused, unmanaged so the layer pane doesn't resize
   them); keep per-layout work O(visible items) (e.g. List's column width is cached per items change).
   Thumbnails (`Thumbnails`) load with JavaFX background loading into a pixel-bounded LRU cache.
+  Item size (+ / −, Ctrl++ / Ctrl+−): only `ViewMode.resizable()` views (icon views, Tiles). Each step
+  scales the icon by 1.25 within 16–320 px (`ViewMode.iconSize(steps)`); the cell grows by the same
+  amount and keeps its text area. `FileTab` keeps steps per view (`<side>.tab.<i>.size` =
+  `large-icons:2,tiles:-1`) and gives them to `FileGrid.setSizeSteps`, which rebuilds its cells (they
+  take their icon size when created). Icons of 48 px and up show thumbnails. The status line is an
+  HBox (`.status-bar`: themes style its background there, text stays on `.status-label`).
 - **Rubber band** (`Marquee` in Details, built into `FileGrid` in the other views): event filters
   on the table. A press on a row's name (icon + text, plus a few pixels of slack) drags files; anywhere else (empty space, other columns) starts the box. Rows are tracked in
   content coordinates (index × row height) so autoscroll keeps the anchor. Shift adds, Ctrl/Cmd

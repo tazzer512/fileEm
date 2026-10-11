@@ -201,7 +201,9 @@ public final class ExplorerSide extends SplitPane {
         for (int i = 0; i < count; i++) {
             Path p = savedDir(s.get(id + ".tab." + i, null));
             if (p != null) {
-                newTab(p, false).setViewMode(ViewMode.byId(s.get(id + ".tab." + i + ".view", null)));
+                FileTab t = newTab(p, false);
+                t.restoreSizeSteps(s.get(id + ".tab." + i + ".size", null));
+                t.setViewMode(ViewMode.byId(s.get(id + ".tab." + i + ".view", null)));
             }
         }
         if (tabs().isEmpty()) {
@@ -219,6 +221,10 @@ public final class ExplorerSide extends SplitPane {
             Path dir = all.get(i).currentDir();
             s.put(id + ".tab." + i, dir != null ? dir.toString() : OsUtil.home().toString());
             s.put(id + ".tab." + i + ".view", all.get(i).viewMode().id());
+            String size = all.get(i).sizeStepsState();
+            if (!size.isEmpty()) {
+                s.put(id + ".tab." + i + ".size", size);
+            }
         }
         s.put(id + ".selected", Math.max(0, all.indexOf(activeTab())));
         if (tree.getWidth() > 0) {

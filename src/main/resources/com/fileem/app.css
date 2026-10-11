@@ -114,12 +114,26 @@
     -fx-border-width: 1;
 }
 
+/* the tab's bottom line: status text plus the item size buttons (icon views and Tiles) */
+.status-bar {
+    -fx-background-color: -color-bg-subtle;
+    -fx-border-color: -color-border-muted transparent transparent transparent;
+    -fx-padding: 0 4 0 0;
+}
+
 .status-label {
     -fx-text-fill: -color-fg-muted;
     -fx-font-size: 0.9em;
     -fx-padding: 4 10 4 10;
-    -fx-background-color: -color-bg-subtle;
-    -fx-border-color: -color-border-muted transparent transparent transparent;
+}
+
+.status-bar .size-button {
+    -fx-padding: 1 4 1 4;
+    -fx-min-height: 0;
+}
+
+.status-bar .size-button .ikonli-font-icon {
+    -fx-icon-color: -color-fg-muted;
 }
 
 /* ---- folder tree ---- */

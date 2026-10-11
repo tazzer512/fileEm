@@ -207,9 +207,12 @@
 }
 
 /* ---- status bar and function keys ---- */
-.status-label {
+.status-bar {
     -fx-background-color: -fe-content;
     -fx-border-color: -fe-hairline transparent transparent transparent;
+}
+
+.status-label {
     -fx-font-size: 11px;
 }
 

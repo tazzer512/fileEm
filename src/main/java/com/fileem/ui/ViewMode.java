@@ -42,10 +42,9 @@ enum ViewMode {
         return iconSize;
     }
 
-    /** Icon views big enough to show image thumbnails instead of a file type icon. */
-    boolean showsThumbnails() {
-        return iconSize >= 48;
-    }
+    /** Icons at least this big show image thumbnails instead of a file type icon. */
+    static final int THUMBNAIL_MIN = 48;
+
 
     /** List fills columns top to bottom and scrolls sideways; the other grid views fill rows. */
     boolean flowsInColumns() {
@@ -55,6 +54,32 @@ enum ViewMode {
     /** Big icon views put the name under the icon; the others put text beside it. */
     boolean textBelowIcon() {
         return this == EXTRA_LARGE_ICONS || this == LARGE_ICONS || this == MEDIUM_ICONS;
+    }
+
+    /** Item sizes are bounded so the smallest icons stay legible and the biggest fit a window. */
+    static final int MIN_ICON = 16;
+    static final int MAX_ICON = 320;
+    /** Each + / - step scales the icons by this factor. */
+    static final double SIZE_STEP = 1.25;
+
+    /** Views whose items can be made bigger or smaller with + / -: the icon views and Tiles. */
+    boolean resizable() {
+        return this == EXTRA_LARGE_ICONS || this == LARGE_ICONS || this == MEDIUM_ICONS
+                || this == SMALL_ICONS || this == TILES;
+    }
+
+    /** The icon size after {@code steps} size steps (0: the view's own size). */
+    int iconSize(int steps) {
+        return resizable() ? (int) Math.round(iconSize * Math.pow(SIZE_STEP, steps)) : iconSize;
+    }
+
+    /** Whether one more step in {@code direction} (+1 bigger, -1 smaller) stays within the limits. */
+    boolean canResize(int steps, int direction) {
+        if (!resizable()) {
+            return false;
+        }
+        int next = iconSize(steps + Integer.signum(direction));
+        return next >= MIN_ICON && next <= MAX_ICON;
     }
 
     /** The mode with {@code id}, or Details for unknown or missing ids. */

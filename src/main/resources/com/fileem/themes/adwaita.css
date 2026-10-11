@@ -206,7 +206,7 @@
 }
 
 /* ---- status and function keys ---- */
-.status-label {
+.status-bar {
     -fx-background-color: -fe-view;
     -fx-border-color: -fe-shade transparent transparent transparent;
 }

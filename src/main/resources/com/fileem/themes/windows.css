@@ -193,7 +193,7 @@
 }
 
 /* ---- status line and function key bar ---- */
-.status-label {
+.status-bar {
     -fx-background-color: -fe-layer;
     -fx-border-color: -fe-divider transparent transparent transparent;
 }

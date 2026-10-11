@@ -252,9 +252,12 @@
 }
 
 /* ---- status line and keycap F-keys ---- */
-.status-label {
+.status-bar {
     -fx-background-color: -fe-panel;
     -fx-border-color: transparent;
+}
+
+.status-label {
     -fx-text-fill: -fe-section;
 }
 

@@ -425,6 +425,10 @@ public final class MainWindow extends BorderPane {
                 action = this::switchSide;
             } else if (alt && c == KeyCode.ENTER) {
                 action = this::properties;
+            } else if (shortcut && !alt && (c == KeyCode.EQUALS || c == KeyCode.PLUS || c == KeyCode.ADD)) {
+                action = () -> tab().resizeItems(+1); // icon views and Tiles only; a no-op elsewhere
+            } else if (shortcut && !alt && (c == KeyCode.MINUS || c == KeyCode.SUBTRACT)) {
+                action = () -> tab().resizeItems(-1);
             } else if (inList && (c == KeyCode.ENTER || mac && shortcut && c == KeyCode.DOWN)) {
                 action = this::openSelection;
             } else if (alt && c == KeyCode.LEFT || shortcut && c == KeyCode.OPEN_BRACKET) {
