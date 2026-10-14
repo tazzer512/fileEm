@@ -49,19 +49,32 @@ mvn test -Dheadless=false   # watch the UI tests run on screen
 - **File list**: Name, Size, Type, Date modified by default; Date created, Date accessed, Extension and
   Attributes/permissions can be turned on from the `⋮` header menu. Click headers to sort (folders stay
   on top, natural "file2 < file10" order). Column widths, order, visibility and sort are remembered.
-- **Preview window** (F3 or the eye button in the toolbar): a separate, resizable window that shows
-  the selected file: images (also Photoshop files) with zoom in / out, fit, 100% and pan buttons
-  (or drag, Ctrl+wheel to zoom), text documents (the first 256 KB; zoom changes the font), and
-  details for folders and other files. It loads in the background, so browsing stays instant; quick
-  selection changes only load the last one. Closing it (or F3 / Escape) switches it off; whether it's
-  on, its size and position are remembered.
+- **Search** (*Search in folder…* in the right-click menu of a folder, the tree or empty space in
+  the list, or Ctrl+Shift+F): finds files and folders by name in that folder and every folder below
+  it. Wildcards: `*` (any text) and `?` (one character), e.g. `*.jpg`, `IMG_????.*`; separate several
+  with `;` (`*.jpg;*.png`). Text without wildcards matches anywhere in the name; case is ignored.
+  Results stream in while it searches (Stop or Escape halts it). Double-click or Enter opens a
+  result (folders open in the active tab), and *Open containing folder* shows it selected in its
+  folder. Hidden files are included when the box is ticked (it starts as the list's setting);
+  links are listed but not followed, and unreadable folders are skipped and counted.
+- **Preview** (F3 or the eye button in the toolbar): shows the selected file in a separate,
+  resizable window, or **docked** as a pane on the right of the main window (the dock button in its
+  header switches; drag the divider to size it). Images (also Photoshop files and camera raw photos)
+  with zoom in / out, fit, 100% and pan buttons (or drag, Ctrl+wheel to zoom), text documents (the
+  first 256 KB; zoom changes the font), and details for folders and other files. It loads in the
+  background, so browsing stays instant; quick selection changes only load the last one. Closing it
+  (or F3 / Escape) switches it off; whether it's on, docked, its size and position are remembered.
+- **Camera raw photos** (Canon CR2/CR3, Nikon NEF, Sony ARW, DNG, Fujifilm RAF, Olympus ORF,
+  Panasonic RW2, Pentax PEF and more) show the JPEG the camera embedded in the file, turned upright,
+  in the preview and as thumbnails. Raws without an embedded preview (e.g. merged HDR DNGs) show their
+  details only.
 - **View and Sort by buttons** in every tab, between the address bar and the filter box: the view
   button shows the tab's current view and switches it; the sort button shows the direction and
   picks the column (Name, Size, Type, Date modified, Date created, Extension) and the order.
 - **View modes** like Windows Explorer, per tab, from the View button in the toolbar or the tab, the
   right-click menu on empty space, Ctrl+Shift+1…8 or Ctrl+mouse wheel: Extra large / Large / Medium /
   Small icons, List, Details, Tiles and Content. The big icon views show thumbnails of images (PNG,
-  JPEG, GIF, BMP) and Photoshop files (PSD/PSB, read without loading the whole document). Selection, sorting, keyboard navigation, the selection box and drag & drop work in
+  JPEG, GIF, BMP), Photoshop files (PSD/PSB, read without loading the whole document) and camera raws. Selection, sorting, keyboard navigation, the selection box and drag & drop work in
   every view. New tabs open in the view you're using; each tab's view is remembered.
   In the icon views and Tiles, the **size slider** at the bottom right sizes the items freely (the
   middle is the view's default size, double-click it to go back); the **− / +** buttons beside it
@@ -117,7 +130,7 @@ mvn test -Dheadless=false   # watch the UI tests run on screen
 | Alt+Left / Alt+Right | Back / Forward |
 | Tab | Switch side (dual pane) |
 | F2 | Rename |
-| F3 | Preview window on / off |
+| F3 | Preview on / off (window or docked) |
 | F5 / F6 | Copy / Move selection to the other side (target is editable; only with the dual pane on) |
 | F7, Ctrl+Shift+N | New folder |
 | Del, F8 | Move to Trash |
@@ -128,6 +141,7 @@ mvn test -Dheadless=false   # watch the UI tests run on screen
 | Ctrl+T / Ctrl+W | New tab / Close tab |
 | Ctrl+L | Edit address |
 | Ctrl+F | Filter |
+| Ctrl+Shift+F | Search this folder and all folders below it |
 | Ctrl+H (Cmd+Shift+. on macOS) | Show hidden files |
 | Ctrl+R | Refresh |
 | Ctrl+D | Bookmark / un-bookmark the current folder |

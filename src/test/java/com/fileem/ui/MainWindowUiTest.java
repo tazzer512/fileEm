@@ -387,6 +387,19 @@ class MainWindowUiTest {
         assertTrue(fx(copyKey::isDisable) && fx(moveKey::isDisable), "greyed out again");
     }
 
+    /** Regression: buttons treat "_" as a mnemonic marker, so "2019_09_08" showed as "201909_08". */
+    @Test
+    void underscoresInFolderNamesShowInTheAddressBar(FxRobot robot) throws Exception {
+        Path dir = folderWith("2019_09_08", "a.txt");
+        open(robot, leftTab(), dir);
+        waitUntil("crumb shown", () -> stage.getScene().getRoot().lookupAll(".crumb").stream()
+                .anyMatch(n -> n instanceof javafx.scene.control.Button b && "2019_09_08".equals(b.getText())));
+        assertTrue(fx(() -> stage.getScene().getRoot().lookupAll(".crumb").stream()
+                .filter(n -> n instanceof javafx.scene.control.Button b && "2019_09_08".equals(b.getText()))
+                .noneMatch(n -> ((javafx.scene.control.Button) n).isMnemonicParsing())), "no mnemonic parsing");
+        assertFalse(fx(() -> findMenuItem(window.fileMenuItems(leftTab()), "Open").isMnemonicParsing()));
+    }
+
     private javafx.scene.control.Button functionKey(String label) {
         return fx(() -> stage.getScene().getRoot().lookupAll(".button").stream()
                 .filter(n -> n instanceof javafx.scene.control.Button b && label.equals(b.getText())
@@ -1663,6 +1676,92 @@ class MainWindowUiTest {
         waitUntil("psd image", () -> preview().image() != null && preview().image().getWidth() == 3);
     }
 
+    /** Raw photos show the camera's embedded JPEG, turned upright (orientation 6: 90° clockwise). */
+    @Test
+    void cameraRawFilesArePreviewedUpright(FxRobot robot) throws Exception {
+        Path dir = folderWith("prevraw");
+        Files.write(dir.resolve("IMG_1.CR2"), com.fileem.fs.RawFixtures.cr2(
+                com.fileem.fs.RawFixtures.jpeg(60, 40), com.fileem.fs.RawFixtures.jpeg(16, 12), 6));
+        Files.write(dir.resolve("hdr.dng"), com.fileem.fs.RawFixtures.tiff(java.nio.ByteOrder.LITTLE_ENDIAN,
+                new com.fileem.fs.RawFixtures.Ifd().shortValue(0x103, 1)));
+        FileTab tab = leftTab();
+        open(robot, tab, dir);
+        previewOn(robot);
+        PreviewWindow p = preview();
+        select(robot, tab, "IMG_1.CR2");
+        waitUntil("raw preview", () -> p.image() != null);
+        assertEquals(40, fx(() -> p.image().getWidth()), 0.5, "turned: was 60 wide");
+        assertEquals(60, fx(() -> p.image().getHeight()), 0.5);
+        // the left half of the stored JPEG is red; turned clockwise it becomes the top half
+        int top = fx(() -> p.image().getPixelReader().getArgb(20, 5));
+        int bottom = fx(() -> p.image().getPixelReader().getArgb(20, 55));
+        assertTrue((top >> 16 & 0xff) > 200 && (top & 0xff) < 60, "top is red: " + Integer.toHexString(top));
+        assertTrue((bottom >> 16 & 0xff) < 60, "bottom is black: " + Integer.toHexString(bottom));
+
+        select(robot, tab, "hdr.dng");
+        waitUntil("no embedded preview", () -> p.messageText() != null && p.messageText().contains("no embedded preview"));
+    }
+
+    @Test
+    void thePreviewDocksIntoTheMainWindowAndFloatsAgain(FxRobot robot) throws Exception {
+        Path dir = folderWith("prevdock", "notes.txt");
+        Files.writeString(dir.resolve("notes.txt"), "docked text");
+        FileTab tab = leftTab();
+        open(robot, tab, dir);
+        previewOn(robot);
+        PreviewWindow p = preview();
+        assertFalse(fx(() -> p.button("preview-close").isVisible()), "a floating window closes like a window");
+
+        robot.clickOn(fx(() -> p.button("preview-dock")));
+        waitUntil("docked", () -> p.pane().getScene() == stage.getScene() && !p.stage().isShowing());
+        assertTrue(fx(() -> p.dockedProperty().get() && p.button("preview-close").isVisible()));
+        select(robot, tab, "notes.txt");
+        waitUntil("previews while docked", () -> "docked text".equals(p.textContent()));
+
+        robot.type(KeyCode.F3);
+        waitUntil("F3 hides the docked pane", () -> p.pane().getScene() == null && !p.enabledProperty().get());
+        robot.type(KeyCode.F3);
+        waitUntil("and shows it docked again", () -> p.pane().getScene() == stage.getScene());
+        assertFalse(fx(() -> p.stage().isShowing()));
+
+        robot.clickOn(fx(() -> p.button("preview-dock")));
+        waitUntil("floating again", () -> p.stage().isShowing() && p.pane().getScene() == p.stage().getScene());
+        robot.clickOn(fx(() -> p.button("preview-dock")));
+        waitUntil("docked", () -> p.pane().getScene() == stage.getScene());
+        robot.clickOn(fx(() -> p.button("preview-close")));
+        waitUntil("the close button switches it off", () -> p.pane().getScene() == null && !p.enabledProperty().get());
+        robot.interact(() -> p.dockedProperty().set(false));
+    }
+
+    @Test
+    void aDockedPreviewIsRememberedInTheSession(FxRobot robot) throws Exception {
+        open(robot, leftTab(), folderWith("prevdocksession", "a.txt"));
+        previewOn(robot);
+        robot.interact(() -> window.preview().dockedProperty().set(true));
+        robot.interact(window::saveSession);
+        assertTrue(session.getBool("preview.docked", false));
+        robot.interact(() -> {
+            window.preview().dockedProperty().set(false);
+            window.preview().enabledProperty().set(false);
+        });
+        Stage other = fx(Stage::new);
+        MainWindow restored = fx(() -> new MainWindow(other, session));
+        robot.interact(() -> {
+            other.setScene(new Scene(restored, 800, 600));
+            other.show();
+        });
+        try {
+            waitUntil("restored docked", () -> restored.preview().pane().getScene() == other.getScene());
+            assertFalse(fx(() -> restored.preview().stage().isShowing()));
+        } finally {
+            robot.interact(() -> {
+                restored.preview().enabledProperty().set(false);
+                restored.preview().dockedProperty().set(false);
+                other.close();
+            });
+        }
+    }
+
     @Test
     void thePreviewIsRememberedInTheSession(FxRobot robot) throws Exception {
         open(robot, leftTab(), folderWith("prevsession", "a.txt"));
@@ -2138,6 +2237,19 @@ class MainWindowUiTest {
     }
 
     @Test
+    void cameraRawFilesShowAPreviewInTheIconViews(FxRobot robot) throws Exception {
+        Path dir = folderWith("rawthumb", "plain.txt");
+        Files.write(dir.resolve("IMG_2.CR2"), com.fileem.fs.RawFixtures.cr2(
+                com.fileem.fs.RawFixtures.jpeg(200, 150), com.fileem.fs.RawFixtures.jpeg(40, 30), 1));
+        FileTab tab = leftTab();
+        open(robot, tab, dir);
+        setView(robot, tab, ViewMode.LARGE_ICONS);
+        FileGrid g = grid(tab);
+        waitUntil("raw preview shown", () -> g.cellFor(0).nameText().equals("IMG_2.CR2") && g.cellFor(0).showsThumbnail());
+        assertFalse(fx(() -> g.cellFor(1).showsThumbnail()));
+    }
+
+    @Test
     void viewModesAreSavedPerTabAndNewTabsUseTheCurrentOne(FxRobot robot) throws Exception {
         Path a = folderWith("va");
         FileTab first = leftTab();
@@ -2154,5 +2266,99 @@ class MainWindowUiTest {
         waitUntil("tabs restored", () -> restored.left().tabs().size() == 2);
         assertEquals(List.of(ViewMode.TILES, ViewMode.LIST),
                 fx(() -> restored.left().tabs().stream().map(FileTab::viewMode).toList()));
+    }
+
+    // ---- search ----
+
+    /** Types a pattern into the search window and runs it to the end. */
+    private void runSearch(FxRobot robot, SearchWindow w, String pattern) {
+        robot.interact(() -> {
+            w.patternField().setText(pattern);
+            w.patternField().fireEvent(new javafx.event.ActionEvent());
+        });
+        waitUntil("search finished", () -> !w.isRunning());
+    }
+
+    private static List<String> searchResults(SearchWindow w, Path root) {
+        return fx(() -> w.table().getItems().stream()
+                .map(e -> root.relativize(e.path()).toString().replace('\\', '/')).sorted().toList());
+    }
+
+    @Test
+    void searchFromTheRightClickMenuFindsFilesInAllSubfolders(FxRobot robot) throws Exception {
+        Path dir = folderWith("searchhere", "top.jpg", "notes.txt", "a/", "a/b/", "photos.jpg/");
+        Files.writeString(dir.resolve("a/b/Deep.JPG"), "x");
+        Files.writeString(dir.resolve("a/b/2019_09_08.txt"), "x");
+        FileTab tab = leftTab();
+        open(robot, tab, dir);
+
+        assertTrue(fx(() -> hasItem(window.treeMenuItems(TreeNode.folder(dir)), "Search in folder")), "tree");
+        select(robot, tab, "a");
+        assertTrue(fx(() -> hasItem(window.fileMenuItems(tab), "Search in folder")), "a selected folder");
+        select(robot, tab, "notes.txt");
+        assertFalse(fx(() -> hasItem(window.fileMenuItems(tab), "Search in folder")), "not on a file");
+        robot.interact(() -> tab.table().getSelectionModel().clearSelection());
+        fireMenuItem(fx(() -> window.fileMenuItems(tab)), "Search in folder");
+
+        waitUntil("search window open", () -> window.searches().size() == 1);
+        SearchWindow w = fx(() -> window.searches().get(0));
+        assertEquals(dir, fx(w::root));
+        assertTrue(fx(() -> w.stage().isShowing()));
+
+        runSearch(robot, w, "*.jpg");
+        assertEquals(List.of("a/b/Deep.JPG", "photos.jpg", "top.jpg"), searchResults(w, dir),
+                "every subfolder, any case, folders too");
+        assertTrue(fx(w::statusText).startsWith("3 items found"), fx(w::statusText));
+
+        runSearch(robot, w, "_09_");
+        assertEquals(List.of("a/b/2019_09_08.txt"), searchResults(w, dir), "plain text matches inside names");
+
+        // open the folder holding a result, with the result selected
+        robot.interact(() -> w.showInFolder(w.table().getItems().get(0)));
+        waitUntil("tab shows the result's folder", () -> dir.resolve("a/b").equals(tab.currentDir()));
+        waitUntil("result selected", () -> tab.selectedPaths().equals(List.of(dir.resolve("a/b/2019_09_08.txt"))));
+
+        // a file opens with its program, a folder in the tab
+        runSearch(robot, w, "*.jpg");
+        Shell.clearLaunched();
+        robot.interact(() -> w.table().getItems().stream().filter(e -> e.name().equals("top.jpg")).findFirst()
+                .ifPresent(w::open));
+        assertEquals(List.of("open " + dir.resolve("top.jpg")), Shell.launched());
+        robot.interact(() -> w.table().getItems().stream().filter(e -> e.name().equals("photos.jpg")).findFirst()
+                .ifPresent(w::open));
+        waitUntil("folder result opened", () -> dir.resolve("photos.jpg").equals(tab.currentDir()));
+        // end outside the folders the test deletes: a window left behind in one walks up to /tmp after
+        // the test, and measuring that listing in the detached window logs CSS lookup noise
+        open(robot, tab, tmp);
+
+        robot.interact(() -> w.stage().close());
+        waitUntil("closed window forgotten", () -> window.searches().isEmpty());
+    }
+
+    @Test
+    void ctrlShiftFSearchesTheCurrentFolderAndHiddenFilesFollowTheToggle(FxRobot robot) throws Exception {
+        assumeTrue(OsUtil.isPosix());
+        Path dir = folderWith("searchkey", "x.log", ".hidden/", "sub/");
+        Files.writeString(dir.resolve(".hidden/y.log"), "y");
+        Files.writeString(dir.resolve("sub/.z.log"), "z");
+        FileTab tab = leftTab();
+        open(robot, tab, dir);
+        robot.press(KeyCode.CONTROL, KeyCode.SHIFT, KeyCode.F).release(KeyCode.F, KeyCode.SHIFT, KeyCode.CONTROL);
+        waitUntil("search window open", () -> window.searches().size() == 1);
+        SearchWindow w = fx(() -> window.searches().get(0));
+        assertEquals(dir, fx(w::root));
+        assertFalse(fx(() -> stage.getScene().getFocusOwner() instanceof javafx.scene.control.TextInputControl),
+                "Ctrl+Shift+F is not the filter");
+        assertFalse(fx(() -> w.hiddenBox().isSelected()), "hidden files are off like in the list");
+
+        runSearch(robot, w, "*.log");
+        assertEquals(List.of("x.log"), searchResults(w, dir));
+        robot.interact(() -> w.hiddenBox().setSelected(true));
+        runSearch(robot, w, "*.log");
+        assertEquals(List.of(".hidden/y.log", "sub/.z.log", "x.log"), searchResults(w, dir));
+
+        runSearch(robot, w, "   ");
+        assertEquals(List.of(), searchResults(w, dir), "nothing to look for");
+        robot.interact(() -> w.stage().close());
     }
 }

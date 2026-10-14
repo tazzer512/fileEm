@@ -6,6 +6,7 @@ import com.fileem.Session;
 import com.fileem.fs.FileEntry;
 import com.fileem.fs.Preview;
 import com.fileem.fs.PsdReader;
+import com.fileem.fs.RawReader;
 import com.fileem.util.Bg;
 import com.fileem.util.Formats;
 import javafx.animation.PauseTransition;
@@ -28,8 +29,10 @@ import javafx.scene.image.WritableImage;
 import javafx.scene.input.KeyCode;
 import javafx.scene.input.ScrollEvent;
 import javafx.scene.layout.BorderPane;
+import javafx.scene.layout.FlowPane;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
+import javafx.scene.layout.Region;
 import javafx.scene.layout.StackPane;
 import javafx.scene.layout.VBox;
 import javafx.scene.text.Font;
@@ -44,11 +47,19 @@ import java.util.concurrent.Future;
 
 /**
  * A separate, resizable window that previews the selected file of the active tab: images (also
- * Photoshop files) and text documents, with zoom and pan buttons; folders and other files show their
+ * Photoshop files and camera raw previews) and text documents, with zoom and pan buttons; folders and other files show their
  * details. Everything is loaded in the background and a newer selection cancels an older load, so
- * previewing never blocks the app. It can be switched off (toolbar, F3, or closing the window).
+ * previewing never blocks the app. It can be switched off (toolbar, F3, or closing the window), and
+ * docked into the main window (a pane on its right, through {@link DockHost}) or float on its own.
  */
 final class PreviewWindow {
+    /** Where the docked preview goes: the main window shows or removes the pane. */
+    interface DockHost {
+        void showDocked(Node pane);
+
+        void hideDocked(Node pane);
+    }
+
     /** Images are decoded at most this big (enough to zoom in, bounded in memory). */
     static final int MAX_IMAGE_SIDE = 4096;
     static final double MIN_ZOOM = 0.05;
@@ -60,6 +71,12 @@ final class PreviewWindow {
 
     private final Stage stage = new Stage();
     private final BooleanProperty enabled = new SimpleBooleanProperty(this, "enabled");
+    private final BooleanProperty docked = new SimpleBooleanProperty(this, "docked");
+    private final DockHost host;
+    private final Window owner;
+    private final BorderPane root;
+    /** Stands in for the content in the window's scene while it is docked (a node has one parent). */
+    private final Region placeholder = new Region();
     private final Label title = new Label();
     private final Label message = new Label();
     private final ScrollPane scroll = new ScrollPane();
@@ -73,6 +90,8 @@ final class PreviewWindow {
     private final Button panRight = tool("mdi2a-arrow-right", "Pan right", "preview-pan-right");
     private final Button panUp = tool("mdi2a-arrow-up", "Pan up", "preview-pan-up");
     private final Button panDown = tool("mdi2a-arrow-down", "Pan down", "preview-pan-down");
+    private final Button dock = tool("mdi2d-dock-right", "Dock in the main window", "preview-dock");
+    private final Button close = tool("mdi2c-close", "Close the preview (F3)", "preview-close");
     private final PauseTransition settle = new PauseTransition(SETTLE);
 
     private FileEntry wanted;
@@ -86,7 +105,9 @@ final class PreviewWindow {
     private ChangeListener<Number> loadingListener;
     private boolean placed;
 
-    PreviewWindow(Window owner, Session session) {
+    PreviewWindow(Window owner, Session session, DockHost host) {
+        this.owner = owner;
+        this.host = host;
         stage.initOwner(owner);
         Icons.applyAppIcon(stage);
         stage.setTitle("Preview");
@@ -94,9 +115,15 @@ final class PreviewWindow {
         title.getStyleClass().add(Styles.TEXT_BOLD);
         title.setMaxWidth(Double.MAX_VALUE);
         HBox.setHgrow(title, Priority.ALWAYS);
-        HBox tools = new HBox(2, title, zoomOut, zoomIn, fit, actual, new Label("  "), panLeft, panRight, panUp, panDown);
-        tools.setAlignment(Pos.CENTER_LEFT);
-        tools.setPadding(new Insets(4, 6, 4, 8));
+        close.managedProperty().bind(close.visibleProperty());
+        HBox header = new HBox(2, title, dock, close);
+        header.setAlignment(Pos.CENTER_LEFT);
+        header.setPadding(new Insets(4, 6, 4, 8));
+        header.getStyleClass().add("preview-header");
+        // wraps onto a second line in a narrow (docked) pane instead of pushing buttons out of sight
+        FlowPane tools = new FlowPane(2, 2, zoomOut, zoomIn, fit, actual, gap(), panLeft, panRight, panUp, panDown);
+        tools.setAlignment(Pos.CENTER);
+        tools.setPadding(new Insets(4, 6, 4, 6));
         tools.getStyleClass().add("preview-tools");
 
         imageView.setPreserveRatio(true);
@@ -123,9 +150,11 @@ final class PreviewWindow {
         StackPane center = new StackPane(scroll, message);
         center.getStyleClass().add("preview-center");
 
-        BorderPane root = new BorderPane(center);
-        root.setTop(tools);
+        root = new BorderPane(center);
+        root.setTop(header);
+        root.setBottom(tools);
         root.getStyleClass().add("preview-window");
+        root.setMinWidth(200);
         Scene scene = new Scene(root, session.getDouble("preview.width", 560), session.getDouble("preview.height", 480));
         Theme.style(scene.getStylesheets());
         scene.setOnKeyPressed(e -> {
@@ -153,29 +182,64 @@ final class PreviewWindow {
         panRight.setOnAction(e -> pan(1, 0));
         panUp.setOnAction(e -> pan(0, -1));
         panDown.setOnAction(e -> pan(0, 1));
+        dock.setOnAction(e -> docked.set(!docked.get()));
+        close.setOnAction(e -> enabled.set(false));
         settle.setOnFinished(e -> load(wanted));
 
+        docked.set(session.getBool("preview.docked", false));
         enabled.addListener((o, was, on) -> {
+            place();
             if (on) {
-                if (!placed) {
-                    placeNextTo(owner);
-                }
-                stage.show();
-                // keep typing in the file list: arrow keys through files update the preview
-                if (owner instanceof Stage main) {
-                    javafx.application.Platform.runLater(main::requestFocus);
-                }
                 load(wanted);
             } else {
                 stopLoading();
-                stage.hide();
             }
         });
+        docked.addListener((o, was, now) -> place());
+        place();
         showMessage("Select a file to preview it.");
     }
 
     BooleanProperty enabledProperty() {
         return enabled;
+    }
+
+    /** Docked: a pane in the main window instead of a window of its own. */
+    BooleanProperty dockedProperty() {
+        return docked;
+    }
+
+    /** The preview's content: in its own window, in the main window when docked, or nowhere when off. */
+    Node pane() {
+        return root;
+    }
+
+    /** Puts the content where enabled and docked say it belongs. */
+    private void place() {
+        dock.setGraphic(Icons.icon(docked.get() ? "mdi2d-dock-window" : "mdi2d-dock-right", 16));
+        dock.getTooltip().setText(docked.get() ? "Float in its own window" : "Dock in the main window");
+        close.setVisible(docked.get());
+        if (!enabled.get()) {
+            stage.hide();
+            host.hideDocked(root);
+            return;
+        }
+        if (docked.get()) {
+            stage.hide();
+            stage.getScene().setRoot(placeholder);
+            host.showDocked(root);
+            return;
+        }
+        host.hideDocked(root);
+        stage.getScene().setRoot(root);
+        if (!placed) {
+            placeNextTo(owner);
+        }
+        stage.show();
+        // keep typing in the file list: arrow keys through files update the preview
+        if (owner instanceof Stage main) {
+            javafx.application.Platform.runLater(main::requestFocus);
+        }
     }
 
     Stage stage() {
@@ -185,7 +249,8 @@ final class PreviewWindow {
     /** Session keys preview.*: on/off, size and position. */
     void save(Session session) {
         session.put("preview.enabled", enabled.get());
-        if (stage.getWidth() > 0) {
+        session.put("preview.docked", docked.get());
+        if (stage.getWidth() > 0 && stage.getScene().getRoot() == root) {
             session.put("preview.width", Math.round(stage.getScene().getWidth()));
             session.put("preview.height", Math.round(stage.getScene().getHeight()));
         }
@@ -259,6 +324,24 @@ final class PreviewWindow {
                             : new Image(new ByteArrayInputStream(p.jpeg()));
                     if (img == null || img.isError()) {
                         showInfo(e, "No preview available for this Photoshop file.");
+                    } else {
+                        showImage(img);
+                    }
+                }, err -> {
+                    if (gen == generation) {
+                        showInfo(e, "Cannot read this file: " + err.getMessage());
+                    }
+                });
+            }
+            case RAW -> {
+                showMessage("Loading…");
+                // the camera's embedded JPEG preview, decoded and turned upright off the FX thread
+                load = Bg.run(() -> RawImages.decode(RawReader.read(e.path(), Integer.MAX_VALUE), MAX_IMAGE_SIDE), img -> {
+                    if (gen != generation) {
+                        return;
+                    }
+                    if (img == null) {
+                        showInfo(e, "This raw file has no embedded preview to show.");
                     } else {
                         showImage(img);
                     }
@@ -496,6 +579,12 @@ final class PreviewWindow {
         placed = true;
     }
 
+    private static Region gap() {
+        Region r = new Region();
+        r.setPrefWidth(12);
+        return r;
+    }
+
     private static Button tool(String icon, String tooltip, String id) {
         Button b = new Button(null, Icons.icon(icon, 16));
         b.getStyleClass().addAll(Styles.BUTTON_ICON, Styles.FLAT);
@@ -532,6 +621,6 @@ final class PreviewWindow {
     }
 
     Button button(String id) {
-        return (Button) stage.getScene().lookup("#" + id);
+        return (Button) root.lookup("#" + id);
     }
 }

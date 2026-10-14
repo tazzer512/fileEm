@@ -208,7 +208,7 @@ final class FileTable extends TableView<FileEntry> {
 
     // ---- cells ----
 
-    private static final class NameCell extends TableCell<FileEntry, FileEntry> {
+    static final class NameCell extends TableCell<FileEntry, FileEntry> {
         private final FontIcon icon = Icons.icon("mdi2f-file-outline");
 
         NameCell() {

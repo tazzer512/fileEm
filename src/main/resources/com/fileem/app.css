@@ -38,7 +38,8 @@
 
 /* ---- sides ---- */
 .explorer-side > .split-pane-divider,
-.main-window > .split-pane > .split-pane-divider {
+.sides-split > .split-pane-divider,
+.main-split > .split-pane-divider {
     -fx-padding: 0 1 0 1;
 }
 
@@ -311,4 +312,13 @@
     -fx-border-color: -color-warning-muted;
     -fx-background-radius: 6;
     -fx-border-radius: 6;
+}
+
+/* ---- preview (own window or docked) ---- */
+.preview-header {
+    -fx-border-color: transparent transparent -color-border-muted transparent;
+}
+
+.preview-tools {
+    -fx-border-color: -color-border-muted transparent transparent transparent;
 }

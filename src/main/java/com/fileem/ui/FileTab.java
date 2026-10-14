@@ -434,6 +434,13 @@ public final class FileTab extends BorderPane {
         go(p, null, true, 0, true); // whether p is a file is checked off the FX thread (slow mounts)
     }
 
+    /** Opens the folder holding {@code p} with {@code p} selected (a file or a folder). */
+    void showItem(Path p) {
+        if (p != null && p.getParent() != null) {
+            go(p.getParent(), p, true);
+        }
+    }
+
     void back() {
         if (canGoBack()) {
             go(history.get(historyIndex - 1), null, false, -1);

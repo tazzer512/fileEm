@@ -2,6 +2,7 @@ package com.fileem.ui;
 
 import com.fileem.fs.FileEntry;
 import com.fileem.fs.PsdReader;
+import com.fileem.fs.RawReader;
 import javafx.application.Platform;
 import javafx.beans.value.ChangeListener;
 import javafx.scene.image.Image;
@@ -22,7 +23,7 @@ import java.util.function.Consumer;
 
 /**
  * Image thumbnails for the icon views. Formats JavaFX decodes load with its own background loading;
- * Photoshop files are decoded by {@link PsdReader} on two background threads. Nothing touches the disk
+ * Photoshop files ({@link PsdReader}) and camera raws ({@link RawReader}) are decoded on two background threads. Nothing touches the disk
  * on the FX thread. Kept in an LRU cache bounded by pixel count, keyed by file, size and date (a changed
  * file gets a new entry). Thumbnails load at a few fixed sizes ({@link #loadSize}) and the image view
  * scales them, so dragging the size slider doesn't decode every image again for every pixel.
@@ -32,13 +33,13 @@ final class Thumbnails {
     private static final Set<String> SUPPORTED = Set.of("png", "jpg", "jpeg", "gif", "bmp");
     /** Bigger files are not worth decoding just for a thumbnail. */
     private static final long MAX_FILE_SIZE = 40L << 20;
-    /** Photoshop previews read only a few rows, so even big documents are fine. */
+    /** Photoshop and raw previews read only a part of the file, so even big ones are fine. */
     private static final long MAX_PSD_SIZE = 8L << 30;
     /** About 64 MB of decoded ARGB pixels. */
     private static final long PIXEL_BUDGET = 16L << 20;
 
     private static final LinkedHashMap<String, Image> CACHE = new LinkedHashMap<>(256, 0.75f, true);
-    /** Photoshop previews being decoded, with whoever is waiting for them. */
+    /** Photoshop and raw previews being decoded, with whoever is waiting for them. */
     private static final Map<String, List<Consumer<Image>>> DECODING = new HashMap<>();
     /** Files that have no usable preview: not tried again until they change. */
     private static final Set<String> FAILED = new HashSet<>();
@@ -56,7 +57,7 @@ final class Thumbnails {
         if (e.isDirectory() || e.size() <= 0) {
             return false;
         }
-        if (PsdReader.isPsd(e.extension())) {
+        if (PsdReader.isPsd(e.extension()) || RawReader.isRaw(e.extension())) {
             return e.size() <= MAX_PSD_SIZE;
         }
         return e.size() <= MAX_FILE_SIZE && SUPPORTED.contains(e.extension());
@@ -87,7 +88,7 @@ final class Thumbnails {
             whenLoaded(cached, onLoaded);
             return;
         }
-        if (PsdReader.isPsd(e.extension())) {
+        if (decodedHere(e)) {
             List<Consumer<Image>> waiting = DECODING.get(key);
             if (waiting != null) {
                 waiting.add(onLoaded);
@@ -96,7 +97,7 @@ final class Thumbnails {
             waiting = new ArrayList<>(List.of(onLoaded));
             DECODING.put(key, waiting);
             PSD.execute(() -> {
-                Image img = decodePsd(e, load);
+                Image img = RawReader.isRaw(e.extension()) ? decodeRaw(e, load) : decodePsd(e, load);
                 Platform.runLater(() -> {
                     List<Consumer<Image>> callbacks = DECODING.remove(key);
                     if (img == null) {
@@ -112,6 +113,20 @@ final class Thumbnails {
         Image img = new Image(e.path().toUri().toString(), load, load, true, true, true);
         put(key, img, load);
         whenLoaded(img, onLoaded);
+    }
+
+    /** Photoshop and camera raw files: read by our own readers on the background pool. */
+    private static boolean decodedHere(FileEntry e) {
+        return PsdReader.isPsd(e.extension()) || RawReader.isRaw(e.extension());
+    }
+
+    /** On a background thread: the raw file's smallest embedded JPEG that is big enough, upright. */
+    private static Image decodeRaw(FileEntry e, int load) {
+        try {
+            return RawImages.decode(RawReader.read(e.path(), load), load);
+        } catch (Exception | OutOfMemoryError ex) {
+            return null;
+        }
     }
 
     /** On a background thread: the PSD's preview as an image, or null. */

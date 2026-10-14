@@ -284,7 +284,8 @@
 }
 
 .explorer-side > .split-pane-divider,
-.main-window > .split-pane > .split-pane-divider {
+.sides-split > .split-pane-divider,
+.main-split > .split-pane-divider {
     -fx-background-color: transparent;
     -fx-padding: 0 3 0 3;
 }

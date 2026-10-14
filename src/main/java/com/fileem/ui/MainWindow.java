@@ -70,6 +70,8 @@ public final class MainWindow extends BorderPane {
     private MenuButton themeMenu;
     private MenuButton viewMenu;
     private final SplitPane sides = new SplitPane();
+    /** The sides, plus the preview on the right while it is docked. */
+    private final SplitPane outer = new SplitPane(sides);
     private final ExplorerSide left;
     private final ExplorerSide right;
     private ExplorerSide active;
@@ -80,12 +82,30 @@ public final class MainWindow extends BorderPane {
     private Button bookmarkButton;
     private final Bookmarks bookmarks;
     private final PreviewWindow preview;
+    private final List<SearchWindow> searches = new ArrayList<>();
 
     public MainWindow(Stage stage, Session session) {
         this.stage = stage;
         this.session = session;
         this.bookmarks = new Bookmarks(session);
-        this.preview = new PreviewWindow(stage, session);
+        this.preview = new PreviewWindow(stage, session, new PreviewWindow.DockHost() {
+            @Override
+            public void showDocked(Node pane) {
+                if (!outer.getItems().contains(pane)) {
+                    SplitPane.setResizableWithParent(pane, false); // a wider window widens the files
+                    outer.getItems().add(pane); // add/remove only the pane: re-adding sides would restyle all of it
+                    outer.setDividerPositions(session.getDouble("split.preview", 0.7));
+                }
+            }
+
+            @Override
+            public void hideDocked(Node pane) {
+                if (outer.getItems().contains(pane)) {
+                    session.put("split.preview", outer.getDividerPositions()[0]);
+                    outer.getItems().remove(pane);
+                }
+            }
+        });
         getStyleClass().add("main-window");
         showHidden.set(session.getBool("showHidden", false));
         showHidden.addListener((o, a, v) -> session.put("showHidden", v));
@@ -96,7 +116,9 @@ public final class MainWindow extends BorderPane {
         left.setActive(true);
 
         setTop(buildToolbar());
-        setCenter(sides);
+        sides.getStyleClass().add("sides-split");
+        outer.getStyleClass().add("main-split");
+        setCenter(outer);
         setBottom(buildFunctionBar());
 
         left.restore(session);
@@ -153,7 +175,7 @@ public final class MainWindow extends BorderPane {
         return s == left ? right : left;
     }
 
-    private FileTab tab() {
+    FileTab tab() {
         return active.activeTab();
     }
 
@@ -241,7 +263,7 @@ public final class MainWindow extends BorderPane {
 
         ToggleButton hidden = toggle("mdi2e-eye", "Show hidden files (Ctrl+H)");
         hidden.selectedProperty().bindBidirectional(showHidden);
-        ToggleButton previewToggle = toggle("mdi2f-file-eye-outline", "Preview window (F3)");
+        ToggleButton previewToggle = toggle("mdi2f-file-eye-outline", "Preview (F3)");
         previewToggle.selectedProperty().bindBidirectional(preview.enabledProperty());
         previewToggle.setId("preview-toggle");
         ToggleButton dualToggle = toggle("mdi2v-view-split-vertical", "Dual pane (F9)");
@@ -432,6 +454,8 @@ public final class MainWindow extends BorderPane {
             action = () -> side().closeActiveTab();
         } else if (shortcut && !alt && c == KeyCode.L) {
             action = () -> tab().editAddress();
+        } else if (shortcut && shift && !alt && c == KeyCode.F) {
+            action = () -> search(tab().currentDir());
         } else if (shortcut && !alt && c == KeyCode.F) {
             action = () -> tab().focusFilter();
         } else if ((e.isControlDown() && !alt && c == KeyCode.H) || (shortcut && shift && c == KeyCode.PERIOD)) {
@@ -597,7 +621,7 @@ public final class MainWindow extends BorderPane {
         }
     }
 
-    private void copyPaths(List<Path> paths) {
+    void copyPaths(List<Path> paths) {
         ClipboardContent c = new ClipboardContent();
         c.putString(paths.stream().map(Path::toString).collect(Collectors.joining(System.lineSeparator())));
         Clipboard.getSystemClipboard().setContent(c);
@@ -925,6 +949,9 @@ public final class MainWindow extends BorderPane {
             items.add(item("Open in other side", "mdi2v-view-split-vertical", () -> openInOtherSide(first.path())));
         }
         items.add(item("Open in terminal", "mdi2c-console", () -> openTerminal(singleDir ? first.path() : t.currentDir())));
+        if (singleDir) {
+            items.add(searchItem(first.path()));
+        }
         if (single) {
             items.add(item("Show in " + Shell.fileManagerName(), "mdi2f-folder-search-outline", () -> reveal(first.path())));
         }
@@ -986,6 +1013,7 @@ public final class MainWindow extends BorderPane {
         items.add(item("Refresh  (Ctrl+R)", "mdi2r-refresh", this::refreshActive));
         items.add(new SeparatorMenuItem());
         if (dir != null) {
+            items.add(searchItem(dir));
             items.add(item("Open in terminal", "mdi2c-console", () -> openTerminal(dir)));
             items.add(item("Open in " + Shell.fileManagerName(), "mdi2f-folder-search-outline", () -> Shell.open(dir,
                     msg -> Dialogs.error(stage, "Open", msg))));
@@ -1057,6 +1085,7 @@ public final class MainWindow extends BorderPane {
         items.add(item("Open in other side", "mdi2v-view-split-vertical", () -> openInOtherSide(dir)));
         items.add(item("Open in terminal", "mdi2c-console", () -> openTerminal(dir)));
         items.add(item("Show in " + Shell.fileManagerName(), "mdi2f-folder-search-outline", () -> reveal(dir)));
+        items.add(searchItem(dir));
         items.add(new SeparatorMenuItem());
         if (plainFolder) {
             items.add(item("Cut", "mdi2c-content-cut", () -> clipboardPut(List.of(dir), true)));
@@ -1107,6 +1136,32 @@ public final class MainWindow extends BorderPane {
             items.add(eject);
         }
         return items;
+    }
+
+    // ---- search ----
+
+    private MenuItem searchItem(Path dir) {
+        return item("Search in folder…  (Ctrl+Shift+F)", "mdi2f-file-search-outline", () -> search(dir));
+    }
+
+    /** Opens a search window for {@code dir} and everything below it. */
+    SearchWindow search(Path dir) {
+        if (dir == null) {
+            return null;
+        }
+        SearchWindow w = new SearchWindow(this, stage, dir, showHidden.get());
+        searches.add(w);
+        w.show();
+        return w;
+    }
+
+    void searchClosed(SearchWindow w) {
+        searches.remove(w);
+    }
+
+    /** The open search windows (test hook). */
+    List<SearchWindow> searches() {
+        return List.copyOf(searches);
     }
 
     // ---- eject ----
@@ -1275,9 +1330,10 @@ public final class MainWindow extends BorderPane {
         BookmarksDialog.show(stage, this);
     }
 
-    private static MenuItem item(String text, String icon, Runnable action) {
+    static MenuItem item(String text, String icon, Runnable action) {
         FontIcon graphic = Icons.icon(icon);
         MenuItem mi = new MenuItem(text, graphic);
+        mi.setMnemonicParsing(false); // texts may hold file names with underscores
         mi.setOnAction(e -> action.run());
         return mi;
     }
@@ -1295,6 +1351,9 @@ public final class MainWindow extends BorderPane {
         session.put("dual", dual.get());
         if (dual.get() && sides.getDividerPositions().length > 0) {
             session.put("split.sides", sides.getDividerPositions()[0]);
+        }
+        if (outer.getItems().size() > 1) {
+            session.put("split.preview", outer.getDividerPositions()[0]);
         }
         left.save(session);
         right.save(session);

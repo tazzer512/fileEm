@@ -18,7 +18,7 @@ import java.util.Set;
  * that touches the disk is meant for a background thread.
  */
 public final class Preview {
-    public enum Kind { IMAGE, PSD, TEXT, FOLDER, OTHER }
+    public enum Kind { IMAGE, PSD, RAW, TEXT, FOLDER, OTHER }
 
     /** Formats JavaFX decodes. */
     private static final Set<String> IMAGES = Set.of("png", "jpg", "jpeg", "gif", "bmp");
@@ -49,6 +49,9 @@ public final class Preview {
         }
         if (PsdReader.isPsd(ext)) {
             return Kind.PSD;
+        }
+        if (RawReader.isRaw(ext)) {
+            return Kind.RAW;
         }
         return TEXT.contains(ext) ? Kind.TEXT : Kind.OTHER;
     }

@@ -70,7 +70,7 @@ command when it isn't installed:
   `jdk.localedata`). `tools/install-linux.sh` installs it per user with a `.desktop` entry named
   after the window class (`com.fileem.FileEmApp`; renaming `FileEmApp` breaks the dock icon,
   `PackagingTest` checks). Icons: `tools/make-icon.py` writes `src/packaging/` and the window icons.
-- `mvn test`: about 225 tests, a bit over a minute. UI tests run **headless on Monocle** (configured in
+- `mvn test`: about 250 tests, a bit over a minute. UI tests run **headless on Monocle** (configured in
   the pom's `headless-ui-tests` profile), so no display is needed.
   - `mvn test -Dtest=FileOperationTest`: a single class. `-Dtest='!MainWindowUiTest'` skips
     the slow UI tests while iterating, but run the full suite before finishing.
@@ -92,6 +92,10 @@ src/test/java/com/fileem/
   util/                NaturalOrderTest, FormatsTest (fixes Locale.US), FsUtilTest
   fs/                  FileEntryTest, FileTypesTest, DirWatcherTest,
                        PsdReaderTest (modes, depths, RLE/raw, PSB, JPEG fallback, damaged files),
+                       RawReaderTest (CR2/NEF/RW2/RAF/CR3 previews, choice by size, orientation,
+                       damaged files; RawFixtures builds the files),
+                       FileSearchTest (wildcards, recursion, hidden, links not followed, unreadable
+                       folders, stopping),
                        PreviewTest (kinds by name, text vs binary, truncation, encodings),
                        ShellTest (terminal launch commands per platform), VolumesTest (listing,
                        eject commands, mount table parsing)
@@ -102,7 +106,8 @@ src/test/java/com/fileem/
   ui/MainWindowUiTest  TestFX end-to-end: keyboard, dialogs, dual pane, clipboard, DnD, session,
                        autosave, rubber-band selection, stacked progress window (pause/cancel),
                        eject (menu/button, tabs leave first, refused while busy, errors),
-                       preview window (toggle, image zoom/fit/pan, text, quick selection, PSD, session),
+                       preview (toggle, image zoom/fit/pan, text, quick selection, PSD, raw upright,
+                       docking, session), search (menus, Ctrl+Shift+F, results, open/show, hidden),
                        view modes (menu, keys, wheel, grid mouse/keys/box/DnD/menus, thumbnails)
 ```
 
@@ -159,7 +164,8 @@ com.fileem          Launcher, FileEmApp (stage), Session (properties file), Auto
                     Bookmarks (ordered named folders, saved on every change)
 com.fileem.util     OsUtil, Bg (background executor → FX callbacks), Formats, FsUtil, NaturalOrder
 com.fileem.fs       FileEntry (row snapshot), FileTypes, Volumes (mount polling), DirWatcher,
-                    Trash, Shell (open with OS)
+                    Trash, Shell (open with OS), Preview (kinds, text reading), PsdReader, RawReader,
+                    FileSearch (recursive name search with wildcards)
 com.fileem.ops      FileOperation (copy/move/delete/trash Task), FileClipboard
 com.fileem.ui       MainWindow (toolbar, F-key bar, ALL commands + key handling)
                     └ ExplorerSide ×2 (left/right): FolderTree + TabPane of FileTab
@@ -170,7 +176,9 @@ com.fileem.ui       MainWindow (toolbar, F-key bar, ALL commands + key handling)
                     OperationUi (starts operations, conflict dialog)
                     ProgressWindow (one per main window; a row per running op with Pause/Resume,
                       Cancel and inline conflict questions)
-                    PreviewWindow (one per main window: previews the active tab's selection)
+                    PreviewWindow (one per main window: previews the active tab's selection;
+                      floats or docks into MainWindow's `outer` SplitPane), RawImages
+                    SearchWindow (one per search: pattern, streaming results table)
                     PropertiesDialog, BookmarksDialog, Dialogs, Dnd, Theme, Icons, Views, TreeNode
 src/main/resources/com/fileem/app.css   author stylesheet on top of AtlantaFX
 src/main/resources/com/fileem/themes/   theme overlays: <id>.css shapes, <id>-light/-dark.css colors
@@ -344,7 +352,7 @@ tools/                                  make-icon.py, install-linux.sh (per-user
   which rebuilds its cells only when the pixel size changes (cells take their icon size when created).
   Icons of 48 px and up show thumbnails. `Thumbnails.request(entry, px, callback)` loads at fixed
   sizes (`loadSize`: multiples of 32) so the slider doesn't re-decode per pixel; JavaFX formats use
-  background loading, PSD/PSB go through `fs/PsdReader` on two daemon threads (composite image,
+  background loading, PSD/PSB (`fs/PsdReader`) and camera raws (`fs/RawReader`, via `RawImages`) go on two daemon threads (composite image,
   sampled rows only; falls back to the embedded JPEG; failures remembered per file version). Cells
   drop late callbacks with a request counter. The status line is an
   HBox (`.status-bar`: themes style its background there, text stays on `.status-label`).
@@ -356,10 +364,33 @@ tools/                                  make-icon.py, install-linux.sh (per-user
   previous one (`Bg` future / `Image.cancel`). Kinds come from `fs/Preview` (FX-free:
   `kindOf`, `readText` with binary sniffing, UTF-8 then Latin-1, 256 KB). Images: the header size is
   read first (`imageSize`, ImageIO) because JavaFX *enlarges* to a requested size; decode at natural
-  size or bounded to 4096 px with background loading. PSD: `PsdReader` at 2048 px. Zoom = image scale
+  size or bounded to 4096 px with background loading. PSD: `PsdReader` at 2048 px. Camera raws:
+  `RawReader` finds the embedded JPEGs (TIFF IFDs, sub-IFDs, RW2 tag 0x2E; CR3 PRVW box; RAF header),
+  skips ones a decoder can't show (lossless SOF3 sensor data also starts with FFD8), and picks the
+  smallest one at least the asked size (thumbnails) or the largest (preview); `RawImages` decodes and
+  turns it upright per EXIF orientation (IFD0, CR3's CMT1, else the JPEG's own EXIF). Zoom = image scale
   or font scale; fit never enlarges; pan buttons move a quarter of the viewport. Showing it hands focus
-  back to the main window. Closing it, F3 or Escape switches it off. Tests: `preview()` hooks
-  (`kind`, `image`, `textContent`, `messageText`, `button(id)`, `scrollPane`).
+  back to the main window. Closing it, F3 or Escape switches it off.
+  **Docking** (`dockedProperty`, session `preview.docked`, divider `split.preview`): the same content
+  node (`pane()`) moves between the window's scene (a placeholder stands in while docked) and the
+  main window's `outer` SplitPane through `PreviewWindow.DockHost`; `place()` puts it where
+  enabled/docked say. The host adds/removes only the pane: `setAll(sides, pane)` would detach and
+  re-add the whole explorer (a full restyle, and stray CSS lookup warnings from detached nodes). The header has the dock toggle and, only when docked, a close button; the
+  zoom/pan buttons are a FlowPane at the bottom so they wrap in a narrow pane. Split dividers are
+  styled by class (`.sides-split`, `.main-split`), not by nesting. Tests: `preview()` hooks (`kind`,
+  `image`, `textContent`, `messageText`, `button(id)`, `scrollPane`, `pane`, `dockedProperty`).
+- **Search** (`SearchWindow`, *Search in folder…* in the file/tree/background menus, Ctrl+Shift+F;
+  `MainWindow.search(dir)` / `searches()`): `fs/FileSearch` walks the tree without following links
+  (a linked start folder is walked through its target, results keep the asked path), skips hidden
+  items and hidden folders' contents unless asked, reports unreadable folders and keeps going, and
+  stops when interrupted or `Listener.wantsMore()` says no (the window caps at `MAX_RESULTS`).
+  The walk is a `Bg` job; results queue up and reach the table in batches (one pending
+  `runLater` at a time); each run is an object, and only the current one may touch the table.
+  Search, Stop, Escape and closing the window cancel the job. Results are `FileEntry`s shown with
+  `FileTable.NameCell`; folders open in the active tab (`FileTab.showItem` opens a result's folder
+  with it selected), files with `Shell.open`.
+- **Mnemonics**: `Button`/`MenuItem` treat `_` as a mnemonic marker and hide it. Anything showing a
+  file name (address bar crumbs, `MainWindow.item`) sets `setMnemonicParsing(false)`.
 - **Rubber band** (`Marquee` in Details, built into `FileGrid` in the other views): event filters
   on the table. A press on a row's name (icon + text, plus a few pixels of slack) drags files; anywhere else (empty space, other columns) starts the box. Rows are tracked in
   content coordinates (index × row height) so autoscroll keeps the anchor. Shift adds, Ctrl/Cmd

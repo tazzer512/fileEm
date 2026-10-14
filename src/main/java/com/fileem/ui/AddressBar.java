@@ -80,6 +80,7 @@ final class AddressBar extends StackPane {
 
     private Node crumb(Path segment) {
         Button b = new Button();
+        b.setMnemonicParsing(false); // "2019_09_08" must not lose its first underscore
         b.getStyleClass().addAll(Styles.FLAT, "crumb");
         b.setFocusTraversable(false);
         if (segment.getFileName() == null) {
