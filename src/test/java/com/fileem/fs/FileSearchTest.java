@@ -82,7 +82,7 @@ class FileSearchTest {
         assertTrue(several.test("y.GIF"));
         assertFalse(several.test("z.jpg"));
 
-        Predicate<String> special = FileSearch.matcher("a+b (1)[x].txt");
+        Predicate<String> special = FileSearch.matcher("\"a+b (1)[x].txt\"");
         assertTrue(special.test("a+b (1)[x].txt"), "regex characters are plain text");
         assertFalse(special.test("aab (1)x.txt"));
 
@@ -90,6 +90,49 @@ class FileSearchTest {
         assertNull(FileSearch.matcher(""));
         assertNull(FileSearch.matcher("  ;  "));
         assertNull(FileSearch.matcher(null));
+    }
+
+    @Test
+    void spacesSeparateTermsAndAnExclamationMarkExcludes() {
+        Predicate<String> m = FileSearch.matcher("a*.* !*.mp3");
+        assertTrue(m.test("abc.txt"));
+        assertTrue(m.test("Album.FLAC"));
+        assertFalse(m.test("anthem.mp3"), "excluded");
+        assertFalse(m.test("ANTHEM.MP3"), "excluding ignores case too");
+        assertFalse(m.test("b.txt"), "not included");
+
+        Predicate<String> any = FileSearch.matcher("*.jpg   *.png");
+        assertTrue(any.test("x.jpg"));
+        assertTrue(any.test("y.png"), "plain terms: any of them");
+        assertFalse(any.test("z.gif"));
+
+        Predicate<String> onlyExclude = FileSearch.matcher("!*.tmp !~*");
+        assertTrue(onlyExclude.test("report.doc"), "only exclusions: everything else");
+        assertFalse(onlyExclude.test("x.TMP"));
+        assertFalse(onlyExclude.test("~lock"));
+
+        Predicate<String> both = FileSearch.matcher("*.txt;!old* *.md");
+        assertTrue(both.test("new.txt"));
+        assertTrue(both.test("notes.md"));
+        assertFalse(both.test("old.txt"), "; and spaces mix");
+
+        Predicate<String> quoted = FileSearch.matcher("\"my file*\" !\"my file copy*\"");
+        assertTrue(quoted.test("my file.txt"), "quotes keep the space");
+        assertFalse(quoted.test("my file copy.txt"));
+        assertFalse(quoted.test("file.txt"), "not split into \"my\" and \"file*\"");
+
+        Predicate<String> plain = FileSearch.matcher("report !draft");
+        assertTrue(plain.test("Report final.pdf"));
+        assertFalse(plain.test("report draft.pdf"), "plain text excludes anywhere in the name too");
+
+        assertNull(FileSearch.matcher("!"), "a lone ! has nothing to look for");
+        assertNull(FileSearch.matcher("  \"\" "));
+    }
+
+    @Test
+    void exclusionsApplyInEveryFolder() throws IOException {
+        tree("a1.txt", "a2.mp3", "b.mp3", "sub/a3.MP3", "sub/a4.jpg");
+        assertEquals(List.of("a1.txt", "sub/a4.jpg"), search(dir, "a*.* !*.mp3", false).found());
     }
 
     @Test

@@ -2310,6 +2310,9 @@ class MainWindowUiTest {
                 "every subfolder, any case, folders too");
         assertTrue(fx(w::statusText).startsWith("3 items found"), fx(w::statusText));
 
+        runSearch(robot, w, "*.jpg !top*");
+        assertEquals(List.of("a/b/Deep.JPG", "photos.jpg"), searchResults(w, dir), "! excludes");
+
         runSearch(robot, w, "_09_");
         assertEquals(List.of("a/b/2019_09_08.txt"), searchResults(w, dir), "plain text matches inside names");
 

@@ -15,9 +15,9 @@ import java.util.regex.Pattern;
 
 /**
  * Finds files and folders by name in a folder and everything below it. Patterns use the wildcards
- * {@code *} (any text) and {@code ?} (one character), ignore case, and several can be given separated
- * by {@code ;} ({@code *.jpg;*.png}). A pattern without wildcards matches anywhere in the name, like
- * Explorer's search box. Links are not followed; unreadable folders are skipped and counted.
+ * {@code *} (any text) and {@code ?} (one character) and ignore case. Several can be given, separated
+ * by spaces or {@code ;} ({@code *.jpg *.png}); {@code !} in front excludes ({@code a*.* !*.mp3}). A
+ * pattern without wildcards matches anywhere in the name, like Explorer's search box. Links are not followed; unreadable folders are skipped and counted.
  */
 public final class FileSearch {
     private FileSearch() {
@@ -41,36 +41,67 @@ public final class FileSearch {
         }
     }
 
-    /** The name test for {@code pattern}; null when it has nothing to look for. */
+    /**
+     * The name test for {@code pattern}; null when it has nothing to look for. Terms are separated by
+     * spaces or {@code ;}; a name matches when it matches any plain term and no term starting with
+     * {@code !} ({@code a*.* !*.mp3}: names starting with "a", except mp3s). With only {@code !} terms,
+     * everything else matches. Quotes keep spaces in a term ({@code "my file*"}, {@code !"old copy"}).
+     */
     public static Predicate<String> matcher(String pattern) {
         if (pattern == null) {
             return null;
         }
-        List<Pattern> parts = new ArrayList<>();
-        for (String part : pattern.split(";")) {
-            String p = part.strip();
-            if (p.isEmpty() || p.chars().allMatch(c -> c == '*')) {
-                if (!p.isEmpty()) {
-                    parts.add(Pattern.compile(".*", Pattern.DOTALL));
-                }
+        List<Pattern> include = new ArrayList<>();
+        List<Pattern> exclude = new ArrayList<>();
+        for (String term : terms(pattern)) {
+            boolean not = term.startsWith("!");
+            String glob = not ? term.substring(1) : term;
+            if (glob.isEmpty()) {
                 continue;
             }
-            if (p.indexOf('*') < 0 && p.indexOf('?') < 0) {
-                p = "*" + p + "*";
+            if (glob.indexOf('*') < 0 && glob.indexOf('?') < 0) {
+                glob = "*" + glob + "*";
             }
-            parts.add(Pattern.compile(globToRegex(p), Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE | Pattern.DOTALL));
+            Pattern p = Pattern.compile(globToRegex(glob), Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE | Pattern.DOTALL);
+            (not ? exclude : include).add(p);
         }
-        if (parts.isEmpty()) {
+        if (include.isEmpty() && exclude.isEmpty()) {
             return null;
         }
-        return name -> {
-            for (Pattern p : parts) {
-                if (p.matcher(name).matches()) {
-                    return true;
-                }
+        return name -> (include.isEmpty() || matchesAny(include, name)) && !matchesAny(exclude, name);
+    }
+
+    private static boolean matchesAny(List<Pattern> patterns, String name) {
+        for (Pattern p : patterns) {
+            if (p.matcher(name).matches()) {
+                return true;
             }
-            return false;
-        };
+        }
+        return false;
+    }
+
+    /** Splits at spaces and {@code ;} outside quotes; the quotes themselves are dropped. */
+    static List<String> terms(String pattern) {
+        List<String> out = new ArrayList<>();
+        StringBuilder cur = new StringBuilder();
+        boolean quoted = false;
+        for (int i = 0; i < pattern.length(); i++) {
+            char c = pattern.charAt(i);
+            if (c == '"') {
+                quoted = !quoted;
+            } else if (!quoted && (Character.isWhitespace(c) || c == ';')) {
+                if (!cur.isEmpty()) {
+                    out.add(cur.toString());
+                    cur.setLength(0);
+                }
+            } else {
+                cur.append(c);
+            }
+        }
+        if (!cur.isEmpty()) {
+            out.add(cur.toString());
+        }
+        return out;
     }
 
     private static String globToRegex(String glob) {

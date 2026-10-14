@@ -108,7 +108,10 @@ final class SearchWindow {
         stage.setTitle("Search in " + FsUtil.displayName(root));
 
         pattern.setId("search-pattern");
-        pattern.setPromptText("Name, or a pattern like *.jpg;*.png or IMG_????.*");
+        pattern.setPromptText("Name or patterns, like *.jpg *.png or a*.* !*.mp3 (! excludes)");
+        pattern.setTooltip(new javafx.scene.control.Tooltip(
+                "* any text, ? one character. Separate patterns with spaces; ! in front excludes.\n"
+                        + "Quotes keep spaces: \"my file*\". Text without wildcards matches anywhere in the name."));
         HBox.setHgrow(pattern, Priority.ALWAYS);
         pattern.setOnAction(e -> start());
         hidden.setId("search-hidden");

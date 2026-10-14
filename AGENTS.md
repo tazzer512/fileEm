@@ -95,7 +95,7 @@ src/test/java/com/fileem/
                        PsdReaderTest (modes, depths, RLE/raw, PSB, JPEG fallback, damaged files),
                        RawReaderTest (CR2/NEF/RW2/RAF/CR3 previews, choice by size, orientation,
                        damaged files; RawFixtures builds the files),
-                       FileSearchTest (wildcards, recursion, hidden, links not followed, unreadable
+                       FileSearchTest (wildcards, terms and ! exclusions, recursion, hidden, links not followed, unreadable
                        folders, stopping),
                        PreviewTest (kinds by name, text vs binary, truncation, encodings),
                        ShellTest (terminal launch commands per platform), VolumesTest (listing,
@@ -384,7 +384,8 @@ tools/                                  make-icon.py, install-linux.sh (per-user
   styled by class (`.sides-split`, `.main-split`), not by nesting. Tests: `preview()` hooks (`kind`,
   `image`, `textContent`, `messageText`, `button(id)`, `scrollPane`, `pane`, `dockedProperty`).
 - **Search** (`SearchWindow`, *Search in folder…* in the file/tree/background menus, Ctrl+Shift+F;
-  `MainWindow.search(dir)` / `searches()`): `fs/FileSearch` walks the tree without following links
+  `MainWindow.search(dir)` / `searches()`): `FileSearch.matcher` splits the pattern at spaces/`;`
+  (quotes keep spaces); a name matches any plain term and no `!` term. `fs/FileSearch` walks the tree without following links
   (a linked start folder is walked through its target, results keep the asked path), skips hidden
   items and hidden folders' contents unless asked, reports unreadable folders and keeps going, and
   stops when interrupted or `Listener.wantsMore()` says no (the window caps at `MAX_RESULTS`).

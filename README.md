@@ -51,8 +51,10 @@ mvn test -Dheadless=false   # watch the UI tests run on screen
   on top, natural "file2 < file10" order). Column widths, order, visibility and sort are remembered.
 - **Search** (*Search in folder…* in the right-click menu of a folder, the tree or empty space in
   the list, or Ctrl+Shift+F): finds files and folders by name in that folder and every folder below
-  it. Wildcards: `*` (any text) and `?` (one character), e.g. `*.jpg`, `IMG_????.*`; separate several
-  with `;` (`*.jpg;*.png`). Text without wildcards matches anywhere in the name; case is ignored.
+  it. Wildcards: `*` (any text) and `?` (one character), e.g. `*.jpg`, `IMG_????.*`. Separate several
+  with spaces (or `;`): `*.jpg *.png` finds either; `!` in front excludes, so `a*.* !*.mp3` finds
+  names starting with "a" except mp3s (only `!` terms: everything else). Quotes keep spaces in a
+  term (`"my file*"`). Text without wildcards matches anywhere in the name; case is ignored.
   Results stream in while it searches (Stop or Escape halts it). Double-click or Enter opens a
   result (folders open in the active tab), and *Open containing folder* shows it selected in its
   folder. Hidden files are included when the box is ticked (it starts as the list's setting);
