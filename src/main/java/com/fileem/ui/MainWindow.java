@@ -3,6 +3,7 @@ package com.fileem.ui;
 import atlantafx.base.theme.Styles;
 import com.fileem.AppInfo;
 import com.fileem.Bookmarks;
+import com.fileem.SearchHistory;
 import com.fileem.Session;
 import com.fileem.fs.FileEntry;
 import com.fileem.fs.Shell;
@@ -50,6 +51,7 @@ import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
 import javafx.scene.layout.Region;
 import javafx.stage.Stage;
+import javafx.stage.Window;
 import javafx.util.Duration;
 import org.kordamp.ikonli.javafx.FontIcon;
 
@@ -86,11 +88,13 @@ public final class MainWindow extends BorderPane {
     private final Bookmarks bookmarks;
     private final PreviewWindow preview;
     private final List<SearchWindow> searches = new ArrayList<>();
+    private final SearchHistory searchHistory;
 
     public MainWindow(Stage stage, Session session) {
         this.stage = stage;
         this.session = session;
         this.bookmarks = new Bookmarks(session);
+        this.searchHistory = new SearchHistory(session);
         this.preview = new PreviewWindow(stage, session, new PreviewWindow.DockHost() {
             @Override
             public void showDocked(Node pane) {
@@ -605,7 +609,7 @@ public final class MainWindow extends BorderPane {
         clipboardPut(tab().selectedPaths(), cut);
     }
 
-    private void clipboardPut(List<Path> paths, boolean cut) {
+    void clipboardPut(List<Path> paths, boolean cut) {
         if (!paths.isEmpty()) {
             FileClipboard.put(paths, cut);
         }
@@ -638,16 +642,26 @@ public final class MainWindow extends BorderPane {
     }
 
     void delete(List<Path> paths, boolean permanent) {
+        delete(stage, paths, permanent);
+    }
+
+    /**
+     * Asks, then moves {@code paths} to the Trash or deletes them, with dialogs and progress over
+     * {@code owner}. Returns the running operation, or null when there was nothing to do or the user
+     * said no.
+     */
+    FileOperation delete(Window owner, List<Path> paths, boolean permanent) {
         if (paths.isEmpty()) {
-            return;
+            return null;
         }
         boolean trash = !permanent && Trash.isSupported();
         String what = describe(paths);
         String question = trash ? "Move " + what + " to the Trash?"
                 : "Permanently delete " + what + "?\n\nThis cannot be undone.";
-        if (Dialogs.confirm(stage, trash ? "Move to Trash" : "Delete permanently", question)) {
-            runOperation(trash ? Kind.TRASH : Kind.DELETE, paths, null);
+        if (Dialogs.confirm(owner, trash ? "Move to Trash" : "Delete permanently", question)) {
+            return OperationUi.run(owner, trash ? Kind.TRASH : Kind.DELETE, paths, null, this::refreshDirs);
         }
+        return null;
     }
 
     private static String describe(List<Path> paths) {
@@ -663,8 +677,13 @@ public final class MainWindow extends BorderPane {
 
     /** Renames {@code src}; tabs and bookmarks inside a renamed folder follow it. */
     void rename(Path src) {
+        rename(stage, src, null);
+    }
+
+    /** Asks for a new name over {@code owner} and renames; {@code onRenamed} gets the old and new path. */
+    void rename(Window owner, Path src, java.util.function.BiConsumer<Path, Path> onRenamed) {
         String oldName = FsUtil.displayName(src);
-        Dialogs.askName(stage, "Rename", "New name:", oldName, name -> {
+        Dialogs.askName(owner, "Rename", "New name:", oldName, name -> {
             Path target = src.resolveSibling(name);
             try {
                 if (!name.equals(oldName) && Files.exists(target, LinkOption.NOFOLLOW_LINKS)
@@ -687,10 +706,13 @@ public final class MainWindow extends BorderPane {
                     Files.move(src, target);
                 }
                 afterRename(src, target);
+                if (onRenamed != null) {
+                    onRenamed.accept(src, target);
+                }
             } catch (FileAlreadyExistsException e) {
-                Dialogs.error(stage, "Rename", "An item named \"" + name + "\" already exists.");
+                Dialogs.error(owner, "Rename", "An item named \"" + name + "\" already exists.");
             } catch (IOException e) {
-                Dialogs.error(stage, "Rename", "Cannot rename \"" + oldName + "\":\n" + e.getMessage());
+                Dialogs.error(owner, "Rename", "Cannot rename \"" + oldName + "\":\n" + e.getMessage());
             }
         });
     }
@@ -766,8 +788,12 @@ public final class MainWindow extends BorderPane {
     }
 
     private void properties(List<Path> paths) {
+        properties(stage, paths);
+    }
+
+    void properties(Window owner, List<Path> paths) {
         if (!paths.isEmpty()) {
-            PropertiesDialog.show(stage, paths);
+            PropertiesDialog.show(owner, paths);
         }
     }
 
@@ -1170,7 +1196,7 @@ public final class MainWindow extends BorderPane {
         if (dir == null) {
             return null;
         }
-        SearchWindow w = new SearchWindow(this, stage, dir, showHidden.get());
+        SearchWindow w = new SearchWindow(this, stage, dir, showHidden.get(), searchHistory);
         searches.add(w);
         w.show();
         return w;

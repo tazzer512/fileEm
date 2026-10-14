@@ -1,7 +1,7 @@
 package com.fileem.ui;
 
 import com.fileem.fs.FileEntry;
-import com.fileem.fs.Jpeg2000Reader;
+import com.fileem.fs.ImageIoReader;
 import com.fileem.fs.PsdReader;
 import com.fileem.fs.RawReader;
 import javafx.application.Platform;
@@ -24,7 +24,7 @@ import java.util.function.Consumer;
 
 /**
  * Image thumbnails for the icon views. Formats JavaFX decodes load with its own background loading;
- * Photoshop files ({@link PsdReader}), camera raws ({@link RawReader}) and JPEG 2000 ({@link Jpeg2000Reader}) are
+ * Photoshop files ({@link PsdReader}), camera raws ({@link RawReader}), JPEG 2000 and PPM ({@link ImageIoReader}) are
  * decoded on two background threads. Nothing touches the disk
  * on the FX thread. Kept in an LRU cache bounded by pixel count, keyed by file, size and date (a changed
  * file gets a new entry). Thumbnails load at a few fixed sizes ({@link #loadSize}) and the image view
@@ -100,7 +100,7 @@ final class Thumbnails {
             DECODING.put(key, waiting);
             PSD.execute(() -> {
                 Image img = RawReader.isRaw(e.extension()) ? decodeRaw(e, load)
-                        : Jpeg2000Reader.isJpeg2000(e.extension()) ? decodeJpeg2000(e, load) : decodePsd(e, load);
+                        : ImageIoReader.handles(e.extension()) ? decodeImageIo(e, load) : decodePsd(e, load);
                 Platform.runLater(() -> {
                     List<Consumer<Image>> callbacks = DECODING.remove(key);
                     if (img == null) {
@@ -118,16 +118,16 @@ final class Thumbnails {
         whenLoaded(img, onLoaded);
     }
 
-    /** Photoshop, camera raw and JPEG 2000 files: read by our own readers on the background pool. */
+    /** Photoshop, camera raw, JPEG 2000 and Netpbm files: read by our own readers on the background pool. */
     private static boolean decodedHere(FileEntry e) {
         String ext = e.extension();
-        return PsdReader.isPsd(ext) || RawReader.isRaw(ext) || Jpeg2000Reader.isJpeg2000(ext);
+        return PsdReader.isPsd(ext) || RawReader.isRaw(ext) || ImageIoReader.handles(ext);
     }
 
-    /** On a background thread: the JPEG 2000 image at a reduced resolution, or null. */
-    private static Image decodeJpeg2000(FileEntry e, int load) {
+    /** On a background thread: a JPEG 2000 or Netpbm image at a reduced size, or null. */
+    private static Image decodeImageIo(FileEntry e, int load) {
         try {
-            return RawImages.of(Jpeg2000Reader.read(e.path(), load));
+            return RawImages.of(ImageIoReader.read(e.path(), load));
         } catch (Exception | OutOfMemoryError ex) {
             return null;
         }

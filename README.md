@@ -55,9 +55,14 @@ mvn test -Dheadless=false   # watch the UI tests run on screen
   with spaces (or `;`): `*.jpg *.png` finds either; `!` in front excludes, so `a*.* !*.mp3` finds
   names starting with "a" except mp3s (only `!` terms: everything else). Quotes keep spaces in a
   term (`"my file*"`). Text without wildcards matches anywhere in the name; case is ignored.
+  The field's list (the arrow, or Alt+Down) offers your last 15 search patterns, newest first;
+  click one to search it again. They're remembered across restarts.
   Results stream in while it searches (Stop or Escape halts it). Double-click or Enter opens a
   result (folders open in the active tab), and *Open containing folder* shows it selected in its
-  folder. Hidden files are included when the box is ticked (it starts as the list's setting);
+  folder. Results can be handled right there, with the right-click menu or the usual keys: Rename
+  (F2), Move to Trash (Del), Delete permanently (Shift+Del), Cut / Copy (Ctrl+X / Ctrl+C, then paste
+  in any folder), Copy path, Properties (Alt+Enter). The list keeps up: renamed results show their
+  new name (also what was found inside a renamed folder), deleted ones disappear. Hidden files are included when the box is ticked (it starts as the list's setting);
   links are listed but not followed, and unreadable folders are skipped and counted.
 - **Preview** (F3 or the eye button in the toolbar): shows the selected file in a separate,
   resizable window, or **docked** as a pane on the right of the main window (the dock button in its
@@ -73,13 +78,15 @@ mvn test -Dheadless=false   # watch the UI tests run on screen
 - **JPEG 2000** (`.jp2`, `.j2k`, `.j2c`, `.jpc`, `.jpf`, `.jpx`; also 16-bit grey scans) in the
   preview and as thumbnails. Big images decode one of the smaller resolutions the format stores, so
   a thumbnail of a 24-megapixel file takes a fraction of a second.
+- **PPM / PGM / PBM / PNM** (Netpbm: colour, grey and black-and-white, text or binary, 8 or 16 bits)
+  in the preview and as thumbnails.
 - **View and Sort by buttons** in every tab, between the address bar and the filter box: the view
   button shows the tab's current view and switches it; the sort button shows the direction and
   picks the column (Name, Size, Type, Date modified, Date created, Extension) and the order.
 - **View modes** like Windows Explorer, per tab, from the View button in the toolbar or the tab, the
   right-click menu on empty space, Ctrl+Shift+1…8 or Ctrl+mouse wheel: Extra large / Large / Medium /
   Small icons, List, Details, Tiles and Content. The big icon views show thumbnails of images (PNG,
-  JPEG, GIF, BMP), Photoshop files (PSD/PSB, read without loading the whole document), camera raws and JPEG 2000. Selection, sorting, keyboard navigation, the selection box and drag & drop work in
+  JPEG, GIF, BMP), Photoshop files (PSD/PSB, read without loading the whole document), camera raws, JPEG 2000 and PPM/PGM/PBM. Selection, sorting, keyboard navigation, the selection box and drag & drop work in
   every view. New tabs open in the view you're using; each tab's view is remembered.
   In the icon views and Tiles, the **size slider** at the bottom right sizes the items freely (the
   middle is the view's default size, double-click it to go back); the **− / +** buttons beside it

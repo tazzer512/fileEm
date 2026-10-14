@@ -2250,9 +2250,9 @@ class MainWindowUiTest {
     }
 
     @Test
-    void jpeg2000ImagesArePreviewedAndShowAsThumbnails(FxRobot robot) throws Exception {
+    void jpeg2000AndPpmImagesArePreviewedAndShowAsThumbnails(FxRobot robot) throws Exception {
         Path dir = folderWith("j2k", "plain.txt");
-        com.fileem.fs.Jpeg2000ReaderTest.fixture(dir, "red-blue.j2k");
+        com.fileem.fs.ImageIoReaderTest.fixture(dir, "red-blue.j2k");
         Files.writeString(dir.resolve("broken.jp2"), "not an image");
         FileTab tab = leftTab();
         open(robot, tab, dir);
@@ -2260,18 +2260,29 @@ class MainWindowUiTest {
         PreviewWindow p = preview();
         select(robot, tab, "red-blue.j2k");
         waitUntil("JPEG 2000 preview", () -> p.image() != null);
-        assertEquals(com.fileem.fs.Preview.Kind.JPEG2000, fx(p::kind));
+        assertEquals(com.fileem.fs.Preview.Kind.IMAGEIO, fx(p::kind));
         assertEquals(120, fx(() -> p.image().getWidth()), 0.5);
         assertEquals(0xffff0000, (int) fx(() -> p.image().getPixelReader().getArgb(10, 40)), "left is red");
         assertEquals(0xff0000ff, (int) fx(() -> p.image().getPixelReader().getArgb(110, 40)), "right is blue");
         select(robot, tab, "broken.jp2");
         waitUntil("broken file explained", () -> p.messageText() != null && p.messageText().contains("Cannot show"));
 
+        // Netpbm: a 2×1 PPM, green then white
+        Files.write(dir.resolve("pixels.ppm"), new byte[]{'P', '6', ' ', '2', ' ', '1', ' ', '2', '5', '5', '\n',
+                0, (byte) 255, 0, (byte) 255, (byte) 255, (byte) 255});
+        robot.interact(() -> tab.refresh());
+        waitUntil("ppm listed", () -> names(tab).contains("pixels.ppm"));
+        select(robot, tab, "pixels.ppm");
+        waitUntil("ppm preview", () -> p.image() != null && p.image().getWidth() == 2);
+        assertEquals(0xff00ff00, (int) fx(() -> p.image().getPixelReader().getArgb(0, 0)));
+        assertEquals(0xffffffff, (int) fx(() -> p.image().getPixelReader().getArgb(1, 0)));
+
         robot.interact(() -> p.enabledProperty().set(false));
         setView(robot, tab, ViewMode.LARGE_ICONS);
         FileGrid g = grid(tab);
-        // sorted: broken.jp2, plain.txt, red-blue.j2k
-        waitUntil("thumbnail shown", () -> g.cellFor(2).nameText().equals("red-blue.j2k") && g.cellFor(2).showsThumbnail());
+        // sorted: broken.jp2, pixels.ppm, plain.txt, red-blue.j2k
+        waitUntil("thumbnail shown", () -> g.cellFor(3).nameText().equals("red-blue.j2k") && g.cellFor(3).showsThumbnail());
+        waitUntil("ppm thumbnail shown", () -> g.cellFor(1).nameText().equals("pixels.ppm") && g.cellFor(1).showsThumbnail());
         assertEquals("broken.jp2", fx(() -> g.cellFor(0).nameText()));
         assertFalse(fx(() -> g.cellFor(0).showsThumbnail()), "a broken file keeps its icon");
     }
@@ -2301,7 +2312,8 @@ class MainWindowUiTest {
     private void runSearch(FxRobot robot, SearchWindow w, String pattern) {
         robot.interact(() -> {
             w.patternField().setText(pattern);
-            w.patternField().fireEvent(new javafx.event.ActionEvent());
+            w.patternField().fireEvent(new javafx.scene.input.KeyEvent(javafx.scene.input.KeyEvent.KEY_PRESSED,
+                    "", "", KeyCode.ENTER, false, false, false, false)); // Enter
         });
         waitUntil("search finished", () -> !w.isRunning());
     }
@@ -2363,6 +2375,121 @@ class MainWindowUiTest {
 
         robot.interact(() -> w.stage().close());
         waitUntil("closed window forgotten", () -> window.searches().isEmpty());
+    }
+
+    @Test
+    void theLastSearchPatternsAreOfferedInEveryWindowAndRemembered(FxRobot robot) throws Exception {
+        Path dir = folderWith("searchhist", "a.jpg", "b.png", "c.txt");
+        FileTab tab = leftTab();
+        open(robot, tab, dir);
+        SearchWindow first = fx(() -> window.search(dir));
+        runSearch(robot, first, "*.jpg");
+        runSearch(robot, first, "*.png");
+        runSearch(robot, first, "*.jpg"); // used again: moves to the top, not listed twice
+        runSearch(robot, first, "   ");   // nothing to look for: not remembered
+        robot.interact(() -> first.stage().close());
+
+        SearchWindow second = fx(() -> window.search(dir));
+        assertEquals(List.of("*.jpg", "*.png"), fx(() -> second.patternBox().getItems()), "newest first");
+        assertEquals("", fx(() -> second.patternField().getText()), "a new window starts empty");
+
+        // picking one from the list searches it
+        robot.interact(() -> second.patternBox().show());
+        javafx.scene.control.ListCell<?> png = fx(() -> robot.lookup(".combo-box-popup .list-cell")
+                .queryAllAs(javafx.scene.control.ListCell.class).stream()
+                .filter(c -> "*.png".equals(c.getItem())).findFirst().orElseThrow());
+        robot.clickOn(png);
+        waitUntil("picked pattern searched", () -> !second.isRunning() && second.table().getItems().size() == 1
+                && second.table().getItems().get(0).name().equals("b.png"));
+        assertEquals("*.png", fx(() -> second.patternField().getText()));
+        assertFalse(fx(() -> second.patternBox().isShowing()));
+        robot.interact(() -> second.stage().close());
+
+        // a restart offers them again
+        robot.interact(window::saveSession);
+        MainWindow restored = fx(() -> new MainWindow(new Stage(), session));
+        SearchWindow third = fx(() -> restored.search(dir));
+        assertEquals(List.of("*.png", "*.jpg"), fx(() -> third.patternBox().getItems()));
+        robot.interact(() -> third.stage().close());
+    }
+
+    /** Selects the results with these names in the search window. */
+    private void selectResults(FxRobot robot, SearchWindow w, String... names) {
+        robot.interact(() -> {
+            var sm = w.table().getSelectionModel();
+            sm.clearSelection();
+            List<FileEntry> items = w.table().getItems();
+            for (int i = 0; i < items.size(); i++) {
+                if (List.of(names).contains(items.get(i).name())) {
+                    sm.select(i);
+                }
+            }
+            w.table().requestFocus();
+        });
+    }
+
+    /** Fires a key on the results table (Monocle sends robot keys to the main window). */
+    private static void resultKey(SearchWindow w, KeyCode code, boolean shift, boolean alt) {
+        WaitForAsyncUtils.asyncFx(() -> w.table().fireEvent(new javafx.scene.input.KeyEvent(
+                javafx.scene.input.KeyEvent.KEY_PRESSED, "", "", code, shift, false, alt, false)));
+        WaitForAsyncUtils.waitForFxEvents(); // may open a dialog, so don't wait for the action itself
+    }
+
+    @Test
+    void searchResultsCanBeRenamedAndDeletedInPlace(FxRobot robot) throws Exception {
+        Path dir = folderWith("searchact", "keep.txt", "old.txt", "gone.txt", "box/", "box/inner.txt");
+        Files.writeString(dir.resolve("box/inner.txt"), "x");
+        FileTab tab = leftTab();
+        open(robot, tab, dir);
+        SearchWindow w = fx(() -> window.search(dir));
+        runSearch(robot, w, "*.txt box");
+        assertEquals(List.of("box", "box/inner.txt", "gone.txt", "keep.txt", "old.txt"), searchResults(w, dir));
+
+        // the right-click menu has the file list's commands
+        selectResults(robot, w, "old.txt");
+        requestContextMenu(robot, fx(w::table));
+        List<javafx.scene.control.MenuItem> menu = fx(() -> w.table().getContextMenu().getItems());
+        for (String expected : new String[]{"Open", "Cut", "Copy", "Rename", "Delete permanently", "Copy path", "Properties"}) {
+            assertTrue(hasItem(menu, expected), expected + " in " + menuTexts(menu));
+        }
+        assertEquals(com.fileem.fs.Trash.isSupported(), hasItem(menu, "Move to Trash"));
+        robot.interact(() -> w.table().getContextMenu().hide());
+
+        // F2 renames in place: the result follows
+        resultKey(w, KeyCode.F2, false, false);
+        answerDialog(robot, "new");
+        waitUntil("renamed", () -> Files.exists(dir.resolve("new.txt")) && !Files.exists(dir.resolve("old.txt")));
+        waitUntil("result renamed", () -> searchResults(w, dir).contains("new.txt") && !searchResults(w, dir).contains("old.txt"));
+        assertEquals(List.of(dir.resolve("new.txt")), fx(w::selectedPaths), "still selected");
+
+        // renaming a folder moves the results found inside it along
+        selectResults(robot, w, "box");
+        WaitForAsyncUtils.asyncFx(w::rename);
+        answerDialog(robot, "crate");
+        waitUntil("folder results follow", () -> searchResults(w, dir).containsAll(List.of("crate", "crate/inner.txt")));
+        assertTrue(fx(() -> w.table().getItems().stream().allMatch(e -> Files.exists(e.path()))));
+
+        // Shift+Del asks, then deletes; deleted results (and what was inside a deleted folder) leave the list
+        selectResults(robot, w, "gone.txt");
+        resultKey(w, KeyCode.DELETE, true, false);
+        robot.clickOn("Cancel");
+        assertTrue(Files.exists(dir.resolve("gone.txt")), "cancelled: nothing deleted");
+        assertTrue(searchResults(w, dir).contains("gone.txt"));
+
+        selectResults(robot, w, "gone.txt", "crate");
+        resultKey(w, KeyCode.DELETE, true, false);
+        robot.clickOn("OK");
+        waitUntil("deleted", () -> !Files.exists(dir.resolve("gone.txt")) && !Files.exists(dir.resolve("crate")));
+        waitUntil("results updated", () -> searchResults(w, dir).equals(List.of("keep.txt", "new.txt")));
+        assertTrue(fx(w::statusText).contains("3 items removed"), fx(w::statusText));
+
+        // Ctrl+C puts the results on the file clipboard
+        selectResults(robot, w, "keep.txt");
+        WaitForAsyncUtils.asyncFx(() -> w.table().fireEvent(new javafx.scene.input.KeyEvent(
+                javafx.scene.input.KeyEvent.KEY_PRESSED, "", "", KeyCode.C, false, true, false, false))).get();
+        assertEquals(List.of(dir.resolve("keep.txt")), fx(com.fileem.ops.FileClipboard::files));
+        robot.interact(() -> w.stage().close());
+        open(robot, tab, tmp); // end outside the deleted folders (see the search test above)
     }
 
     @Test

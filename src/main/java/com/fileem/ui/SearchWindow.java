@@ -1,7 +1,10 @@
 package com.fileem.ui;
 
+import com.fileem.SearchHistory;
 import com.fileem.fs.FileEntry;
 import com.fileem.fs.FileSearch;
+import com.fileem.fs.Trash;
+import com.fileem.ops.FileOperation;
 import com.fileem.fs.Shell;
 import com.fileem.util.Bg;
 import com.fileem.util.Formats;
@@ -9,6 +12,7 @@ import com.fileem.util.FsUtil;
 import javafx.application.Platform;
 import javafx.beans.property.ReadOnlyObjectWrapper;
 import javafx.collections.FXCollections;
+import javafx.concurrent.Worker;
 import javafx.collections.ObservableList;
 import javafx.collections.transformation.SortedList;
 import javafx.geometry.Insets;
@@ -16,26 +20,33 @@ import javafx.geometry.Pos;
 import javafx.scene.Scene;
 import javafx.scene.control.Button;
 import javafx.scene.control.CheckBox;
+import javafx.scene.control.ComboBox;
 import javafx.scene.control.Label;
+import javafx.scene.control.ListCell;
 import javafx.scene.control.OverrunStyle;
 import javafx.scene.control.MenuItem;
 import javafx.scene.control.SelectionMode;
+import javafx.scene.control.SeparatorMenuItem;
 import javafx.scene.control.TableCell;
 import javafx.scene.control.TableColumn;
 import javafx.scene.control.TableRow;
 import javafx.scene.control.TableView;
 import javafx.scene.control.TextField;
 import javafx.scene.input.KeyCode;
+import javafx.scene.input.KeyEvent;
 import javafx.scene.input.MouseButton;
 import javafx.scene.layout.BorderPane;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
 import javafx.stage.Stage;
 
+import java.nio.file.Files;
+import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.nio.file.attribute.FileTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -55,7 +66,10 @@ final class SearchWindow {
     private final MainWindow main;
     private final Path root;
     private final Stage stage = new Stage();
-    private final TextField pattern = new TextField();
+    /** The pattern: typed, or picked from the last {@link SearchHistory#MAX} searches. */
+    private final ComboBox<String> patternBox = new ComboBox<>();
+    private final TextField pattern = patternBox.getEditor();
+    private final SearchHistory history;
     private final CheckBox hidden = new CheckBox("Hidden files");
     private final Button go = new Button("Search");
     private final Label status = new Label();
@@ -100,20 +114,56 @@ final class SearchWindow {
         }
     }
 
-    SearchWindow(MainWindow main, Stage owner, Path root, boolean showHidden) {
+    SearchWindow(MainWindow main, Stage owner, Path root, boolean showHidden, SearchHistory history) {
         this.main = main;
         this.root = root;
+        this.history = history;
         stage.initOwner(owner);
         Icons.applyAppIcon(stage);
         stage.setTitle("Search in " + FsUtil.displayName(root));
 
-        pattern.setId("search-pattern");
-        pattern.setPromptText("Name or patterns, like *.jpg *.png or a*.* !*.mp3 (! excludes)");
-        pattern.setTooltip(new javafx.scene.control.Tooltip(
+        patternBox.setEditable(true);
+        patternBox.setId("search-pattern");
+        patternBox.setPromptText("Name or patterns, like *.jpg *.png or a*.* !*.mp3 (! excludes)");
+        patternBox.setTooltip(new javafx.scene.control.Tooltip(
                 "* any text, ? one character. Separate patterns with spaces; ! in front excludes.\n"
-                        + "Quotes keep spaces: \"my file*\". Text without wildcards matches anywhere in the name."));
-        HBox.setHgrow(pattern, Priority.ALWAYS);
-        pattern.setOnAction(e -> start());
+                        + "Quotes keep spaces: \"my file*\". Text without wildcards matches anywhere in the name.\n"
+                        + "The arrow (or Alt+Down) lists your last " + SearchHistory.MAX + " searches."));
+        patternBox.setMaxWidth(Double.MAX_VALUE);
+        HBox.setHgrow(patternBox, Priority.ALWAYS);
+        patternBox.getItems().setAll(history.items());
+        // the list is refreshed on opening: other search windows may have added patterns since
+        patternBox.setOnShowing(e -> {
+            String typed = pattern.getText();
+            patternBox.getItems().setAll(history.items());
+            pattern.setText(typed);
+        });
+        // Enter searches (also with the list open: arrowing through it fills the field), and so does
+        // clicking a pattern in the list. Not the ComboBox's action event: it fires while arrowing
+        // through the list, and not at all for Enter on an unchanged value
+        pattern.addEventFilter(KeyEvent.KEY_PRESSED, e -> {
+            if (e.getCode() == KeyCode.ENTER) {
+                e.consume();
+                patternBox.hide();
+                start();
+            }
+        });
+        patternBox.setCellFactory(list -> {
+            ListCell<String> cell = new ListCell<>() {
+                @Override
+                protected void updateItem(String item, boolean empty) {
+                    super.updateItem(item, empty);
+                    setText(empty ? null : item);
+                }
+            };
+            cell.setMnemonicParsing(false);
+            cell.setOnMouseReleased(e -> {
+                if (!cell.isEmpty() && e.getButton() == MouseButton.PRIMARY) {
+                    pick(cell.getItem());
+                }
+            });
+            return cell;
+        });
         hidden.setId("search-hidden");
         hidden.setSelected(showHidden);
         go.setId("search-go");
@@ -128,7 +178,7 @@ final class SearchWindow {
         Label in = new Label(root.toString());
         in.getStyleClass().add("search-root");
         in.setMnemonicParsing(false);
-        HBox bar = new HBox(8, pattern, hidden, go);
+        HBox bar = new HBox(8, patternBox, hidden, go);
         bar.setAlignment(Pos.CENTER_LEFT);
         HBox where = new HBox(6, Icons.icon("mdi2f-folder-search-outline"), in);
         where.setAlignment(Pos.CENTER_LEFT);
@@ -195,13 +245,7 @@ final class SearchWindow {
             });
             return row;
         });
-        table.setOnKeyPressed(e -> {
-            FileEntry sel = table.getSelectionModel().getSelectedItem();
-            if (e.getCode() == KeyCode.ENTER && sel != null) {
-                open(sel);
-                e.consume();
-            }
-        });
+        table.addEventFilter(KeyEvent.KEY_PRESSED, this::onKey);
         Views.dynamicContextMenu(table, this::menuItems);
     }
 
@@ -243,12 +287,123 @@ final class SearchWindow {
             return List.of();
         }
         FileEntry first = sel.get(0);
+        List<Path> paths = sel.stream().map(FileEntry::path).toList();
         List<MenuItem> items = new ArrayList<>();
-        items.add(MainWindow.item("Open", "mdi2o-open-in-app", () -> sel.forEach(this::open)));
+        MenuItem open = MainWindow.item("Open  (Enter)", "mdi2o-open-in-app", () -> sel.forEach(this::open));
+        open.getStyleClass().add("default-item");
+        items.add(open);
         items.add(MainWindow.item("Open containing folder", "mdi2f-folder-open-outline", () -> showInFolder(first)));
-        items.add(MainWindow.item("Copy path", "mdi2c-clipboard-text-outline",
-                () -> main.copyPaths(sel.stream().map(FileEntry::path).toList())));
+        items.add(new SeparatorMenuItem());
+        items.add(MainWindow.item("Cut  (Ctrl+X)", "mdi2c-content-cut", () -> main.clipboardPut(paths, true)));
+        items.add(MainWindow.item("Copy  (Ctrl+C)", "mdi2c-content-copy", () -> main.clipboardPut(paths, false)));
+        items.add(new SeparatorMenuItem());
+        MenuItem rename = MainWindow.item("Rename  (F2)", "mdi2r-rename-box", this::rename);
+        rename.setDisable(sel.size() != 1);
+        items.add(rename);
+        if (Trash.isSupported()) {
+            items.add(MainWindow.item("Move to Trash  (Del)", "mdi2d-delete", () -> delete(false)));
+        }
+        items.add(MainWindow.item("Delete permanently  (Shift+Del)", "mdi2d-delete-forever", () -> delete(true)));
+        items.add(new SeparatorMenuItem());
+        items.add(MainWindow.item("Copy path", "mdi2c-clipboard-text-outline", () -> main.copyPaths(paths)));
+        items.add(MainWindow.item("Properties  (Alt+Enter)", "mdi2i-information-outline",
+                () -> main.properties(stage, paths)));
         return items;
+    }
+
+    /** The results' keys, like the file list's: Enter, F2, Del, Shift+Del, Ctrl+C/X, Alt+Enter. */
+    private void onKey(KeyEvent e) {
+        List<Path> paths = selectedPaths();
+        if (paths.isEmpty()) {
+            return;
+        }
+        boolean shortcut = e.isShortcutDown();
+        boolean alt = e.isAltDown();
+        KeyCode c = e.getCode();
+        Runnable action = null;
+        if (alt && c == KeyCode.ENTER) {
+            action = () -> main.properties(stage, paths);
+        } else if (c == KeyCode.ENTER && !shortcut) {
+            action = () -> List.copyOf(table.getSelectionModel().getSelectedItems()).forEach(this::open);
+        } else if (c == KeyCode.F2 && paths.size() == 1) {
+            action = this::rename;
+        } else if (c == KeyCode.DELETE || c == KeyCode.F8) {
+            action = () -> delete(e.isShiftDown());
+        } else if (shortcut && !alt && c == KeyCode.C) {
+            action = () -> main.clipboardPut(paths, false);
+        } else if (shortcut && !alt && c == KeyCode.X) {
+            action = () -> main.clipboardPut(paths, true);
+        }
+        if (action != null) {
+            e.consume();
+            action.run();
+        }
+    }
+
+    List<Path> selectedPaths() {
+        return table.getSelectionModel().getSelectedItems().stream().filter(java.util.Objects::nonNull)
+                .map(FileEntry::path).toList();
+    }
+
+    /** Renames the selected result (dialog over this window); the result follows, and so does whatever was found inside a renamed folder. */
+    void rename() {
+        List<Path> sel = selectedPaths();
+        if (sel.size() == 1) {
+            main.rename(stage, sel.get(0), this::renamed);
+        }
+    }
+
+    private void renamed(Path src, Path target) {
+        List<FileEntry> affected = results.stream().filter(e -> e.path().startsWith(src)).toList();
+        Bg.run(() -> affected.stream().map(e -> FileEntry.read(target.resolve(src.relativize(e.path())))).toList(),
+                updated -> {
+                    for (int i = 0; i < affected.size(); i++) {
+                        int at = results.indexOf(affected.get(i));
+                        if (at >= 0) {
+                            results.set(at, updated.get(i));
+                        }
+                    }
+                    updated.stream().filter(e -> e.path().equals(target)).findFirst().ifPresent(e -> {
+                        table.getSelectionModel().clearSelection();
+                        table.getSelectionModel().select(e);
+                    });
+                }, err -> { });
+    }
+
+    /**
+     * Moves the selected results to the Trash, or deletes them, after asking (over this window). When
+     * the operation ends, the results that are gone leave the list, including anything found inside a
+     * deleted folder; ones that failed stay.
+     */
+    void delete(boolean permanent) {
+        List<Path> paths = selectedPaths();
+        FileOperation op = main.delete(stage, paths, permanent);
+        if (op == null) {
+            return;
+        }
+        op.stateProperty().addListener((o, was, state) -> {
+            if (state == Worker.State.SUCCEEDED || state == Worker.State.FAILED || state == Worker.State.CANCELLED) {
+                removeGone(paths);
+            }
+        });
+    }
+
+    private void removeGone(List<Path> roots) {
+        List<FileEntry> candidates = results.stream()
+                .filter(e -> roots.stream().anyMatch(r -> e.path().startsWith(r))).toList();
+        Bg.run(() -> candidates.stream().filter(e -> !Files.exists(e.path(), LinkOption.NOFOLLOW_LINKS)).toList(),
+                gone -> {
+                    if (gone.isEmpty()) {
+                        return;
+                    }
+                    Set<FileEntry> goneSet = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+                    goneSet.addAll(gone);
+                    results.removeIf(goneSet::contains);
+                    if (!isRunning()) {
+                        status.setText(Formats.count(gone.size()) + (gone.size() == 1 ? " item" : " items")
+                                + " removed   ·   " + Formats.count(results.size()) + " left");
+                    }
+                }, err -> { });
     }
 
     /** A folder opens in the main window's active tab; a file opens with its program. */
@@ -281,15 +436,28 @@ final class SearchWindow {
         pattern.requestFocus();
     }
 
-    /** Starts searching for the pattern in the field, replacing the results of an earlier search. */
+    /** Searches for a pattern picked from the history list. */
+    void pick(String historyPattern) {
+        patternBox.hide();
+        pattern.setText(historyPattern);
+        Platform.runLater(() -> {
+            pattern.setText(historyPattern); // the list's own selection handling may have run in between
+            pattern.end();
+            start();
+        });
+    }
+
+        /** Starts searching for the pattern in the field, replacing the results of an earlier search. */
     void start() {
-        Predicate<String> match = FileSearch.matcher(pattern.getText());
+        String text = pattern.getText();
+        Predicate<String> match = FileSearch.matcher(text);
         stop();
         results.clear();
         if (match == null) {
             status.setText("Type a name or a pattern to search for.");
             return;
         }
+        history.add(text);
         Run run = new Run();
         current = run;
         boolean includeHidden = hidden.isSelected();
@@ -385,6 +553,10 @@ final class SearchWindow {
 
     TextField patternField() {
         return pattern;
+    }
+
+    ComboBox<String> patternBox() {
+        return patternBox;
     }
 
     CheckBox hiddenBox() {

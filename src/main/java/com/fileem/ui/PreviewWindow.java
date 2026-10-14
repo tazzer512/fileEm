@@ -5,7 +5,7 @@ import atlantafx.base.theme.Tweaks;
 import com.fileem.Session;
 import com.fileem.fs.FileEntry;
 import com.fileem.fs.Preview;
-import com.fileem.fs.Jpeg2000Reader;
+import com.fileem.fs.ImageIoReader;
 import com.fileem.fs.PsdReader;
 import com.fileem.fs.RawReader;
 import com.fileem.util.Bg;
@@ -352,15 +352,15 @@ final class PreviewWindow {
                     }
                 });
             }
-            case JPEG2000 -> {
+            case IMAGEIO -> {
                 showMessage("Loading…");
                 // like PSDs at 2048 px: a 6000 px image then decodes its 3000 px level (~1 s), not all (~5 s)
-                load = Bg.run(() -> RawImages.of(Jpeg2000Reader.read(e.path(), 2048)), img -> {
+                load = Bg.run(() -> RawImages.of(ImageIoReader.read(e.path(), 2048)), img -> {
                     if (gen != generation) {
                         return;
                     }
                     if (img == null) {
-                        showInfo(e, "Cannot show this JPEG 2000 image.");
+                        showInfo(e, "Cannot show this image.");
                     } else {
                         showImage(img);
                     }

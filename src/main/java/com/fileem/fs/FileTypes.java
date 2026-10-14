@@ -36,7 +36,7 @@ public final class FileTypes {
     private static final Map<String, Category> BY_EXT = new HashMap<>();
 
     static {
-        reg(Category.IMAGE, "jpg jpeg png gif bmp webp svg tif tiff ico heic heif raw cr2 cr3 nef nrw arw srf sr2 dng pef orf rw2 raf srw erf kdc dcr 3fr mef mos iiq rwl psd xcf avif jp2 j2k j2c jpc jpf jpx");
+        reg(Category.IMAGE, "jpg jpeg png gif bmp webp svg tif tiff ico heic heif raw cr2 cr3 nef nrw arw srf sr2 dng pef orf rw2 raf srw erf kdc dcr 3fr mef mos iiq rwl psd xcf avif jp2 j2k j2c jpc jpf jpx ppm pgm pbm pnm");
         reg(Category.AUDIO, "mp3 wav flac ogg oga m4a aac wma opus mid midi aiff");
         reg(Category.VIDEO, "mp4 mkv avi mov wmv webm m4v mpg mpeg flv 3gp ts");
         reg(Category.ARCHIVE, "zip rar 7z tar gz tgz bz2 xz zst lz lzma cab iso jar war");

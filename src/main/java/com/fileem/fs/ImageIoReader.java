@@ -20,15 +20,17 @@ import java.util.Locale;
 import java.util.Set;
 
 /**
- * JPEG 2000 images ({@code .jp2}, {@code .j2k} and the other variants), which neither JavaFX nor
- * the JDK can decode, through the jai-imageio JPEG 2000 plugin for ImageIO. Big images are decoded
+ * Images neither JavaFX nor the JDK can decode: JPEG 2000 ({@code .jp2}, {@code .j2k} and the other
+ * variants) through the jai-imageio plugin for ImageIO, and the Netpbm formats ({@code .ppm},
+ * {@code .pgm}, {@code .pbm}, {@code .pnm}) with {@link NetpbmReader}. Big images are decoded
  * at one of the reduced resolutions the format stores, so a thumbnail of a huge scan takes a fraction
  * of a second and never holds the whole picture in memory.
  */
-public final class Jpeg2000Reader {
-    private static final Set<String> EXTENSIONS = Set.of("jp2", "j2k", "j2c", "jpc", "jpf", "jpx");
+public final class ImageIoReader {
+    private static final Set<String> JPEG2000 = Set.of("jp2", "j2k", "j2c", "jpc", "jpf", "jpx");
+    private static final Set<String> NETPBM = Set.of("ppm", "pgm", "pbm", "pnm");
 
-    private Jpeg2000Reader() {
+    private ImageIoReader() {
     }
 
     /** Pixels as ARGB ints, row by row, and the image's full size. */
@@ -36,7 +38,16 @@ public final class Jpeg2000Reader {
     }
 
     public static boolean isJpeg2000(String extension) {
-        return extension != null && EXTENSIONS.contains(extension.toLowerCase(Locale.ROOT));
+        return extension != null && JPEG2000.contains(extension.toLowerCase(Locale.ROOT));
+    }
+
+    public static boolean isNetpbm(String extension) {
+        return extension != null && NETPBM.contains(extension.toLowerCase(Locale.ROOT));
+    }
+
+    /** The formats this reader is for. */
+    public static boolean handles(String extension) {
+        return isJpeg2000(extension) || isNetpbm(extension);
     }
 
     /**
@@ -87,6 +98,10 @@ public final class Jpeg2000Reader {
      * scaled down. Null when it isn't an image ImageIO can read or can't be decoded.
      */
     public static Pixels read(Path file, int maxSide) throws IOException {
+        Path name = file.getFileName();
+        if (name != null && isNetpbm(FileTypes.extension(name.toString(), false))) {
+            return NetpbmReader.read(file, maxSide);
+        }
         int levels = decompositionLevels(file);
         try (ImageInputStream in = ImageIO.createImageInputStream(file.toFile())) {
             if (in == null) {
@@ -114,7 +129,7 @@ public final class Jpeg2000Reader {
                     }
                     j2k.setResolution(levels - skip);
                 } else {
-                    int step = Math.max(1, ceilDiv(longer, limit)); // no levels known: whole-pixel steps
+                    int step = Math.max(1, longer / limit); // no levels known: whole-pixel steps, then shrink
                     if (step > 1) {
                         param.setSourceSubsampling(step, step, 0, 0);
                     }

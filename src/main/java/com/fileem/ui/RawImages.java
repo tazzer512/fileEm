@@ -1,6 +1,6 @@
 package com.fileem.ui;
 
-import com.fileem.fs.Jpeg2000Reader;
+import com.fileem.fs.ImageIoReader;
 import com.fileem.fs.RawReader;
 import javafx.scene.image.Image;
 import javafx.scene.image.PixelFormat;
@@ -10,7 +10,7 @@ import java.io.ByteArrayInputStream;
 
 /**
  * Images our own readers decode, as JavaFX images: camera raw previews (decoded and turned upright)
- * and JPEG 2000 pixels. Runs on a background thread.
+ * and JPEG 2000 / PPM pixels. Runs on a background thread.
  */
 final class RawImages {
     private RawImages() {
@@ -33,8 +33,8 @@ final class RawImages {
         return oriented(img, p.orientation());
     }
 
-    /** JPEG 2000 pixels as an image; null for none. */
-    static Image of(Jpeg2000Reader.Pixels p) {
+    /** JPEG 2000 / Netpbm pixels as an image; null for none. */
+    static Image of(ImageIoReader.Pixels p) {
         if (p == null) {
             return null;
         }

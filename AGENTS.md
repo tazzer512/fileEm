@@ -84,6 +84,7 @@ command when it isn't installed:
 ```
 src/test/java/com/fileem/
   FxTestSupport        starts the FX toolkit once; drainFx() waits for queued FX events
+  SearchHistoryTest    newest first, no duplicates, last 15, survives a restart
   AppInfoTest          version.properties is filtered and matches the pom's app.version
   SessionTest          round trip, atomic + change-only writes, background vs. sync save order
   BookmarksTest
@@ -95,8 +96,9 @@ src/test/java/com/fileem/
                        PsdReaderTest (modes, depths, RLE/raw, PSB, JPEG fallback, damaged files),
                        RawReaderTest (CR2/NEF/RW2/RAF/CR3 previews, choice by size, orientation,
                        damaged files; RawFixtures builds the files),
-                       Jpeg2000ReaderTest (jp2 + bare codestream, resolution levels, shrinking,
-                       8/16-bit grey, damaged files; OpenJPEG fixtures),
+                       ImageIoReaderTest (jp2 + bare codestream, resolution levels, shrinking,
+                       8/16-bit grey, damaged files; OpenJPEG fixtures; Netpbm P1–P6, 16-bit,
+                       hostile headers),
                        FileSearchTest (wildcards, terms and ! exclusions, recursion, hidden, links not followed, unreadable
                        folders, stopping),
                        PreviewTest (kinds by name, text vs binary, truncation, encodings),
@@ -110,8 +112,8 @@ src/test/java/com/fileem/
                        autosave, rubber-band selection, stacked progress window (pause/cancel),
                        eject (menu/button, tabs leave first, refused while busy, errors),
                        preview (toggle, image zoom/fit/pan, text, quick selection, PSD, raw upright,
-                       JPEG 2000 preview + thumbnail,
-                       docking, session), search (menus, Ctrl+Shift+F, results, open/show, hidden),
+                       JPEG 2000 + PPM preview and thumbnails,
+                       docking, session), search (menus, Ctrl+Shift+F, results, open/show, hidden, history),
                        view modes (menu, keys, wheel, grid mouse/keys/box/DnD/menus, thumbnails)
 ```
 
@@ -170,11 +172,12 @@ src/test/java/com/fileem/
 ```
 com.fileem          Launcher, FileEmApp (stage), Session (properties file), Autosave,
                     Bookmarks (ordered named folders, saved on every change),
+                    SearchHistory (last 15 search patterns),
                     AppInfo (version + build date from version.properties)
 com.fileem.util     OsUtil, Bg (background executor → FX callbacks), Formats, FsUtil, NaturalOrder
 com.fileem.fs       FileEntry (row snapshot), FileTypes, Volumes (mount polling), DirWatcher,
                     Trash, Shell (open with OS), Preview (kinds, text reading), PsdReader, RawReader,
-                    Jpeg2000Reader,
+                    ImageIoReader (JPEG 2000 via jai-imageio, Netpbm via NetpbmReader),
                     FileSearch (recursive name search with wildcards)
 com.fileem.ops      FileOperation (copy/move/delete/trash Task), FileClipboard
 com.fileem.ui       MainWindow (toolbar, F-key bar, ALL commands + key handling)
@@ -320,7 +323,8 @@ tools/                                  make-icon.py, install-linux.sh (per-user
   (`ThemeTest` checks). Keep effects (shadows, blur) off rows and cells: they are re-rendered while
   scrolling. Check new styling with the scene-snapshot harness in light and dark.
 - **Session**: everything persisted goes through `Session` keys (`window.*`, `left.*`/`right.*`,
-  `columns.*`, `sort.*`, `dual`, `showHidden`, `theme.name`, `theme.dark`, `bookmarks.*`). `Autosave` collects
+  `columns.*`, `sort.*`, `dual`, `showHidden`, `theme.name`, `theme.dark`, `bookmarks.*`,
+  `search.history.*`). `Autosave` collects
   the state every 2 s (`MainWindow.saveSession` + window geometry) and writes it in the background
   only when it changed; close, `Application.stop` and a JVM shutdown hook save too, so a kill or
   logout loses nothing. `Bookmarks` saves on every change. Writes are atomic (temp file + rename),
@@ -364,8 +368,8 @@ tools/                                  make-icon.py, install-linux.sh (per-user
   which rebuilds its cells only when the pixel size changes (cells take their icon size when created).
   Icons of 48 px and up show thumbnails. `Thumbnails.request(entry, px, callback)` loads at fixed
   sizes (`loadSize`: multiples of 32) so the slider doesn't re-decode per pixel; JavaFX formats use
-  background loading, PSD/PSB (`fs/PsdReader`), camera raws (`fs/RawReader`, via `RawImages`) and JPEG 2000
-  (`fs/Jpeg2000Reader`) go on two daemon threads (composite image,
+  background loading, PSD/PSB (`fs/PsdReader`), camera raws (`fs/RawReader`, via `RawImages`) and JPEG 2000 / Netpbm
+  (`fs/ImageIoReader`, `Preview.Kind.IMAGEIO`) go on two daemon threads (composite image,
   sampled rows only; falls back to the embedded JPEG; failures remembered per file version). Cells
   drop late callbacks with a request counter. The status line is an
   HBox (`.status-bar`: themes style its background there, text stays on `.status-label`).
@@ -383,11 +387,13 @@ tools/                                  make-icon.py, install-linux.sh (per-user
   smallest one at least the asked size (thumbnails) or the largest (preview); `RawImages` decodes and
   turns it upright per EXIF orientation (IFD0, CR3's CMT1, else the JPEG's own EXIF). Zoom = image scale
   or font scale; fit never enlarges; pan buttons move a quarter of the viewport. Showing it hands focus
-  back to the main window. Closing it, F3 or Escape switches it off. JPEG 2000 (`Jpeg2000Reader`, at
+  back to the main window. Closing it, F3 or Escape switches it off. JPEG 2000 (`ImageIoReader`, at
   2048 px like PSD): the COD marker gives the number of resolution levels; the smallest level at
   least the asked size is decoded (`J2KImageReadParam.setResolution`; ~0.3 s instead of ~4.5 s for a
   thumbnail of 6000×4000), then shrunk by area averaging. Grey images are read from the raster:
-  `getRGB` treats grey as linear and would brighten it.
+  `getRGB` treats grey as linear and would brighten it. Netpbm (`.ppm .pgm .pbm .pnm`) goes to our
+  own `NetpbmReader` (P1–P6, 8/16 bits, whole-pixel steps then shrink, sides capped against damaged
+  headers): jai-imageio's PNM reader reads 16-bit files as twice as many 8-bit pixels.
   **Docking** (`dockedProperty`, session `preview.docked`, divider `split.preview`): the same content
   node (`pane()`) moves between the window's scene (a placeholder stands in while docked) and the
   main window's `outer` SplitPane through `PreviewWindow.DockHost`; `place()` puts it where
@@ -404,8 +410,16 @@ tools/                                  make-icon.py, install-linux.sh (per-user
   stops when interrupted or `Listener.wantsMore()` says no (the window caps at `MAX_RESULTS`).
   The walk is a `Bg` job; results queue up and reach the table in batches (one pending
   `runLater` at a time); each run is an object, and only the current one may touch the table.
-  Search, Stop, Escape and closing the window cancel the job. Results are `FileEntry`s shown with
-  `FileTable.NameCell`; folders open in the active tab (`FileTab.showItem` opens a result's folder
+  Search, Stop, Escape and closing the window cancel the job. The pattern field is an editable
+  `ComboBox` over `SearchHistory` (one per `MainWindow`, last 15 patterns newest first, session
+  `search.history.<i>`, added on every search with something to look for; the list is refreshed on
+  opening). Enter (editor key filter) and a click on a list cell search; not the ComboBox's action
+  event, which fires while arrowing through the list and not for Enter on an unchanged value. Results are `FileEntry`s shown with
+  `FileTable.NameCell`. Result commands (menu + keys in a table key filter) reuse `MainWindow`'s
+  owner-taking versions, so dialogs and progress open over the search window:
+  `delete(owner, paths, permanent)` returns the operation (results gone when it ends leave the list,
+  checked with `Files.exists` in a `Bg` job), `rename(owner, src, onRenamed)` (results under a renamed
+  folder are re-read at their new paths), `properties(owner, paths)`, `clipboardPut`. Folders open in the active tab (`FileTab.showItem` opens a result's folder
   with it selected), files with `Shell.open`.
 - **Version** (`AppInfo`, About box from the toolbar's `#about-button`, `MainWindow.showAbout`):
   one number, `app.version` in the pom, used by jpackage and filled into `version.properties`.
