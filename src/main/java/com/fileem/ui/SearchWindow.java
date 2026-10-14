@@ -195,7 +195,7 @@ final class SearchWindow {
 
         BorderPane rootPane = new BorderPane(table, top, null, bottom, null);
         rootPane.getStyleClass().add("search-window");
-        Scene scene = new Scene(rootPane, 820, 520);
+        Scene scene = new Scene(rootPane, 980, 520);
         Theme.style(scene.getStylesheets());
         scene.setOnKeyPressed(e -> {
             if (e.getCode() == KeyCode.ESCAPE) {
@@ -232,7 +232,9 @@ final class SearchWindow {
         size.setCellFactory(c -> text(Formats::size, "align-right"));
         TableColumn<FileEntry, FileTime> modified = column("Date modified", 175, FileEntry::modified);
         modified.setCellFactory(c -> text(Formats::date, null));
-        table.getColumns().setAll(List.of(name, folder, size, modified));
+        TableColumn<FileEntry, String> type = column("Type", 140, FileEntry::type);
+        type.setComparator(com.fileem.util.NaturalOrder.INSTANCE);
+        table.getColumns().setAll(List.of(name, folder, size, type, modified));
         SortedList<FileEntry> sorted = new SortedList<>(results);
         sorted.comparatorProperty().bind(table.comparatorProperty());
         table.setItems(sorted);

@@ -57,7 +57,8 @@ mvn test -Dheadless=false   # watch the UI tests run on screen
   term (`"my file*"`). Text without wildcards matches anywhere in the name; case is ignored.
   The field's list (the arrow, or Alt+Down) offers your last 15 search patterns, newest first;
   click one to search it again. They're remembered across restarts.
-  Results stream in while it searches (Stop or Escape halts it). Double-click or Enter opens a
+  Results stream in while it searches (Stop or Escape halts it), with Name, Folder, Size, Type and
+  Date modified columns (click a header to sort). Double-click or Enter opens a
   result (folders open in the active tab), and *Open containing folder* shows it selected in its
   folder. Results can be handled right there, with the right-click menu or the usual keys: Rename
   (F2), Move to Trash (Del), Delete permanently (Shift+Del), Cut / Copy (Ctrl+X / Ctrl+C, then paste

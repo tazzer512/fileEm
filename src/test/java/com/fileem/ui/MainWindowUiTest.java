@@ -2348,6 +2348,15 @@ class MainWindowUiTest {
         assertEquals(List.of("a/b/Deep.JPG", "photos.jpg", "top.jpg"), searchResults(w, dir),
                 "every subfolder, any case, folders too");
         assertTrue(fx(w::statusText).startsWith("3 items found"), fx(w::statusText));
+        assertEquals(List.of("Name", "Folder", "Size", "Type", "Date modified"),
+                fx(() -> w.table().getColumns().stream().map(TableColumn::getText).toList()));
+        TableColumn<FileEntry, ?> typeColumn = fx(() -> w.table().getColumns().get(3));
+        assertEquals("Folder", fx(() -> w.table().getItems().stream().filter(e -> e.name().equals("photos.jpg"))
+                .map(e -> (String) typeColumn.getCellData(e)).findFirst().orElseThrow()), "photos.jpg is a folder");
+        assertEquals(fx(() -> w.table().getItems().stream().filter(e -> e.name().equals("top.jpg"))
+                .findFirst().orElseThrow().type()), fx(() -> w.table().getItems().stream()
+                .filter(e -> e.name().equals("top.jpg")).map(e -> (String) typeColumn.getCellData(e)).findFirst().orElseThrow()),
+                "files show the same type as in the file list");
 
         runSearch(robot, w, "*.jpg !top*");
         assertEquals(List.of("a/b/Deep.JPG", "photos.jpg"), searchResults(w, dir), "! excludes");
