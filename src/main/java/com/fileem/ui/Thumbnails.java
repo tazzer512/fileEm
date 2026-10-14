@@ -1,6 +1,7 @@
 package com.fileem.ui;
 
 import com.fileem.fs.FileEntry;
+import com.fileem.fs.Jpeg2000Reader;
 import com.fileem.fs.PsdReader;
 import com.fileem.fs.RawReader;
 import javafx.application.Platform;
@@ -23,7 +24,8 @@ import java.util.function.Consumer;
 
 /**
  * Image thumbnails for the icon views. Formats JavaFX decodes load with its own background loading;
- * Photoshop files ({@link PsdReader}) and camera raws ({@link RawReader}) are decoded on two background threads. Nothing touches the disk
+ * Photoshop files ({@link PsdReader}), camera raws ({@link RawReader}) and JPEG 2000 ({@link Jpeg2000Reader}) are
+ * decoded on two background threads. Nothing touches the disk
  * on the FX thread. Kept in an LRU cache bounded by pixel count, keyed by file, size and date (a changed
  * file gets a new entry). Thumbnails load at a few fixed sizes ({@link #loadSize}) and the image view
  * scales them, so dragging the size slider doesn't decode every image again for every pixel.
@@ -57,7 +59,7 @@ final class Thumbnails {
         if (e.isDirectory() || e.size() <= 0) {
             return false;
         }
-        if (PsdReader.isPsd(e.extension()) || RawReader.isRaw(e.extension())) {
+        if (decodedHere(e)) {
             return e.size() <= MAX_PSD_SIZE;
         }
         return e.size() <= MAX_FILE_SIZE && SUPPORTED.contains(e.extension());
@@ -97,7 +99,8 @@ final class Thumbnails {
             waiting = new ArrayList<>(List.of(onLoaded));
             DECODING.put(key, waiting);
             PSD.execute(() -> {
-                Image img = RawReader.isRaw(e.extension()) ? decodeRaw(e, load) : decodePsd(e, load);
+                Image img = RawReader.isRaw(e.extension()) ? decodeRaw(e, load)
+                        : Jpeg2000Reader.isJpeg2000(e.extension()) ? decodeJpeg2000(e, load) : decodePsd(e, load);
                 Platform.runLater(() -> {
                     List<Consumer<Image>> callbacks = DECODING.remove(key);
                     if (img == null) {
@@ -115,9 +118,19 @@ final class Thumbnails {
         whenLoaded(img, onLoaded);
     }
 
-    /** Photoshop and camera raw files: read by our own readers on the background pool. */
+    /** Photoshop, camera raw and JPEG 2000 files: read by our own readers on the background pool. */
     private static boolean decodedHere(FileEntry e) {
-        return PsdReader.isPsd(e.extension()) || RawReader.isRaw(e.extension());
+        String ext = e.extension();
+        return PsdReader.isPsd(ext) || RawReader.isRaw(ext) || Jpeg2000Reader.isJpeg2000(ext);
+    }
+
+    /** On a background thread: the JPEG 2000 image at a reduced resolution, or null. */
+    private static Image decodeJpeg2000(FileEntry e, int load) {
+        try {
+            return RawImages.of(Jpeg2000Reader.read(e.path(), load));
+        } catch (Exception | OutOfMemoryError ex) {
+            return null;
+        }
     }
 
     /** On a background thread: the raw file's smallest embedded JPEG that is big enough, upright. */

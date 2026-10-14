@@ -1,5 +1,6 @@
 package com.fileem.ui;
 
+import com.fileem.fs.Jpeg2000Reader;
 import com.fileem.fs.RawReader;
 import javafx.scene.image.Image;
 import javafx.scene.image.PixelFormat;
@@ -7,7 +8,10 @@ import javafx.scene.image.WritableImage;
 
 import java.io.ByteArrayInputStream;
 
-/** Camera raw previews as JavaFX images: decoded and turned upright. Runs on a background thread. */
+/**
+ * Images our own readers decode, as JavaFX images: camera raw previews (decoded and turned upright)
+ * and JPEG 2000 pixels. Runs on a background thread.
+ */
 final class RawImages {
     private RawImages() {
     }
@@ -27,6 +31,16 @@ final class RawImages {
             return null;
         }
         return oriented(img, p.orientation());
+    }
+
+    /** JPEG 2000 pixels as an image; null for none. */
+    static Image of(Jpeg2000Reader.Pixels p) {
+        if (p == null) {
+            return null;
+        }
+        WritableImage img = new WritableImage(p.width(), p.height());
+        img.getPixelWriter().setPixels(0, 0, p.width(), p.height(), PixelFormat.getIntArgbInstance(), p.argb(), 0, p.width());
+        return img;
     }
 
     /** The image turned/mirrored upright for an EXIF orientation (1 = already upright). */

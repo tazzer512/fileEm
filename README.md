@@ -70,13 +70,16 @@ mvn test -Dheadless=false   # watch the UI tests run on screen
   Panasonic RW2, Pentax PEF and more) show the JPEG the camera embedded in the file, turned upright,
   in the preview and as thumbnails. Raws without an embedded preview (e.g. merged HDR DNGs) show their
   details only.
+- **JPEG 2000** (`.jp2`, `.j2k`, `.j2c`, `.jpc`, `.jpf`, `.jpx`; also 16-bit grey scans) in the
+  preview and as thumbnails. Big images decode one of the smaller resolutions the format stores, so
+  a thumbnail of a 24-megapixel file takes a fraction of a second.
 - **View and Sort by buttons** in every tab, between the address bar and the filter box: the view
   button shows the tab's current view and switches it; the sort button shows the direction and
   picks the column (Name, Size, Type, Date modified, Date created, Extension) and the order.
 - **View modes** like Windows Explorer, per tab, from the View button in the toolbar or the tab, the
   right-click menu on empty space, Ctrl+Shift+1…8 or Ctrl+mouse wheel: Extra large / Large / Medium /
   Small icons, List, Details, Tiles and Content. The big icon views show thumbnails of images (PNG,
-  JPEG, GIF, BMP), Photoshop files (PSD/PSB, read without loading the whole document) and camera raws. Selection, sorting, keyboard navigation, the selection box and drag & drop work in
+  JPEG, GIF, BMP), Photoshop files (PSD/PSB, read without loading the whole document), camera raws and JPEG 2000. Selection, sorting, keyboard navigation, the selection box and drag & drop work in
   every view. New tabs open in the view you're using; each tab's view is remembered.
   In the icon views and Tiles, the **size slider** at the bottom right sizes the items freely (the
   middle is the view's default size, double-click it to go back); the **− / +** buttons beside it

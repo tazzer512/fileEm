@@ -2250,6 +2250,33 @@ class MainWindowUiTest {
     }
 
     @Test
+    void jpeg2000ImagesArePreviewedAndShowAsThumbnails(FxRobot robot) throws Exception {
+        Path dir = folderWith("j2k", "plain.txt");
+        com.fileem.fs.Jpeg2000ReaderTest.fixture(dir, "red-blue.j2k");
+        Files.writeString(dir.resolve("broken.jp2"), "not an image");
+        FileTab tab = leftTab();
+        open(robot, tab, dir);
+        previewOn(robot);
+        PreviewWindow p = preview();
+        select(robot, tab, "red-blue.j2k");
+        waitUntil("JPEG 2000 preview", () -> p.image() != null);
+        assertEquals(com.fileem.fs.Preview.Kind.JPEG2000, fx(p::kind));
+        assertEquals(120, fx(() -> p.image().getWidth()), 0.5);
+        assertEquals(0xffff0000, (int) fx(() -> p.image().getPixelReader().getArgb(10, 40)), "left is red");
+        assertEquals(0xff0000ff, (int) fx(() -> p.image().getPixelReader().getArgb(110, 40)), "right is blue");
+        select(robot, tab, "broken.jp2");
+        waitUntil("broken file explained", () -> p.messageText() != null && p.messageText().contains("Cannot show"));
+
+        robot.interact(() -> p.enabledProperty().set(false));
+        setView(robot, tab, ViewMode.LARGE_ICONS);
+        FileGrid g = grid(tab);
+        // sorted: broken.jp2, plain.txt, red-blue.j2k
+        waitUntil("thumbnail shown", () -> g.cellFor(2).nameText().equals("red-blue.j2k") && g.cellFor(2).showsThumbnail());
+        assertEquals("broken.jp2", fx(() -> g.cellFor(0).nameText()));
+        assertFalse(fx(() -> g.cellFor(0).showsThumbnail()), "a broken file keeps its icon");
+    }
+
+    @Test
     void viewModesAreSavedPerTabAndNewTabsUseTheCurrentOne(FxRobot robot) throws Exception {
         Path a = folderWith("va");
         FileTab first = leftTab();

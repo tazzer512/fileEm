@@ -95,6 +95,8 @@ src/test/java/com/fileem/
                        PsdReaderTest (modes, depths, RLE/raw, PSB, JPEG fallback, damaged files),
                        RawReaderTest (CR2/NEF/RW2/RAF/CR3 previews, choice by size, orientation,
                        damaged files; RawFixtures builds the files),
+                       Jpeg2000ReaderTest (jp2 + bare codestream, resolution levels, shrinking,
+                       8/16-bit grey, damaged files; OpenJPEG fixtures),
                        FileSearchTest (wildcards, terms and ! exclusions, recursion, hidden, links not followed, unreadable
                        folders, stopping),
                        PreviewTest (kinds by name, text vs binary, truncation, encodings),
@@ -108,6 +110,7 @@ src/test/java/com/fileem/
                        autosave, rubber-band selection, stacked progress window (pause/cancel),
                        eject (menu/button, tabs leave first, refused while busy, errors),
                        preview (toggle, image zoom/fit/pan, text, quick selection, PSD, raw upright,
+                       JPEG 2000 preview + thumbnail,
                        docking, session), search (menus, Ctrl+Shift+F, results, open/show, hidden),
                        view modes (menu, keys, wheel, grid mouse/keys/box/DnD/menus, thumbnails)
 ```
@@ -151,6 +154,10 @@ src/test/java/com/fileem/
 ## Dependencies
 
 - `atlantafx-base` (Primer light/dark user-agent stylesheet, `Styles.*` classes, `CustomTextField`).
+- `jai-imageio-jpeg2000` (+ `jai-imageio-core`): an ImageIO plugin for JPEG 2000 (pure Java, JJ2000
+  and BSD-3 licenses), registered through `META-INF/services` on the classpath; needs only
+  `java.desktop`. Its *writer* produces wrong colours: test files come from OpenJPEG (fixtures in
+  `src/test/resources/com/fileem/fs/jpeg2000/`, made with Pillow).
 - `ikonli-javafx` + `ikonli-materialdesign2-pack`. Icons are referenced by **string literal**
   (`"mdi2f-folder"`). An unknown literal throws at runtime, not at compile time, so verify new
   ones exist in the pack jar (e.g. `unzip` it and run `strings` on `MaterialDesign?.class`).
@@ -167,6 +174,7 @@ com.fileem          Launcher, FileEmApp (stage), Session (properties file), Auto
 com.fileem.util     OsUtil, Bg (background executor → FX callbacks), Formats, FsUtil, NaturalOrder
 com.fileem.fs       FileEntry (row snapshot), FileTypes, Volumes (mount polling), DirWatcher,
                     Trash, Shell (open with OS), Preview (kinds, text reading), PsdReader, RawReader,
+                    Jpeg2000Reader,
                     FileSearch (recursive name search with wildcards)
 com.fileem.ops      FileOperation (copy/move/delete/trash Task), FileClipboard
 com.fileem.ui       MainWindow (toolbar, F-key bar, ALL commands + key handling)
@@ -356,7 +364,8 @@ tools/                                  make-icon.py, install-linux.sh (per-user
   which rebuilds its cells only when the pixel size changes (cells take their icon size when created).
   Icons of 48 px and up show thumbnails. `Thumbnails.request(entry, px, callback)` loads at fixed
   sizes (`loadSize`: multiples of 32) so the slider doesn't re-decode per pixel; JavaFX formats use
-  background loading, PSD/PSB (`fs/PsdReader`) and camera raws (`fs/RawReader`, via `RawImages`) go on two daemon threads (composite image,
+  background loading, PSD/PSB (`fs/PsdReader`), camera raws (`fs/RawReader`, via `RawImages`) and JPEG 2000
+  (`fs/Jpeg2000Reader`) go on two daemon threads (composite image,
   sampled rows only; falls back to the embedded JPEG; failures remembered per file version). Cells
   drop late callbacks with a request counter. The status line is an
   HBox (`.status-bar`: themes style its background there, text stays on `.status-label`).
@@ -374,7 +383,11 @@ tools/                                  make-icon.py, install-linux.sh (per-user
   smallest one at least the asked size (thumbnails) or the largest (preview); `RawImages` decodes and
   turns it upright per EXIF orientation (IFD0, CR3's CMT1, else the JPEG's own EXIF). Zoom = image scale
   or font scale; fit never enlarges; pan buttons move a quarter of the viewport. Showing it hands focus
-  back to the main window. Closing it, F3 or Escape switches it off.
+  back to the main window. Closing it, F3 or Escape switches it off. JPEG 2000 (`Jpeg2000Reader`, at
+  2048 px like PSD): the COD marker gives the number of resolution levels; the smallest level at
+  least the asked size is decoded (`J2KImageReadParam.setResolution`; ~0.3 s instead of ~4.5 s for a
+  thumbnail of 6000×4000), then shrunk by area averaging. Grey images are read from the raster:
+  `getRGB` treats grey as linear and would brighten it.
   **Docking** (`dockedProperty`, session `preview.docked`, divider `split.preview`): the same content
   node (`pane()`) moves between the window's scene (a placeholder stands in while docked) and the
   main window's `outer` SplitPane through `PreviewWindow.DockHost`; `place()` puts it where
