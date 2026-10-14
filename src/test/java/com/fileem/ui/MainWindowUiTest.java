@@ -2361,4 +2361,17 @@ class MainWindowUiTest {
         assertEquals(List.of(), searchResults(w, dir), "nothing to look for");
         robot.interact(() -> w.stage().close());
     }
+
+    @Test
+    void theInfoButtonShowsTheVersion(FxRobot robot) {
+        javafx.scene.control.Button about = robot.lookup("#about-button").queryButton();
+        assertTrue(fx(() -> about.getTooltip().getText()).contains(com.fileem.AppInfo.version()));
+        robot.clickOn(about);
+        waitUntil("about box open", () -> otherWindows(stage).stream().anyMatch(w -> w.getScene() != null
+                && w.getScene().getRoot() instanceof javafx.scene.control.DialogPane p
+                && ("fileEm " + com.fileem.AppInfo.version()).equals(p.getHeaderText())
+                && p.getContentText().contains("Built ")));
+        robot.clickOn("OK");
+        waitUntil("about box closed", () -> otherWindows(stage).isEmpty());
+    }
 }

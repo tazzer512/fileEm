@@ -1,6 +1,7 @@
 package com.fileem.ui;
 
 import atlantafx.base.theme.Styles;
+import com.fileem.AppInfo;
 import com.fileem.Bookmarks;
 import com.fileem.Session;
 import com.fileem.fs.FileEntry;
@@ -22,7 +23,9 @@ import javafx.geometry.Pos;
 import javafx.scene.Node;
 import javafx.scene.Scene;
 import javafx.concurrent.Worker;
+import javafx.scene.control.Alert;
 import javafx.scene.control.Button;
+import javafx.scene.control.ButtonType;
 import javafx.scene.control.ButtonBase;
 import javafx.scene.control.CheckMenuItem;
 import javafx.scene.control.Label;
@@ -272,12 +275,15 @@ public final class MainWindow extends BorderPane {
         themeMenu = buildThemeMenu();
         viewMenu = buildViewMenu();
 
+        Button about = iconButton("mdi2i-information-variant", "About fileEm " + AppInfo.version(), this::showAbout);
+        about.setId("about-button");
+
         Region spacer = new Region();
         HBox.setHgrow(spacer, Priority.ALWAYS);
 
         ToolBar bar = new ToolBar(backButton, forwardButton, upButton, refresh, sep(),
                 newFolder, cut, copy, paste, rename, delete, props, sep(), newTab, bookmarkButton,
-                spacer, viewMenu, previewToggle, hidden, dualToggle, themeMenu, theme);
+                spacer, viewMenu, previewToggle, hidden, dualToggle, themeMenu, theme, about);
         bar.getStyleClass().add("main-toolbar");
         return bar;
     }
@@ -1136,6 +1142,21 @@ public final class MainWindow extends BorderPane {
             items.add(eject);
         }
         return items;
+    }
+
+    // ---- about ----
+
+    /** The About box: version, build date, Java and OS. Not modal. */
+    Alert showAbout() {
+        Alert a = new Alert(Alert.AlertType.INFORMATION, AppInfo.about(), ButtonType.OK);
+        Dialogs.prepare(a, stage);
+        a.initModality(javafx.stage.Modality.NONE);
+        a.setTitle("About fileEm");
+        a.setHeaderText("fileEm " + AppInfo.version());
+        Icons.appIcons().stream().filter(i -> i.getWidth() == 64).findFirst()
+                .ifPresent(i -> a.setGraphic(new javafx.scene.image.ImageView(i)));
+        a.show();
+        return a;
     }
 
     // ---- search ----

@@ -84,6 +84,7 @@ command when it isn't installed:
 ```
 src/test/java/com/fileem/
   FxTestSupport        starts the FX toolkit once; drainFx() waits for queued FX events
+  AppInfoTest          version.properties is filtered and matches the pom's app.version
   SessionTest          round trip, atomic + change-only writes, background vs. sync save order
   BookmarksTest
   PackagingTest        dist profile + install-linux.sh stay consistent (window class, icons, modules)
@@ -161,7 +162,8 @@ src/test/java/com/fileem/
 
 ```
 com.fileem          Launcher, FileEmApp (stage), Session (properties file), Autosave,
-                    Bookmarks (ordered named folders, saved on every change)
+                    Bookmarks (ordered named folders, saved on every change),
+                    AppInfo (version + build date from version.properties)
 com.fileem.util     OsUtil, Bg (background executor → FX callbacks), Formats, FsUtil, NaturalOrder
 com.fileem.fs       FileEntry (row snapshot), FileTypes, Volumes (mount polling), DirWatcher,
                     Trash, Shell (open with OS), Preview (kinds, text reading), PsdReader, RawReader,
@@ -181,6 +183,8 @@ com.fileem.ui       MainWindow (toolbar, F-key bar, ALL commands + key handling)
                     SearchWindow (one per search: pattern, streaming results table)
                     PropertiesDialog, BookmarksDialog, Dialogs, Dnd, Theme, Icons, Views, TreeNode
 src/main/resources/com/fileem/app.css   author stylesheet on top of AtlantaFX
+src/main/resources-filtered/            resources Maven fills in (${...}): version.properties
+                                        (app.version, build date); keep binaries out of it
 src/main/resources/com/fileem/themes/   theme overlays: <id>.css shapes, <id>-light/-dark.css colors
 src/main/resources/com/fileem/icons/    app icon PNGs (16–512 px); regenerate with tools/make-icon.py (Pillow)
 src/packaging/                          jpackage icons (png Linux, ico Windows, icns macOS)
@@ -389,6 +393,9 @@ tools/                                  make-icon.py, install-linux.sh (per-user
   Search, Stop, Escape and closing the window cancel the job. Results are `FileEntry`s shown with
   `FileTable.NameCell`; folders open in the active tab (`FileTab.showItem` opens a result's folder
   with it selected), files with `Shell.open`.
+- **Version** (`AppInfo`, About box from the toolbar's `#about-button`, `MainWindow.showAbout`):
+  one number, `app.version` in the pom, used by jpackage and filled into `version.properties`.
+  Bump it there for a release; `AppInfoTest` checks they agree.
 - **Mnemonics**: `Button`/`MenuItem` treat `_` as a mnemonic marker and hide it. Anything showing a
   file name (address bar crumbs, `MainWindow.item`) sets `setMnemonicParsing(false)`.
 - **Rubber band** (`Marquee` in Details, built into `FileGrid` in the other views): event filters

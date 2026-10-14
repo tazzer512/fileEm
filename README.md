@@ -118,6 +118,8 @@ mvn test -Dheadless=false   # watch the UI tests run on screen
   tabs), **Adwaita** (GNOME Files) and **Aurora**, fileEm's own northern-lights theme with gradient
   edge lights, pill controls and keycap F-keys. Fonts fall back to the system font when the
   theme's font (Segoe UI Variable, SF Pro, Cantarell, Inter) isn't installed.
+- **About** (the *i* button at the right end of the toolbar): the version, build date, and the Java,
+  JavaFX and OS it runs on. The version is `app.version` in `pom.xml` (also the packaged app's).
 - Session restore (window, tabs and their folders, dual mode, hidden files, columns, theme and
   light/dark mode, bookmarks). Saved automatically while the app runs, so it survives a crash or logout.
 

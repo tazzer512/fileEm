@@ -21,6 +21,8 @@
         <ui.test.args></ui.test.args>
         <!-- Native app (mvn -Pdist package): version must be numeric for jpackage. -->
         <app.version>0.1.0</app.version>
+        <maven.build.timestamp.format>yyyy-MM-dd</maven.build.timestamp.format>
+        <build.date>${maven.build.timestamp}</build.date>
         <jpackage.type>app-image</jpackage.type>
         <dist.dir>${project.build.directory}/dist</dist.dir>
         <!-- jdeps finds base, desktop, logging; charsets: IBM437 zip names; localedata: number formats per locale -->
@@ -71,6 +73,16 @@
     </dependencies>
 
     <build>
+        <resources>
+            <resource>
+                <directory>src/main/resources</directory>
+            </resource>
+            <!-- only these files get ${...} filled in (filtering would corrupt the icons) -->
+            <resource>
+                <directory>src/main/resources-filtered</directory>
+                <filtering>true</filtering>
+            </resource>
+        </resources>
         <plugins>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
