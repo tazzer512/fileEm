@@ -29,6 +29,11 @@ final class Views {
 
     /** Scrolls just enough to make the row visible, instead of TableView.scrollTo's jump-to-top. */
     static void ensureVisible(Control control, int index) {
+        ensureVisible(control, index, 0);
+    }
+
+    /** Like {@link #ensureVisible(Control, int)}, but a scroll puts the item {@code context} rows below the top. */
+    static void ensureVisible(Control control, int index, int context) {
         if (index < 0) {
             return;
         }
@@ -38,11 +43,15 @@ final class Views {
             if (first != null && last != null && index > first.getIndex() && index < last.getIndex()) {
                 return; // already fully on screen: skip the (row-measuring) scroll
             }
-            flow.scrollTo(index);
+            if (context > 0) {
+                flow.scrollToTop(Math.max(0, index - context)); // the item lands below its context
+            } else {
+                flow.scrollTo(index);
+            }
         } else if (control instanceof TableView<?> t) {
-            t.scrollTo(index);
+            t.scrollTo(Math.max(0, index - context));
         } else if (control instanceof TreeView<?> t) {
-            t.scrollTo(index);
+            t.scrollTo(Math.max(0, index - context));
         }
     }
 }

@@ -156,6 +156,17 @@
     -fx-background-color: -color-accent-subtle;
 }
 
+/* the active tab's folder: boxed, also while the tree has no focus; it and its parents are bold */
+.folder-tree .tree-cell:current {
+    -fx-border-color: -color-accent-emphasis;
+    -fx-border-width: 1;
+    -fx-border-radius: 4;
+}
+
+.folder-tree .tree-cell:on-path .tree-name {
+    -fx-font-weight: bold;
+}
+
 .folder-tree .tree-cell:header {
     -fx-font-weight: bold;
     -fx-padding: 8 4 3 4;

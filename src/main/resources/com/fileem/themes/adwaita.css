@@ -53,6 +53,12 @@
     -fx-background-color: -fe-active;
 }
 
+/* the active tab's folder: the box follows the selection's shape */
+.folder-tree .tree-cell:current {
+    -fx-border-insets: 1 6 1 6;
+    -fx-border-radius: 6;
+}
+
 .folder-tree .tree-cell:header {
     -fx-font-weight: bold;
     -fx-text-fill: -color-fg-muted;

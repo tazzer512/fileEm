@@ -7,10 +7,12 @@ import com.fileem.fs.Shell;
 import com.fileem.ops.FileOperation;
 import com.fileem.util.OsUtil;
 import javafx.concurrent.Worker;
+import javafx.css.PseudoClass;
 import javafx.scene.Node;
 import javafx.scene.Scene;
 import javafx.scene.control.TableColumn;
 import javafx.scene.control.TableRow;
+import javafx.scene.control.TreeCell;
 import javafx.scene.control.TreeItem;
 import javafx.scene.input.DragEvent;
 import javafx.scene.input.KeyCode;
@@ -30,9 +32,11 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.Collectors;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -555,6 +559,85 @@ class MainWindowUiTest {
             tree.getSelectionModel().select(quick.getChildren().get(0)); // "Home"
         });
         waitUntil("tab follows the tree", () -> OsUtil.home().equals(tab.currentDir()));
+    }
+
+    @Test
+    void treeMarksTheCurrentFolderAndFoldsAwayBranchesItOpenedBefore(FxRobot robot) throws Exception {
+        Path c = Files.createDirectories(tmp.resolve("a/b/c"));
+        Path y = Files.createDirectories(tmp.resolve("x/y"));
+        Path z = Files.createDirectories(tmp.resolve("z"));
+        FileTab tab = leftTab();
+        FolderTree tree = fx(() -> window.left().tree());
+        open(robot, tab, c);
+        waitUntil("tree marks c", () -> tree.currentItem() != null && c.equals(tree.currentItem().getValue().path()));
+        TreeItem<TreeNode> cItem = fx(tree::currentItem);
+        TreeItem<TreeNode> bItem = fx(cItem::getParent);
+        TreeItem<TreeNode> aItem = fx(bItem::getParent);
+        TreeItem<TreeNode> top = fx(aItem::getParent);
+        TreeItem<TreeNode> xItem = fx(() -> top.getChildren().stream()
+                .filter(i -> tmp.resolve("x").equals(i.getValue().path())).findFirst().orElseThrow());
+        // the folder is boxed and its path is bold, also while the file list has the focus
+        assertMarks(tree, cItem, "current", "on-path");
+        assertMarks(tree, bItem, "on-path");
+        assertMarks(tree, aItem, "on-path");
+        assertMarks(tree, xItem);
+
+        // another branch: the one the tree opened for c folds away, the marks move
+        open(robot, tab, y);
+        waitUntil("tree marks y", () -> y.equals(tree.currentItem().getValue().path()));
+        assertFalse(fx(aItem::isExpanded), "a was opened by the tree, not the user");
+        assertTrue(fx(xItem::isExpanded));
+        assertMarks(tree, xItem, "on-path");
+        assertMarks(tree, aItem);
+
+        // a branch the user opens stays open
+        robot.interact(() -> aItem.setExpanded(true));
+        robot.interact(() -> {
+            xItem.setExpanded(false); // moves the selection (and the tab) up to x
+            xItem.setExpanded(true);
+        });
+        waitUntil("tab follows to x", () -> tmp.resolve("x").equals(tab.currentDir()));
+        open(robot, tab, z);
+        waitUntil("tree marks z", () -> z.equals(tree.currentItem().getValue().path()));
+        assertTrue(fx(aItem::isExpanded), "expanded by the user");
+        assertTrue(fx(xItem::isExpanded), "expanded again by the user");
+        assertEquals(z, fx(() -> tree.getSelectionModel().getSelectedItem().getValue().path()));
+        open(robot, tab, tmp); // leave no tab in a subfolder of tmp (see the search test)
+    }
+
+    @Test
+    void theTreeScrollsToTheCurrentFolderWhenTheWindowAppears(FxRobot robot) throws Exception {
+        for (int i = 0; i < 60; i++) {
+            Files.createDirectories(tmp.resolve(String.format("a%02d", i)));
+        }
+        Path deep = Files.createDirectories(tmp.resolve("zz/deep"));
+        FileTab tab = leftTab();
+        FolderTree tree = fx(() -> window.left().tree());
+        robot.interact(stage::hide);
+        robot.interact(() -> tab.navigateTo(deep));
+        waitUntil("tree marks the folder", () -> tree.currentItem() != null
+                && deep.equals(tree.currentItem().getValue().path()));
+        robot.interact(stage::show);
+        waitUntil("folder scrolled into view", () -> tree.lookupAll(".tree-cell").stream()
+                .anyMatch(n -> n instanceof TreeCell<?> c && c.getTreeItem() == tree.currentItem() && c.isVisible()
+                        && c.localToScene(c.getBoundsInLocal()).getMaxY() <= tree.localToScene(tree.getBoundsInLocal()).getMaxY()));
+        open(robot, tab, tmp);
+    }
+
+    /** Waits until the cell showing {@code item} has exactly the {@code expected} current/on-path marks. */
+    private static void assertMarks(FolderTree tree, TreeItem<TreeNode> item, String... expected) {
+        Set<String> want = Set.of(expected);
+        waitUntil(item.getValue().path() + " marked " + want, () -> {
+            for (Node n : tree.lookupAll(".tree-cell")) {
+                if (n instanceof TreeCell<?> cell && cell.getTreeItem() == item && !cell.isEmpty()) {
+                    return want.equals(cell.getPseudoClassStates().stream().map(PseudoClass::getPseudoClassName)
+                            .filter(p -> p.equals("current") || p.equals("on-path"))
+                            .collect(Collectors.toSet()));
+                }
+            }
+            tree.scrollTo(tree.getRow(item)); // not on screen: bring it into view and look again
+            return false;
+        });
     }
 
     @Test

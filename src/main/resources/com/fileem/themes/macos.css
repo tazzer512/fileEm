@@ -50,6 +50,12 @@
     -fx-background-insets: 0 8 0 8;
 }
 
+/* the active tab's folder: the box follows the selection's shape */
+.folder-tree .tree-cell:current {
+    -fx-border-insets: 0 8 0 8;
+    -fx-border-radius: 5;
+}
+
 .folder-tree .tree-cell:header {
     -fx-font-size: 11px;
     -fx-font-weight: bold;

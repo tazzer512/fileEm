@@ -37,6 +37,8 @@ mvn test -Dheadless=false   # watch the UI tests run on screen
 
 - **Folder tree**: Quick access (Home, Desktop, Documents, … including localized XDG folders on Linux)
   and all volumes/mounts with free space. Removable drives show up automatically (polled every 5 s).
+  The tree follows the folder you're in: that folder is boxed and its path is bold, and branches
+  the tree opened for earlier folders fold up again (ones you opened yourself stay open).
 - **Safely remove drives**: USB sticks, SD cards and external disks get an eject button next to
   their name in the tree (also *Eject* in their right-click menu). The whole drive is ejected, with
   all its partitions. fileEm first moves tabs off it, refuses while a copy or move still uses it,

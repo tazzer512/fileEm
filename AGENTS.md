@@ -109,6 +109,7 @@ src/test/java/com/fileem/
   util/BgTest          virtual-thread I/O never blocked by stuck jobs, cancel drops results,
                        operations run in parallel on platform threads
   ui/MainWindowUiTest  TestFX end-to-end: keyboard, dialogs, dual pane, clipboard, DnD, session,
+                       tree sync (current folder marks, folding branches it opened),
                        autosave, rubber-band selection, stacked progress window (pause/cancel),
                        eject (menu/button, tabs leave first, refused while busy, errors),
                        preview (toggle, image zoom/fit/pan, text, quick selection, PSD, raw upright,
@@ -288,7 +289,14 @@ tools/                                  make-icon.py, install-linux.sh (per-user
   listener navigates the active tab.
 - **Tree ↔ tab sync**: the tab calls `ExplorerSide.tabNavigated` after a successful load, and the
   tree `reveal`s the path (no-op if the selected item already shows it). Tree clicks call
-  `FileTab.navigateTo`.
+  `FileTab.navigateTo`. `FolderTree.currentItem()` is the item showing the tab's folder; cells mark
+  it `:current` (boxed; themes give the box their selection's insets) and it and its parents
+  `:on-path` (bold `.tree-name`), also while the tree has no focus. Branches `reveal` expanded are
+  remembered (`autoExpanded`) and collapsed once the current folder leaves them; a branch the user
+  expands or collapses is theirs and left alone. Reveal scrolls the item 3 rows below the top.
+  Scrolling and folding happen only while the tree is `shown()` (window showing; it catches up when
+  the window appears): in the hidden/detached windows earlier UI tests leave behind they re-measure
+  cells outside a shown scene and log hundreds of CSS lookup warnings.
 - **Refreshing**: `DirWatcher` refreshes tabs. After our own operations
   `MainWindow.refreshDirs` refreshes explicitly too, because macOS watching is slow.
 - **Context menus** are built per request with `Views.dynamicContextMenu(control, supplier)`. Never

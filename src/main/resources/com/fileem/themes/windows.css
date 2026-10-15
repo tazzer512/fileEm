@@ -89,6 +89,12 @@
     -fx-padding: 3 4 3 8;
 }
 
+/* the active tab's folder: the box follows the selection's shape */
+.folder-tree .tree-cell:current {
+    -fx-border-insets: 1 4 1 4;
+    -fx-border-radius: 4;
+}
+
 .folder-tree .tree-cell:header {
     -fx-font-weight: normal;
     -fx-text-fill: -color-fg-muted;

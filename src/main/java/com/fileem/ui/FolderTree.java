@@ -9,10 +9,14 @@ import com.fileem.util.Formats;
 import com.fileem.util.FsUtil;
 import com.fileem.util.NaturalOrder;
 import com.fileem.util.OsUtil;
+import javafx.beans.property.ObjectProperty;
+import javafx.beans.property.SimpleObjectProperty;
+import javafx.beans.value.ObservableValue;
 import javafx.collections.ListChangeListener;
 import javafx.collections.ObservableList;
 import javafx.css.PseudoClass;
 import javafx.geometry.Pos;
+import javafx.scene.Scene;
 import javafx.scene.control.Button;
 import javafx.scene.control.ContextMenu;
 import javafx.scene.control.Label;
@@ -26,6 +30,7 @@ import javafx.scene.input.MouseButton;
 import javafx.scene.input.MouseEvent;
 import javafx.scene.input.TransferMode;
 import javafx.scene.layout.HBox;
+import javafx.stage.Window;
 import org.kordamp.ikonli.javafx.FontIcon;
 
 import java.io.IOException;
@@ -37,6 +42,7 @@ import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.IdentityHashMap;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -46,6 +52,8 @@ import java.util.regex.Pattern;
 /** Lazily loaded folder tree with quick-access folders and volumes. */
 final class FolderTree extends TreeView<TreeNode> {
     private static final PseudoClass HEADER = PseudoClass.getPseudoClass("header");
+    private static final PseudoClass CURRENT = PseudoClass.getPseudoClass("current");
+    private static final PseudoClass ON_PATH = PseudoClass.getPseudoClass("on-path");
 
     private final MainWindow main;
     private final ExplorerSide side;
@@ -54,6 +62,12 @@ final class FolderTree extends TreeView<TreeNode> {
     private final TreeItem<TreeNode> volumesHeader;
     private int programmatic;
     private int revealToken;
+    /** The item showing the active tab's folder (boxed and bold), or null when the tree doesn't show it. */
+    private final ObjectProperty<TreeItem<TreeNode>> current = new SimpleObjectProperty<>(this, "current");
+    /** Items {@link #reveal} expanded (not the user): collapsed again once the path leaves them. */
+    private final Set<TreeItem<TreeNode>> autoExpanded = Collections.newSetFromMap(new IdentityHashMap<>());
+    private int autoExpanding;
+    private final ObservableValue<Boolean> showing;
 
     FolderTree(MainWindow main, ExplorerSide side) {
         this.main = main;
@@ -94,6 +108,13 @@ final class FolderTree extends TreeView<TreeNode> {
         Volumes.current().addListener((o, old, vols) -> syncVolumes(vols));
         syncVolumes(Volumes.current().get());
         main.showHiddenProperty().addListener(o -> reloadAll(getRoot()));
+        // a reveal while hidden doesn't scroll (see shown()): catch up when the window appears
+        showing = sceneProperty().flatMap(Scene::windowProperty).flatMap(Window::showingProperty).orElse(false);
+        showing.addListener((o, was, now) -> {
+            if (now && current.get() != null) {
+                Views.ensureVisible(this, getRow(current.get()), 3);
+            }
+        });
     }
 
     // ---- quick access ----
@@ -244,6 +265,7 @@ final class FolderTree extends TreeView<TreeNode> {
         }
         TreeItem<TreeNode> selected = getSelectionModel().getSelectedItem();
         if (selected != null && dir.equals(selected.getValue().path())) {
+            markCurrent(selected);
             return;
         }
         int token = ++revealToken;
@@ -263,6 +285,7 @@ final class FolderTree extends TreeView<TreeNode> {
             } finally {
                 programmatic--;
             }
+            markCurrent(null);
             return;
         }
         List<String> names = new ArrayList<>();
@@ -289,7 +312,15 @@ final class FolderTree extends TreeView<TreeNode> {
             Path next = item.path().resolve(names.get(i));
             for (TreeItem<TreeNode> c : item.getChildren()) {
                 if (c instanceof FolderItem f && f.path().equals(next)) {
-                    item.setExpanded(true);
+                    if (!item.isExpanded()) {
+                        autoExpanding++;
+                        try {
+                            item.setExpanded(true);
+                        } finally {
+                            autoExpanding--;
+                        }
+                        autoExpanded.add(item);
+                    }
                     step(f, names, i + 1, token);
                     return;
                 }
@@ -299,13 +330,64 @@ final class FolderTree extends TreeView<TreeNode> {
     }
 
     private void select(TreeItem<TreeNode> item) {
+        markCurrent(item);
         programmatic++;
         try {
             getSelectionModel().select(item);
         } finally {
             programmatic--;
         }
-        Views.ensureVisible(this, getRow(item));
+        if (shown()) {
+            Views.ensureVisible(this, getRow(item), 3); // with its parents in view
+        }
+    }
+
+    /**
+     * Makes {@code item} the current folder and collapses the branches {@link #reveal} opened for
+     * earlier folders that aren't on its path (ones the user expanded stay open).
+     */
+    private void markCurrent(TreeItem<TreeNode> item) {
+        current.set(item);
+        if (!shown()) {
+            return; // folds up at the next change while shown
+        }
+        programmatic++;
+        autoExpanding++;
+        try {
+            for (Iterator<TreeItem<TreeNode>> it = autoExpanded.iterator(); it.hasNext(); ) {
+                TreeItem<TreeNode> t = it.next();
+                if (!isOnPath(t, item)) {
+                    it.remove();
+                    t.setExpanded(false);
+                }
+            }
+        } finally {
+            autoExpanding--;
+            programmatic--;
+        }
+    }
+
+    /**
+     * Whether the tree is on screen. Scrolling and folding re-measure cells; in a hidden or detached
+     * tree that is wasted work, and styling cells outside a shown scene logs CSS lookup warnings.
+     */
+    private boolean shown() {
+        return showing.getValue();
+    }
+
+    /** True when {@code t} is {@code item} or one of its parents. */
+    private static boolean isOnPath(TreeItem<TreeNode> t, TreeItem<TreeNode> item) {
+        for (TreeItem<TreeNode> i = item; i != null; i = i.getParent()) {
+            if (i == t) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** The item marked as the active tab's folder (package-private for tests). */
+    TreeItem<TreeNode> currentItem() {
+        return current.get();
     }
 
     /** Reloads the children of every loaded tree item showing {@code dir}. */
@@ -357,6 +439,9 @@ final class FolderTree extends TreeView<TreeNode> {
             super(node);
             getChildren().add(new TreeItem<>(TreeNode.loading()));
             expandedProperty().addListener((o, was, expanded) -> {
+                if (autoExpanding == 0) {
+                    autoExpanded.remove(this); // the user's choice now: leave it as it is
+                }
                 if (expanded) {
                     load(null);
                 }
@@ -431,7 +516,14 @@ final class FolderTree extends TreeView<TreeNode> {
 
         FolderCell() {
             box.setAlignment(Pos.CENTER_LEFT);
+            name.getStyleClass().add("tree-name");
             extra.getStyleClass().add("tree-extra");
+            // not for VirtualFlow's detached measuring cell: restyling it out of the scene logs lookup warnings
+            current.addListener(o -> {
+                if (getScene() != null) {
+                    updateMarks();
+                }
+            });
             name.setMinWidth(0);
             eject.getStyleClass().addAll(Styles.BUTTON_ICON, Styles.FLAT, "eject-button");
             eject.setFocusTraversable(false);
@@ -497,11 +589,21 @@ final class FolderTree extends TreeView<TreeNode> {
             });
         }
 
+        /** Boxes the current folder and makes the folders on its path bold. */
+        private void updateMarks() {
+            TreeItem<TreeNode> item = isEmpty() ? null : getTreeItem();
+            TreeItem<TreeNode> cur = current.get();
+            boolean folder = item != null && item.getValue() != null && item.getValue().path() != null;
+            pseudoClassStateChanged(CURRENT, folder && item == cur);
+            pseudoClassStateChanged(ON_PATH, folder && cur != null && isOnPath(item, cur));
+        }
+
         @Override
         protected void updateItem(TreeNode n, boolean empty) {
             super.updateItem(n, empty);
             getStyleClass().removeAll("drop-target", "context-target");
             setText(null);
+            updateMarks();
             if (empty || n == null) {
                 setGraphic(null);
                 pseudoClassStateChanged(HEADER, false);
