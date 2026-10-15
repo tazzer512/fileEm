@@ -14,6 +14,7 @@ import javafx.scene.control.TableColumn;
 import javafx.scene.control.TableRow;
 import javafx.scene.control.TreeCell;
 import javafx.scene.control.TreeItem;
+import javafx.scene.control.skin.VirtualFlow;
 import javafx.scene.input.DragEvent;
 import javafx.scene.input.KeyCode;
 import javafx.stage.Stage;
@@ -622,6 +623,75 @@ class MainWindowUiTest {
                 .anyMatch(n -> n instanceof TreeCell<?> c && c.getTreeItem() == tree.currentItem() && c.isVisible()
                         && c.localToScene(c.getBoundsInLocal()).getMaxY() <= tree.localToScene(tree.getBoundsInLocal()).getMaxY()));
         open(robot, tab, tmp);
+    }
+
+    @Test
+    void theTreeScrollsToTheFolderWhenItIsOpenedAgainButNotAfterAClickInTheTree(FxRobot robot) throws Exception {
+        for (int i = 0; i < 60; i++) {
+            Files.createDirectories(tmp.resolve(String.format("a%02d", i)));
+        }
+        Path deep = Files.createDirectories(tmp.resolve("zz/deep"));
+        FileTab tab = leftTab();
+        FolderTree tree = fx(() -> window.left().tree());
+        open(robot, tab, deep);
+        waitUntil("folder in view", () -> inView(tree, tree.currentItem()));
+        // scrolled away, then the same folder opened again in the files box: back in view
+        robot.interact(() -> tree.scrollTo(0));
+        waitUntil("scrolled away", () -> !inView(tree, tree.currentItem()));
+        open(robot, tab, deep);
+        waitUntil("back in view", () -> inView(tree, tree.currentItem()));
+
+        // a click on the last, partly shown row navigates without moving the tree
+        TreeItem<TreeNode> a59 = fx(() -> tree.currentItem().getParent().getParent().getChildren().stream()
+                .filter(i -> tmp.resolve("a59").equals(i.getValue().path())).findFirst().orElseThrow());
+        VirtualFlow<?> flow = fx(() -> (VirtualFlow<?>) tree.lookup(".virtual-flow"));
+        waitUntil("a59 is the last row", () -> {
+            int last = flow.getLastVisibleCell().getIndex();
+            int row = tree.getRow(a59);
+            if (last != row) {
+                flow.scrollToTop(flow.getFirstVisibleCell().getIndex() + row - last); // the cells settle in a pulse
+            }
+            return last == row;
+        });
+        int first = fx(() -> flow.getFirstVisibleCell().getIndex());
+        robot.interact(() -> tree.getSelectionModel().select(a59));
+        waitUntil("tab follows the click", () -> tmp.resolve("a59").equals(tab.currentDir()));
+        waitUntil("tree marks a59", () -> tree.currentItem() == a59);
+        assertEquals(first, fx(() -> flow.getFirstVisibleCell().getIndex()), "the tree didn't move");
+        open(robot, tab, tmp);
+    }
+
+    @Test
+    void aDeepFolderIsScrolledIntoViewSideways(FxRobot robot) throws Exception {
+        Path deep = tmp;
+        for (int i = 0; i < 14; i++) {
+            deep = deep.resolve("level" + i);
+        }
+        Files.createDirectories(deep);
+        FileTab tab = leftTab();
+        FolderTree tree = fx(() -> window.left().tree());
+        open(robot, tab, deep);
+        Path target = deep;
+        waitUntil("tree marks the folder", () -> tree.currentItem() != null
+                && target.equals(tree.currentItem().getValue().path()));
+        waitUntil("its name starts inside the tree", () -> {
+            for (Node n : tree.lookupAll(".tree-cell")) {
+                if (n instanceof TreeCell<?> c && c.getTreeItem() == tree.currentItem() && c.getGraphic() != null) {
+                    var b = tree.sceneToLocal(c.getGraphic().localToScene(c.getGraphic().getBoundsInLocal()));
+                    return b.getMinX() >= 0 && b.getMinX() + 40 <= tree.getWidth();
+                }
+            }
+            return false;
+        });
+        open(robot, tab, tmp);
+    }
+
+    /** Whether the cell showing {@code item} lies fully inside the tree's viewport (FX thread). */
+    private static boolean inView(FolderTree tree, TreeItem<TreeNode> item) {
+        VirtualFlow<?> flow = (VirtualFlow<?>) tree.lookup(".virtual-flow");
+        int row = tree.getRow(item);
+        return flow.getFirstVisibleCell() != null && row > flow.getFirstVisibleCell().getIndex()
+                && row < flow.getLastVisibleCell().getIndex();
     }
 
     /** Waits until the cell showing {@code item} has exactly the {@code expected} current/on-path marks. */

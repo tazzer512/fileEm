@@ -293,7 +293,12 @@ tools/                                  make-icon.py, install-linux.sh (per-user
   it `:current` (boxed; themes give the box their selection's insets) and it and its parents
   `:on-path` (bold `.tree-name`), also while the tree has no focus. Branches `reveal` expanded are
   remembered (`autoExpanded`) and collapsed once the current folder leaves them; a branch the user
-  expands or collapses is theirs and left alone. Reveal scrolls the item 3 rows below the top.
+  expands or collapses is theirs and left alone. Every navigation scrolls the item into view
+  (`scrollToItem`: 3 rows below the top, and sideways when a deep name starts outside the tree),
+  also when the folder didn't change, except right after a click in the tree (`clicked`): the clicked
+  row stays put. Watcher refreshes don't call `tabNavigated`, so they never move the tree. The
+  horizontal range only settles in the next layout pass, so `scrollToItem` checks again in a
+  post-layout pulse listener.
   Scrolling and folding happen only while the tree is `shown()` (window showing; it catches up when
   the window appears): in the hidden/detached windows earlier UI tests leave behind they re-measure
   cells outside a shown scene and log hundreds of CSS lookup warnings.

@@ -15,14 +15,19 @@ import javafx.beans.value.ObservableValue;
 import javafx.collections.ListChangeListener;
 import javafx.collections.ObservableList;
 import javafx.css.PseudoClass;
+import javafx.geometry.Bounds;
+import javafx.geometry.Orientation;
 import javafx.geometry.Pos;
+import javafx.scene.Node;
 import javafx.scene.Scene;
 import javafx.scene.control.Button;
 import javafx.scene.control.ContextMenu;
 import javafx.scene.control.Label;
+import javafx.scene.control.ScrollBar;
 import javafx.scene.control.TreeCell;
 import javafx.scene.control.TreeItem;
 import javafx.scene.control.TreeView;
+import javafx.scene.control.skin.VirtualFlow;
 import javafx.scene.input.ClipboardContent;
 import javafx.scene.input.ContextMenuEvent;
 import javafx.scene.input.Dragboard;
@@ -67,6 +72,8 @@ final class FolderTree extends TreeView<TreeNode> {
     /** Items {@link #reveal} expanded (not the user): collapsed again once the path leaves them. */
     private final Set<TreeItem<TreeNode>> autoExpanded = Collections.newSetFromMap(new IdentityHashMap<>());
     private int autoExpanding;
+    /** The item the user just picked in the tree, until the navigation it started is revealed. */
+    private TreeItem<TreeNode> clicked;
     private final ObservableValue<Boolean> showing;
 
     FolderTree(MainWindow main, ExplorerSide side) {
@@ -98,6 +105,7 @@ final class FolderTree extends TreeView<TreeNode> {
             }
             FileTab tab = side.activeTab();
             if (tab != null) {
+                clicked = item; // already in view: the reveal after this navigation shouldn't move it
                 tab.navigateTo(item.getValue().path());
             }
         });
@@ -112,7 +120,7 @@ final class FolderTree extends TreeView<TreeNode> {
         showing = sceneProperty().flatMap(Scene::windowProperty).flatMap(Window::showingProperty).orElse(false);
         showing.addListener((o, was, now) -> {
             if (now && current.get() != null) {
-                Views.ensureVisible(this, getRow(current.get()), 3);
+                scrollToItem(current.get());
             }
         });
     }
@@ -263,9 +271,14 @@ final class FolderTree extends TreeView<TreeNode> {
         if (dir == null) {
             return;
         }
+        TreeItem<TreeNode> fromClick = clicked;
+        clicked = null;
         TreeItem<TreeNode> selected = getSelectionModel().getSelectedItem();
         if (selected != null && dir.equals(selected.getValue().path())) {
             markCurrent(selected);
+            if (selected != fromClick) {
+                scrollToItem(selected); // the same folder again (or another tab on it): show it
+            }
             return;
         }
         int token = ++revealToken;
@@ -337,9 +350,78 @@ final class FolderTree extends TreeView<TreeNode> {
         } finally {
             programmatic--;
         }
-        if (shown()) {
-            Views.ensureVisible(this, getRow(item), 3); // with its parents in view
+        scrollToItem(item);
+    }
+
+    /**
+     * Scrolls {@code item} into view: a few rows below the top so its parents show, and sideways
+     * when a deep folder's name lies outside the tree's width. Only for a tree on screen.
+     */
+    private void scrollToItem(TreeItem<TreeNode> item) {
+        if (!shown()) {
+            return;
         }
+        Views.ensureVisible(this, getRow(item), 3);
+        applyCss();
+        layout(); // places the cells at the new position
+        scrollSideways(item);
+        // rows just expanded and the horizontal range (it follows the widest row on screen; a value
+        // past the old range is clamped) may only settle in later layout passes: check after a few
+        Scene scene = getScene();
+        int[] passes = {0};
+        Runnable[] again = new Runnable[1];
+        again[0] = () -> {
+            boolean still = current.get() == item && shown();
+            if (++passes[0] == 3 || !still) {
+                scene.removePostLayoutPulseListener(again[0]);
+            }
+            if (still) {
+                Views.ensureVisible(this, getRow(item), 3); // a no-op when it is in view
+                applyCss();
+                layout();
+                scrollSideways(item);
+            }
+        };
+        scene.addPostLayoutPulseListener(again[0]);
+    }
+
+    /** Scrolls sideways when the start of {@code item}'s name lies outside the tree's width. */
+    private void scrollSideways(TreeItem<TreeNode> item) {
+        if (!(lookup(".virtual-flow") instanceof VirtualFlow<?> flow)) {
+            return;
+        }
+        ScrollBar hbar = null;
+        for (Node n : flow.lookupAll(".scroll-bar")) {
+            if (n instanceof ScrollBar b && b.getOrientation() == Orientation.HORIZONTAL && b.getParent() == flow) {
+                hbar = b;
+            }
+        }
+        if (hbar == null || !hbar.isVisible()) {
+            return;
+        }
+        for (Node n : flow.lookupAll(".tree-cell")) {
+            if (n instanceof TreeCell<?> cell && cell.getTreeItem() == item && cell.isVisible() && cell.getGraphic() != null) {
+                Node g = cell.getGraphic();
+                Bounds b = flow.sceneToLocal(g.localToScene(g.getBoundsInLocal()));
+                double view = flow.getWidth() - verticalBarWidth(flow);
+                double slack = 24; // keeps the disclosure arrow in view
+                if (b.getMinX() < slack || b.getMinX() + Math.min(b.getWidth(), 120) > view) { // icon + name start
+                    double x = hbar.getValue() + b.getMinX() - slack;
+                    hbar.setValue(Math.max(hbar.getMin(), Math.min(hbar.getMax(), x)));
+                }
+                return;
+            }
+        }
+    }
+
+    private static double verticalBarWidth(VirtualFlow<?> flow) {
+        for (Node n : flow.lookupAll(".scroll-bar")) {
+            if (n instanceof ScrollBar b && b.getOrientation() == Orientation.VERTICAL && b.getParent() == flow
+                    && b.isVisible()) {
+                return b.getWidth();
+            }
+        }
+        return 0;
     }
 
     /**
