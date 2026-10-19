@@ -97,7 +97,7 @@ fn delete(app: &Shared, paths: Vec<PathBuf>, permanent: bool) {
 }
 
 /// "“a.txt”" for one item, "3 items" for more.
-fn describe(paths: &[PathBuf]) -> String {
+pub(super) fn describe(paths: &[PathBuf]) -> String {
     match paths {
         [one] => format!("\u{201c}{}\u{201d}", fs_util::display_name(one)),
         many => format!("{} items", many.len()),
@@ -519,6 +519,8 @@ pub enum Dialog {
     Rename { src: PathBuf },
     New { dir: PathBuf, folder: bool },
     Transfer { sources: Vec<PathBuf>, mv: bool },
+    /// After a drop: Move (OK) or Copy (the alternative).
+    Drop { sources: Vec<PathBuf>, target: PathBuf },
     Quit,
 }
 
@@ -531,6 +533,8 @@ pub struct DialogSpec {
     select_all: bool,
     lines: Vec<String>,
     ok: String,
+    /// A second choice next to OK, empty for none.
+    pub alt: String,
     can_cancel: bool,
 }
 
@@ -543,6 +547,7 @@ impl DialogSpec {
             select_all: false,
             lines: Vec::new(),
             ok: "OK".into(),
+            alt: String::new(),
             can_cancel: false,
         }
     }
@@ -575,6 +580,7 @@ pub fn open_dialog(app: &Shared, dialog: Dialog, spec: DialogSpec) {
         spec.lines.into_iter().map(SharedString::from).collect::<Vec<_>>(),
     ))));
     ui.set_dialog_ok(spec.ok.into());
+    ui.set_dialog_alt(spec.alt.into());
     ui.set_dialog_can_cancel(spec.can_cancel);
     ui.set_dialog_open(true);
 }
@@ -668,6 +674,10 @@ pub fn dialog_accepted(app: &Shared, text: &str) {
                     }
                 },
             );
+        }
+        Dialog::Drop { sources, target } => {
+            close_dialog(app);
+            run_operation(app, Kind::Move, sources, Some(target));
         }
         Dialog::Quit => {
             close_dialog(app);

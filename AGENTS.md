@@ -18,9 +18,12 @@ remove or break it.
   `cargo clippy --workspace --all-targets` (warning free) next to `mvn test`, Java tests ported
   as Rust tests, UI behavior covered in `crates/fileem/tests/ui.rs`.
 - Cargo isn't on the default PATH here: `export PATH=$HOME/.cargo/bin:$PATH`.
+- Drag & drop in the Rust app works only inside its window (Slint 1.18 has no native drag on
+  winit); other applications exchange files through the clipboard. Don't promise more.
 - Always say plainly what the Rust app still lacks compared to the Java app (the open stages in
   `MIGRATION.md`); "stage done" never means "feature-complete".
-- The Rust controller keeps all state (`crates/fileem/src/app.rs` + `app/`); `.slint` files only
+- The Rust controller keeps all state (`crates/fileem/src/app.rs` + `app/`: `nav`, `commands`,
+  `keys`, `dnd`); `.slint` files only
   lay out and draw. Toolkit-free logic (`tab.rs`, `tree.rs`, `menu.rs`, `columns.rs`,
   `address.rs`, `properties.rs`) gets unit tests; UI behavior gets a scenario in
   `crates/fileem/tests/ui.rs`. Visual checks: `cargo test -p fileem --test snapshots -- --ignored`.

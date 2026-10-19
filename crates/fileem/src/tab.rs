@@ -37,6 +37,21 @@ pub struct Tab {
     selected: HashSet<PathBuf>,
     current: Option<PathBuf>,
     anchor: Option<PathBuf>,
+    /// While a selection box is drawn: the selection it started from, and whether it toggles
+    /// (Ctrl/Cmd) rather than adds.
+    boxing: Option<(HashSet<PathBuf>, bool)>,
+}
+
+/// The rows a selection box touches, from content offsets `a` and `b` (0 = top of the first
+/// row): `None` when it touches none (above the first row, or below the last).
+pub fn box_rows(a: f32, b: f32, row_height: f32, count: usize) -> Option<(usize, usize)> {
+    let (top, bottom) = (a.min(b), a.max(b));
+    if bottom < 0.0 || count == 0 || row_height <= 0.0 {
+        return None;
+    }
+    let lo = (top.max(0.0) / row_height).floor() as usize;
+    let hi = ((bottom / row_height).floor() as usize).min(count - 1);
+    (lo <= hi).then_some((lo, hi))
 }
 
 impl Default for Tab {
@@ -62,6 +77,7 @@ impl Tab {
             selected: HashSet::new(),
             current: None,
             anchor: None,
+            boxing: None,
         }
     }
 
@@ -251,6 +267,54 @@ impl Tab {
         self.current = Some(path);
     }
 
+    /// A left press on `row`. On a row of a larger selection without modifiers it only moves the
+    /// focus and returns true: the selection stays, so it can be dragged, and a `click` on release
+    /// (when no drag happened) selects the row alone. Otherwise it is a `click`.
+    pub fn press(&mut self, row: usize, ctrl: bool, shift: bool) -> bool {
+        if !ctrl && !shift && row < self.len() && self.is_selected(row) && self.selected.len() > 1 {
+            self.current = Some(self.row(row).path().to_path_buf());
+            return true;
+        }
+        self.click(row, ctrl, shift);
+        false
+    }
+
+    /// A selection box starts: Shift adds to the current selection, Ctrl/Cmd toggles rows in
+    /// it, plain replaces it.
+    pub fn start_box(&mut self, ctrl: bool, shift: bool) {
+        let base = if ctrl || shift { self.selected.clone() } else { HashSet::new() };
+        self.boxing = Some((base, ctrl));
+    }
+
+    pub fn is_boxing(&self) -> bool {
+        self.boxing.is_some()
+    }
+
+    /// The box now touches `rows` (see [`box_rows`]); the focus goes to the row under the mouse.
+    pub fn box_select(&mut self, rows: Option<(usize, usize)>, focus: usize) {
+        let Some((base, toggle)) = &self.boxing else { return };
+        let mut sel = base.clone();
+        if let Some((lo, hi)) = rows {
+            for r in lo..=hi.min(self.len().saturating_sub(1)) {
+                let p = self.row(r).path();
+                // toggling takes away what was selected; anything else is added
+                if !(*toggle && sel.remove(p)) {
+                    sel.insert(p.to_path_buf());
+                }
+            }
+        }
+        self.selected = sel;
+        if !self.is_empty() {
+            let p = self.row(focus.min(self.len() - 1)).path().to_path_buf();
+            self.anchor = Some(p.clone());
+            self.current = Some(p);
+        }
+    }
+
+    pub fn end_box(&mut self) {
+        self.boxing = None;
+    }
+
     /// A right-click: on a row that isn't selected it selects only that row (a selected row keeps
     /// the selection, so the menu acts on all of it); on empty space (`None`) it clears the
     /// selection, so the menu acts on the folder.
@@ -396,6 +460,57 @@ mod tests {
         assert_eq!((tab.filter(), tab.len()), ("", 1), "another folder clears it");
         tab.show(tmp.path().to_path_buf(), listing(tmp.path()), Nav::Back);
         assert_eq!(tab.status(), "4 items (1 hidden), 1 selected", "back selects the folder we came from");
+    }
+
+    #[test]
+    fn pressing_a_row_of_a_selection_keeps_it_for_dragging() {
+        let tmp = folder();
+        let mut tab = Tab::new();
+        tab.show(tmp.path().to_path_buf(), listing(tmp.path()), Nav::Go);
+        tab.click(1, false, false);
+        tab.click(3, false, true);
+        assert!(tab.press(2, false, false), "deferred: the selection may be dragged");
+        assert_eq!(tab.selected_paths().len(), 3);
+        assert_eq!(tab.current_row(), Some(2));
+        tab.click(2, false, false); // released without dragging
+        assert_eq!(tab.selected_paths(), [tab.row(2).path().to_path_buf()]);
+        assert!(!tab.press(2, false, false), "a lone selected row: a plain click");
+        assert!(!tab.press(1, true, false), "Ctrl toggles right away");
+        assert_eq!(tab.selected_paths().len(), 2);
+    }
+
+    #[test]
+    fn a_box_selects_the_rows_it_touches_adding_or_toggling_with_modifiers() {
+        assert_eq!(box_rows(5.0, 50.0, 24.0, 10), Some((0, 2)));
+        assert_eq!(box_rows(50.0, 5.0, 24.0, 10), Some((0, 2)), "either direction");
+        assert_eq!(box_rows(-30.0, 30.0, 24.0, 10), Some((0, 1)), "above the first row counts from it");
+        assert_eq!(box_rows(-30.0, -5.0, 24.0, 10), None, "entirely above");
+        assert_eq!(box_rows(500.0, 30.0, 24.0, 3), Some((1, 2)), "below the last row stops at it");
+        assert_eq!(box_rows(500.0, 600.0, 24.0, 3), None, "entirely below");
+
+        let tmp = folder();
+        let mut tab = Tab::new();
+        tab.show(tmp.path().to_path_buf(), listing(tmp.path()), Nav::Go);
+        let path = |tab: &Tab, r: usize| tab.row(r).path().to_path_buf();
+        tab.click(0, false, false);
+        tab.start_box(false, false);
+        tab.box_select(Some((1, 2)), 2);
+        assert_eq!(tab.selected_paths(), [path(&tab, 1), path(&tab, 2)], "plain replaces");
+        assert_eq!(tab.current_row(), Some(2));
+        tab.box_select(Some((2, 2)), 2);
+        assert_eq!(tab.selected_paths(), [path(&tab, 2)], "shrinking the box deselects");
+        tab.end_box();
+        assert!(!tab.is_boxing());
+
+        tab.start_box(false, true);
+        tab.box_select(Some((0, 0)), 0);
+        assert_eq!(tab.selected_paths(), [path(&tab, 0), path(&tab, 2)], "Shift adds");
+        tab.end_box();
+        tab.start_box(true, false);
+        tab.box_select(Some((0, 1)), 1);
+        assert_eq!(tab.selected_paths(), [path(&tab, 1), path(&tab, 2)], "Ctrl toggles");
+        tab.box_select(None, 0);
+        assert_eq!(tab.selected_paths(), [path(&tab, 0), path(&tab, 2)], "touching nothing: back to the start");
     }
 
     #[test]

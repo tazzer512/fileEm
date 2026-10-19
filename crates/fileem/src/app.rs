@@ -7,6 +7,7 @@
 //! - `keys`: the keyboard
 
 mod commands;
+mod dnd;
 mod keys;
 mod nav;
 
@@ -140,6 +141,9 @@ pub struct App {
     menu: Vec<Command>,
     /// Open Properties windows by id; the flag stops their folder walk.
     properties: Vec<(u64, PropertiesWindow, Arc<AtomicBool>)>,
+    /// A press on a row of the selection that waits for its release (side, row): see `Tab::press`.
+    late_press: Option<(usize, usize)>,
+    drag: dnd::Drag,
 }
 
 pub type Shared = Rc<RefCell<App>>;
@@ -234,6 +238,8 @@ pub fn install(ui: &AppWindow, session: Rc<Session>, start: Option<PathBuf>) -> 
         clipboard: Box::new(clipboard::System::default()),
         menu: Vec::new(),
         properties: Vec::new(),
+        late_press: None,
+        drag: dnd::Drag::default(),
     }));
     ui.set_side_split(session.get_f64("split.sides", 0.5).clamp(0.2, 0.8) as f32);
     let mut opening: Vec<(u64, PathBuf)> = Vec::new();
@@ -272,6 +278,10 @@ pub fn install(ui: &AppWindow, session: Rc<Session>, start: Option<PathBuf>) -> 
         }
     }
     wire(ui, &app);
+    // a drag needs something to carry; what is dragged is known here (dnd::drag_started)
+    let mut drag = slint::DataTransfer::default();
+    drag.set_plain_text("fileem".into());
+    ui.set_drag_data(drag);
     push_columns(&app);
     for s in 0..2 {
         sync_tabs(&app, s);
@@ -381,11 +391,14 @@ fn wire(ui: &AppWindow, app: &Shared) {
         app.borrow_mut().sides[side as usize].tree_width = width;
         push_view(app, side as usize);
     });
-    on!(on_row_pressed, app => |side, row, ctrl, shift| {
-        nav::set_active_side(app, side as usize);
-        app.borrow_mut().tab_mut().click(row as usize, ctrl, shift);
-        sync_selection(app, side as usize, false);
-    });
+    on!(on_row_pressed, app => |side, row, ctrl, shift| dnd::row_pressed(app, side as usize, row as usize, ctrl, shift));
+    on!(on_row_released, app => |side, row| dnd::row_released(app, side as usize, row as usize));
+    on!(on_box_start, app => |side, ctrl, shift| dnd::box_start(app, side as usize, ctrl, shift));
+    on!(on_box_moved, app => |side, anchor, mouse, height| dnd::box_moved(app, side as usize, anchor, mouse, height));
+    on!(on_box_ended, app => |side, drawn| dnd::box_ended(app, side as usize, drawn));
+    on!(on_drag_started, app => |side, area, row| dnd::drag_started(app, side as usize, area, row as usize));
+    on!(on_drop_check, app => |side, area, row| dnd::drop_check(app, side as usize, area, row));
+    on!(on_dropped, app => |side, area, row| dnd::dropped(app, side as usize, area, row));
     on!(on_row_activated, app => |side, row| {
         nav::set_active_side(app, side as usize);
         commands::activate(app, row as usize);
@@ -455,6 +468,7 @@ fn wire(ui: &AppWindow, app: &Shared) {
     on!(on_menu_activated, app => |id| commands::menu_activated(app, id));
     on!(on_dialog_accepted, app => |text| commands::dialog_accepted(app, &text));
     on!(on_dialog_cancelled, app => | | commands::close_dialog(app));
+    on!(on_dialog_alternative, app => | | dnd::copy_instead(app));
     on!(on_key, app => |text, ctrl, alt, shift| keys::key(app, &text, ctrl, alt, shift));
 }
 
@@ -586,6 +600,7 @@ fn sync_tree(app: &Shared, side: usize) {
                 expanded: n.expanded,
                 current: t.current() == Some(id),
                 on_path: t.on_path(id),
+                draggable: n.path.is_some() && matches!(n.kind, NodeKind::Folder | NodeKind::Quick),
                 icon: match n.kind {
                     NodeKind::Quick if n.depth == 0 && n.name == "Home" => 20,
                     NodeKind::Volume => 21,

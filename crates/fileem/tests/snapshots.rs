@@ -90,6 +90,14 @@ fn snapshots() {
     save(w.window(), "progress-conflict");
     app::ops(&a).running().iter().for_each(|h| h.cancel());
 
+    // the question after dropping a file onto a folder
+    ui.invoke_row_pressed(0, 2, false, false);
+    ui.invoke_drag_started(0, 0, 2);
+    ui.invoke_dropped(0, 0, 0);
+    pump_until("drop question", || ui.get_dialog_open());
+    save(ui.window(), "dialog-drop");
+    ui.invoke_dialog_cancelled();
+
     // a right-click menu on a file, and its Properties window
     ui.invoke_row_pressed(0, 1, false, false);
     ui.invoke_row_menu(0, 1);

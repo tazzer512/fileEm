@@ -164,6 +164,15 @@ impl Fixture {
             .unwrap_or_else(|| panic!("no tree row {name:?}"))
     }
 
+    /// Scrolls the left tree to its top with the mouse wheel.
+    fn scroll_tree_to_top(&self) {
+        let position = LogicalPosition::new(50.0, 300.0);
+        let w = self.ui.window();
+        w.dispatch_event(WindowEvent::PointerMoved { position });
+        w.dispatch_event(WindowEvent::PointerScrolled { position, delta_x: 0.0, delta_y: 100_000.0 });
+        pump();
+    }
+
     /// An item of the open menu, by its full title.
     fn menu_item(&self, title: &str) -> Option<ElementHandle> {
         ElementHandle::find_by_accessible_label(&self.ui, title).find(|e| e.size().width > 0.0)
@@ -207,6 +216,59 @@ impl Fixture {
 
     fn property(&self, w: &PropertiesWindow, label: &str) -> String {
         w.get_lines().iter().find(|l| l.label == label).map(|l| l.value.to_string()).unwrap_or_default()
+    }
+
+    /// A point on a list row's name (where a press drags files).
+    fn on_name(&self, name: &str) -> LogicalPosition {
+        let e = self.list_row(name);
+        LogicalPosition::new(e.absolute_position().x + 30.0, e.absolute_position().y + e.size().height / 2.0)
+    }
+
+    /// A point on a list row past its name, in the Size column (where a press starts a box).
+    fn on_size(&self, name: &str) -> LogicalPosition {
+        let e = self.list_row(name);
+        let x = e.absolute_position().x + self.ui.get_name_width() + 20.0;
+        LogicalPosition::new(x, e.absolute_position().y + e.size().height / 2.0)
+    }
+
+    fn center(&self, e: &ElementHandle) -> LogicalPosition {
+        let (pos, size) = (e.absolute_position(), e.size());
+        LogicalPosition::new(pos.x + (size.width / 2.0).min(30.0), pos.y + size.height / 2.0)
+    }
+
+    /// Presses at `from` and moves to `to` in steps, the button still down; `modifiers` are held
+    /// during the press.
+    fn drag_to(&self, from: LogicalPosition, to: LogicalPosition, modifiers: &[Key]) {
+        let w = self.ui.window();
+        w.dispatch_event(WindowEvent::PointerMoved { position: from });
+        for m in modifiers {
+            w.dispatch_event(WindowEvent::KeyPressed { text: (*m).into() });
+        }
+        w.dispatch_event(WindowEvent::PointerPressed { position: from, button: PointerEventButton::Left });
+        for m in modifiers.iter().rev() {
+            w.dispatch_event(WindowEvent::KeyReleased { text: (*m).into() });
+        }
+        // a list holds a press back for 100 ms (it might become a scroll); people hold that long
+        let start = Instant::now();
+        while start.elapsed() < Duration::from_millis(120) {
+            pump();
+        }
+        for step in 1..=10 {
+            let t = step as f32 / 10.0;
+            let position = LogicalPosition::new(from.x + (to.x - from.x) * t, from.y + (to.y - from.y) * t);
+            w.dispatch_event(WindowEvent::PointerMoved { position });
+        }
+    }
+
+    fn release(&self, at: LogicalPosition) {
+        self.ui.window().dispatch_event(WindowEvent::PointerReleased { position: at, button: PointerEventButton::Left });
+        pump();
+    }
+
+    /// A whole drag and drop.
+    fn drag_drop(&self, from: LogicalPosition, to: LogicalPosition) {
+        self.drag_to(from, to, &[]);
+        self.release(to);
     }
 
     fn double_click(&self, label: &str) {
@@ -292,6 +354,17 @@ fn ui() {
     the_session_restores_tabs_and_the_second_side();
     renaming_a_folder_moves_the_tabs_inside_it();
     both_lists_stay_usable_in_a_narrow_dual_window();
+    dragging_a_file_onto_a_folder_row_asks_then_moves();
+    choosing_copy_after_a_drop_onto_the_tree_keeps_the_original();
+    cancelling_the_drop_question_leaves_everything_alone();
+    drops_into_the_dragged_items_or_where_they_are_are_refused();
+    dragging_to_the_other_side_drops_into_its_folder();
+    a_press_on_a_selection_drags_all_of_it_and_a_click_selects_one();
+    a_tree_folder_can_be_dragged_into_the_list();
+    dragging_from_the_size_column_draws_a_box_that_selects_rows();
+    a_box_from_empty_space_selects_upwards_and_shift_adds();
+    ctrl_box_toggles_and_a_box_below_the_list_scrolls_it();
+    showing_the_second_side_keeps_the_left_scroll_position();
 }
 
 fn lists_folders_first_with_status_and_no_hidden_files() {
@@ -786,6 +859,10 @@ fn right_click_on_empty_space_offers_the_folder_menu() {
 fn right_click_in_the_tree_opens_a_menu_without_navigating() {
     let f = open_window();
     let home = fileem_core::util::os::home();
+    // the tree has revealed (and scrolled to) the current folder; Home is above it
+    wait_until(&f, "the tree marks the current folder", |f| f.tree().iter().any(|r| r.current));
+    settle(&f);
+    f.scroll_tree_to_top();
     f.right_click(&f.tree_row("Home"));
     settle(&f);
     assert_eq!(f.address(), f.dir, "a right-click doesn't navigate");
@@ -1068,4 +1145,203 @@ fn both_lists_stay_usable_in_a_narrow_dual_window() {
     for w in lists {
         assert!(w >= 200.0, "a file list keeps a usable width: {w}");
     }
+}
+
+// ---- drag & drop, selection box ----
+
+fn box_shown(f: &Fixture) -> bool {
+    ElementHandle::find_by_accessible_label(&f.ui, "Selection box").any(|e| e.size().height > 0.0)
+}
+
+fn answer_drop(f: &Fixture, button: &str) {
+    wait_until(f, "the move or copy question", |f| dialog_open(f) && f.ui.get_dialog_title() == "Move or copy");
+    f.button(button).invoke_accessible_default_action();
+    pump();
+}
+
+fn dragging_a_file_onto_a_folder_row_asks_then_moves() {
+    let f = open_window();
+    f.click("notes.txt");
+    f.drag_drop(f.on_name("notes.txt"), f.center(&f.list_row("alpha")));
+    wait_until(&f, "the question", dialog_open);
+    assert!(f.ui.get_dialog_message().contains("Move \u{201c}notes.txt\u{201d} to \u{201c}alpha\u{201d}?"), "{}", f.ui.get_dialog_message());
+    answer_drop(&f, "Move");
+    wait_until(&f, "moved into the folder", |f| f.dir.join("alpha/notes.txt").exists() && !f.dir.join("notes.txt").exists());
+    wait_until(&f, "the list follows", |f| !f.names().contains(&"notes.txt".to_string()));
+}
+
+fn choosing_copy_after_a_drop_onto_the_tree_keeps_the_original() {
+    let f = open_window();
+    // inside alpha the tree shows its siblings
+    f.double_click("alpha");
+    wait_until(&f, "alpha is open, the tree shows beta", |f| {
+        f.names() == ["inside.txt"]
+            && ElementHandle::find_by_accessible_label(&f.ui, "beta").any(|e| e.absolute_position().x < f.ui.get_left().tree_width)
+    });
+    f.click("inside.txt");
+    f.drag_drop(f.on_name("inside.txt"), f.center(&f.tree_row("beta")));
+    answer_drop(&f, "Copy");
+    wait_until(&f, "copied", |f| f.dir.join("beta/inside.txt").exists());
+    assert!(f.dir.join("alpha/inside.txt").exists(), "the original stays");
+    assert_eq!(fs::read_to_string(f.dir.join("beta/inside.txt")).unwrap(), "i");
+}
+fn cancelling_the_drop_question_leaves_everything_alone() {
+    let f = open_window();
+    f.click("a.png");
+    f.drag_drop(f.on_name("a.png"), f.center(&f.list_row("beta")));
+    answer_drop(&f, "Cancel");
+    assert!(!dialog_open(&f));
+    settle(&f);
+    assert!(app::ops(&f.app).running().is_empty(), "no operation started");
+    assert!(f.dir.join("a.png").exists() && !f.dir.join("beta/a.png").exists());
+}
+
+fn drops_into_the_dragged_items_or_where_they_are_are_refused() {
+    let f = open_window();
+    f.click("alpha");
+    // onto itself: refused as a row, and the folder it is in already holds it
+    f.drag_drop(f.on_name("alpha"), f.on_size("alpha"));
+    settle(&f);
+    assert!(!dialog_open(&f), "no question for a drop that can't happen");
+    // onto a file: the shown folder, where it already is
+    f.drag_drop(f.on_name("alpha"), f.on_name("notes.txt"));
+    settle(&f);
+    assert!(!dialog_open(&f));
+    assert!(f.dir.join("alpha/inside.txt").exists());
+}
+
+fn dragging_to_the_other_side_drops_into_its_folder() {
+    let f = open_window();
+    f.key(Key::F9);
+    f.ui.invoke_address_entered(1, f.dir.join("beta").display().to_string().into());
+    wait_until(&f, "the right side in beta", |f| f.ui.get_right().address == f.dir.join("beta").display().to_string());
+    f.ui.invoke_activate(0);
+    f.click("notes.txt");
+    // the right list's empty space
+    let status = ElementHandle::find_by_accessible_label(&f.ui, "Status").max_by(|a, b| a.absolute_position().x.total_cmp(&b.absolute_position().x)).unwrap();
+    let target = LogicalPosition::new(status.absolute_position().x + 100.0, status.absolute_position().y - 100.0);
+    f.drag_drop(f.on_name("notes.txt"), target);
+    assert!(f.ui.get_dialog_message().contains("\u{201c}beta\u{201d}"), "{}", f.ui.get_dialog_message());
+    answer_drop(&f, "Move");
+    wait_until(&f, "moved to the other side", |f| {
+        f.ui.get_right().files.iter().any(|r| r.name == "notes.txt") && !f.dir.join("notes.txt").exists()
+    });
+}
+
+fn ctrl_click(f: &Fixture, name: &str) {
+    f.ui.window().dispatch_event(WindowEvent::KeyPressed { text: Key::Control.into() });
+    f.click_at(&f.list_row(name));
+    f.ui.window().dispatch_event(WindowEvent::KeyReleased { text: Key::Control.into() });
+}
+
+fn a_press_on_a_selection_drags_all_of_it_and_a_click_selects_one() {
+    let f = open_window();
+    f.click("a.png");
+    ctrl_click(&f, "big.bin");
+    assert_eq!(f.selected(), ["a.png", "big.bin"]);
+    f.click_at(&f.list_row("big.bin"));
+    assert_eq!(f.selected(), ["big.bin"], "a click without a drag selects the row alone, on release");
+
+    ctrl_click(&f, "a.png");
+    f.drag_to(f.on_name("big.bin"), f.center(&f.list_row("alpha")), &[]);
+    assert_eq!(f.selected(), ["a.png", "big.bin"], "pressing a selected row keeps the selection");
+    f.release(f.center(&f.list_row("alpha")));
+    assert!(f.ui.get_dialog_message().contains("Move 2 items"), "{}", f.ui.get_dialog_message());
+    answer_drop(&f, "Move");
+    wait_until(&f, "both moved", |f| f.dir.join("alpha/a.png").exists() && f.dir.join("alpha/big.bin").exists());
+}
+
+fn a_tree_folder_can_be_dragged_into_the_list() {
+    let f = open_window();
+    f.double_click("alpha");
+    wait_until(&f, "alpha is open, the tree shows beta", |f| {
+        f.names() == ["inside.txt"]
+            && ElementHandle::find_by_accessible_label(&f.ui, "beta").any(|e| e.absolute_position().x < f.ui.get_left().tree_width)
+    });
+    let empty = {
+        let row = f.list_row("inside.txt");
+        LogicalPosition::new(row.absolute_position().x + 200.0, row.absolute_position().y + 100.0)
+    };
+    f.drag_drop(f.center(&f.tree_row("beta")), empty);
+    answer_drop(&f, "Copy");
+    wait_until(&f, "copied into the shown folder", |f| f.dir.join("alpha/beta").is_dir());
+    assert!(f.dir.join("beta").is_dir());
+    assert_eq!(f.address(), f.dir.join("alpha"), "the press in the tree did not navigate");
+}
+fn dragging_from_the_size_column_draws_a_box_that_selects_rows() {
+    let f = open_window();
+    f.click("notes.txt");
+    f.drag_to(f.on_size("alpha"), f.on_size("a.png"), &[]);
+    assert!(box_shown(&f), "the box is drawn while dragging");
+    assert_eq!(f.selected(), ["alpha", "beta", "a.png"]);
+    f.release(f.on_size("a.png"));
+    assert!(!box_shown(&f), "gone after the release");
+    assert_eq!(f.selected(), ["alpha", "beta", "a.png"], "a release in a row doesn't reselect it");
+    assert_eq!(f.current().as_deref(), Some("a.png"));
+    settle(&f);
+    assert!(!dialog_open(&f), "nothing was dropped");
+    assert!(f.dir.join("alpha").exists() && f.dir.join("notes.txt").exists());
+}
+
+fn a_box_from_empty_space_selects_upwards_and_shift_adds() {
+    let f = open_window();
+    f.click("alpha");
+    let last = f.list_row("notes.txt");
+    let below = LogicalPosition::new(last.absolute_position().x + 400.0, last.absolute_position().y + 80.0);
+    f.drag_to(below, f.on_size("big.bin"), &[Key::Shift]);
+    f.release(f.on_size("big.bin"));
+    assert_eq!(f.selected(), ["alpha", "big.bin", "notes.txt"]);
+
+    // a plain box replaces the selection; a click in empty space clears it
+    f.drag_to(below, f.on_size("notes.txt"), &[]);
+    f.release(f.on_size("notes.txt"));
+    assert_eq!(f.selected(), ["notes.txt"]);
+    f.click_at(&f.list_row("notes.txt"));
+    let w = f.ui.window();
+    w.dispatch_event(WindowEvent::PointerPressed { position: below, button: PointerEventButton::Left });
+    w.dispatch_event(WindowEvent::PointerReleased { position: below, button: PointerEventButton::Left });
+    assert!(f.selected().is_empty());
+}
+
+fn ctrl_box_toggles_and_a_box_below_the_list_scrolls_it() {
+    let f = open_window();
+    f.click("alpha");
+    f.drag_to(f.on_size("alpha"), f.on_size("beta"), &[Key::Control]);
+    f.release(f.on_size("beta"));
+    assert_eq!(f.selected(), ["beta"], "alpha toggled off, beta on");
+
+    // a long folder in a short window: dragging below the list scrolls it and selects on
+    let many = f.dir.join("many");
+    fs::create_dir(&many).unwrap();
+    for i in 0..60 {
+        fs::write(many.join(format!("f{i:02}.txt")), "x").unwrap();
+    }
+    f.ui.invoke_address_entered(0, many.display().to_string().into());
+    wait_until(&f, "many listed", |f| f.names().len() == 60);
+    let status = f.element("Status");
+    let below = LogicalPosition::new(status.absolute_position().x + 200.0, status.absolute_position().y + 10.0);
+    f.drag_to(f.on_size("f00.txt"), below, &[]);
+    wait_until(&f, "scrolled to the end", |f| f.selected().len() == 60);
+    f.release(below);
+    assert_eq!(f.current().as_deref(), Some("f59.txt"));
+}
+
+fn showing_the_second_side_keeps_the_left_scroll_position() {
+    let f = open_window();
+    let many = f.dir.join("many");
+    fs::create_dir(&many).unwrap();
+    for i in 0..60 {
+        fs::write(many.join(format!("f{i:02}.txt")), "x").unwrap();
+    }
+    f.ui.invoke_address_entered(0, many.display().to_string().into());
+    wait_until(&f, "many listed", |f| f.names().len() == 60);
+    f.key(Key::End);
+    pump();
+    let y = f.list_row("f59.txt").absolute_position().y;
+    f.key(Key::F9);
+    pump();
+    f.key(Key::F9);
+    pump();
+    // regression: toggling rebuilt the left side, back at the top with f59 out of view
+    assert_eq!(f.list_row("f59.txt").absolute_position().y, y);
 }

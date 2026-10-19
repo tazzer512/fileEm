@@ -56,6 +56,8 @@ crates/fileem/             the app
   src/app/nav.rs           listings per tab, watching, trees, tabs, sides (Java ExplorerSide/FileTab)
   src/app/commands.rs      operations, clipboard, dialogs, menus, properties
   src/app/keys.rs          the keyboard handler (Java MainWindow.onKey)
+  src/app/dnd.rs           selection box, drag & drop inside the window, Move/Copy question
+                           (Java Marquee, Dnd, MainWindow.drop)
   src/tab.rs, tree.rs      tab (rows, filter, selection) and tree state, toolkit-free, unit-tested
   src/columns.rs           details columns: visible, widths, session (Java FileTable)
   src/address.rs           breadcrumbs and typed paths (Java AddressBar)
@@ -77,7 +79,10 @@ are found by accessible label (debug builds compile the UI with element info for
 `wait_until(..)`, which pumps the event loop; never sleep. The window's state is read through
 `Fixture::view()` (the active side's `SideView`) and `app::tabs`, `app::active_side`,
 `app::is_dual`; items inside an open menu are clicked with `Fixture::pick` (it adds the popup's
-offset).
+offset). Mouse drags: `Fixture::drag_to(from, to, modifiers)` (waits 120 ms after the press, as
+a list holds presses back 100 ms) + `release`, or `drag_drop`; `on_name` / `on_size` give a
+row's name (drags files) or Size cell (starts a box). The tree scrolls to the current folder:
+`scroll_tree_to_top` before clicking rows above it, after waiting for the reveal.
 
 ## Differences from the Java version (on purpose)
 

@@ -8,9 +8,9 @@ rules (tests, integrity, conventions) that apply to both versions.
 executable with a much smaller memory footprint (measured: Java ~360 MB, Rust ~105 MB with
 OpenGL, ~32 MB with the software renderer).
 
-**Status (2026-10-19)**: stages 0–3 done on branch `rust`. The Java app in `src/` is still the
-complete, daily-use version; nothing was removed from it. Next: stage 4 (drag & drop, selection
-box).
+**Status (2026-10-19)**: stages 0–4 done on branch `rust`. The Java app in `src/` is still the
+complete, daily-use version; nothing was removed from it. Next: stage 5 (view modes,
+thumbnails).
 
 ## How to work a stage
 
@@ -162,14 +162,31 @@ are the Java sources, as a size hint.
 - Not yet: the F-key bar at the bottom (Java has one with F5 Copy, F6 Move, …), dragging tabs or
   columns to reorder them, per-tab view modes (stage 5).
 
-### Stage 4: drag & drop and selection box
+### Stage 4: drag & drop and selection box (done)
 
-- Rubber-band selection (`Marquee` 258): press outside a row's name starts the box; autoscroll;
-  Shift adds, Ctrl toggles.
-- Internal drag & drop between list, tree, tabs and sides: always asks Move/Copy/Cancel after
-  the drop (`MainWindow.drop` → `moveOrCopy`).
-- **Risk**: drag & drop to and from other applications. Check what Slint/winit support at that
-  point; fallbacks: platform code per OS, or clipboard only. Decide before building on it.
+- [x] **Selection box** (Java `Marquee`): a press on a row past its icon + name (4 px slack), or
+  on empty space, draws a box once moved 4 px; it selects the rows it touches (`tab::box_rows`,
+  content coordinates so autoscroll keeps the anchor), Shift adds, Ctrl/Cmd toggles, plain
+  replaces; the focus follows the mouse row. Above/below the list it scrolls (a Slint `Timer`).
+  `Tab::start_box / box_select / end_box`.
+- [x] **Drag & drop inside the window**: list rows (by icon + name) and tree folders (not
+  section titles or drives) drag; drop targets are folder rows, the list's empty space (the
+  shown folder), tree folders, in either side. Refused (no mark, no question) into the dragged
+  items themselves or where they all already are (`fs_util::can_drop`, paths only, cached per
+  hovered row). Every drop asks Move (default) / Copy / Cancel in the dialog overlay, after the
+  drop event (`Dialog::Drop`, the dialog's new `alt` button). A press on a row of a larger
+  selection keeps the selection until release (`Tab::press`), so several files drag together.
+  `app/dnd.rs`; Slint: `DragArea`/`DropArea` in `side.slint`.
+- [x] Fixed on the way (stage 3): showing/hiding the second side rebuilt the left side (scroll
+  positions lost): both panes always exist now. The tree's scroll to the current folder could be
+  undone by the list clamping before it had measured new rows.
+- **Decided**: drags to and from other applications are not possible with Slint 1.18: its winit
+  backend implements no native drag (`WindowAdapterInternal::start_drag` stays the default) and
+  ignores dropped files. The clipboard works with other file managers instead. Revisit when Slint
+  adds native drag (tracking issue slint-ui/slint#1967); `DataTransfer::set_file_paths` is
+  already there, so the payload would carry the paths then.
+- Not yet: the drag image (Slint draws none unless `drag-image` is set), drag & drop in the
+  other view modes (stage 5).
 
 ### Stage 5: view modes and thumbnails
 
@@ -229,8 +246,9 @@ are the Java sources, as a size hint.
   terminal.
 - A `ListView` inside a plain `Rectangle` doesn't stretch; put it in a layout.
 - `viewport-y` is deprecated: use `content-y`. Scrolling right after a model change gets clamped
-  (rows not measured yet): keep a pending target and re-apply it in `changed visible-height` /
-  `changed viewport-height` handlers until the row is in view (`apply-tree-scroll`).
+  (rows not measured yet, also a moment *after* the scroll was set): keep a pending target and
+  re-apply it in `changed visible-height` / `changed content-height` handlers until the row is
+  in view *and* `content-height` reaches it (`apply-tree-scroll`).
 - Special keys arrive as private-use characters: compare with `char::from(Key::…)`.
 - Testing backend: init once per process (one `#[test]` with scenarios); compile the UI with
   `with_debug_info(true)` (debug builds only) or element search finds nothing; give the window
@@ -267,3 +285,11 @@ are the Java sources, as a size hint.
   left end (`Fixture::click_at`).
 - `Window` already has `icon` and similar properties: a component inheriting `Window` can't
   declare its own (`item-icon`); `GridLayout` rows from a `for` set `col` themselves.
+- `DragArea` checks `enabled` on every move: never bind it to the child `TouchArea`'s
+  `has-hover`, which turns false the moment the drag intercepts the child (the drag cancels
+  itself). Its `data` must be non-empty before the press. `changed dragging` runs later than
+  the drag starts but before the drop, so the controller learns the source there.
+- A `ListView` (Flickable) holds a left press back for 100 ms when it can scroll; UI tests wait
+  that long after pressing before they move (`Fixture::drag_to`).
+- A `for s in (cond ? 2 : 1)` repeater rebuilds every instance when the count changes; keep a
+  fixed count and hide what isn't shown.

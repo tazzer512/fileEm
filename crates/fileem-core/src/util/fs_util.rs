@@ -65,6 +65,17 @@ pub fn is_same_or_inside(target: &Path, folder: &Path) -> bool {
     normalize(target).starts_with(normalize(folder))
 }
 
+/// Whether dragged `sources` may be dropped into `target`: never into one of themselves (or a
+/// folder inside one), and not when they all already are in `target`. Paths only: no file system
+/// calls, so it is cheap enough for every mouse move.
+pub fn can_drop(sources: &[PathBuf], target: &Path) -> bool {
+    if sources.is_empty() || sources.iter().any(|s| is_same_or_inside(target, s)) {
+        return false;
+    }
+    let target = normalize(target);
+    !sources.iter().all(|s| s.parent().map(normalize).as_deref() == Some(target.as_path()))
+}
+
 /// Whether something exists at `p`, without following a final link (a broken link exists).
 pub fn exists_nofollow(p: &Path) -> bool {
     p.symlink_metadata().is_ok()
@@ -289,6 +300,20 @@ mod tests {
         assert!(is_same_or_inside(&d.join("a/x/../b"), &d.join("a")));
         assert!(!is_same_or_inside(&d.join("ab"), &d.join("a")), "prefix of name is not inside");
         assert!(!is_same_or_inside(&d.join("a"), &d.join("a/b")));
+    }
+
+    #[test]
+    fn drops_are_refused_into_the_sources_themselves_and_where_they_already_are() {
+        let d = Path::new("/data");
+        let (a, b) = (d.join("a"), d.join("b"));
+        let just_a = std::slice::from_ref(&a);
+        assert!(can_drop(just_a, &b), "a sibling folder");
+        assert!(!can_drop(just_a, &a), "onto itself");
+        assert!(!can_drop(just_a, &a.join("x/y")), "into a folder inside it");
+        assert!(!can_drop(&[a.clone(), d.join("f.txt")], d), "all already in the target");
+        assert!(can_drop(&[a.clone(), b.join("f.txt")], d), "one of them comes from elsewhere");
+        assert!(can_drop(&[d.join("ab/f")], &d.join("a")), "a name prefix is not inside");
+        assert!(!can_drop(&[], d), "nothing dragged");
     }
 
     #[cfg(unix)]

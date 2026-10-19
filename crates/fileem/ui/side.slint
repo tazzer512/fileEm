@@ -33,6 +33,8 @@ export struct TreeRow {
     current: bool,
     on-path: bool,
     icon: int,
+    // a folder that can be dragged (not a section title or a drive)
+    draggable: bool,
 }
 
 export struct TabRow {
@@ -143,6 +145,8 @@ export component SidePane {
     in property <bool> keys-focused;
     in property <bool> dual;
     out property <length> row-height: 24px;
+    // what a drag carries; the controller knows what was dragged (`drag-started`)
+    in property <data-transfer> drag-data;
 
     // any press in this side makes it the active one
     callback activate(int);
@@ -171,8 +175,81 @@ export component SidePane {
     callback crumb-clicked(int, int);
     callback address-entered(int, string);
     callback filter-edited(int, string);
+    // a press on a row of a selection kept it (for dragging); a release without a drag selects the row
+    callback row-released(int, int);
+    // selection box: side, ctrl/cmd, shift
+    callback box-start(int, bool, bool);
+    // side, anchor and mouse in content coordinates (0: top of the first row), row height
+    callback box-moved(int, length, length, length);
+    // side, whether a box was drawn (not just a click)
+    callback box-ended(int, bool);
+    // side, 0 list / 1 tree, row
+    callback drag-started(int, int, int);
+    // side, 0 list / 1 tree, row under the mouse (-1: none); returns the row to mark, -1 when
+    // accepted into the shown folder, -2 when refused
+    callback drop-check(int, int, int) -> int;
+    callback dropped(int, int, int);
 
     property <bool> focused: keys-focused && view.active;
+
+    // ---- drop targets (-2: none) ----
+    property <int> drop-row: -2;
+    property <int> tree-drop-row: -2;
+
+    pure function list-row-at(y: length) -> int {
+        return y - list.content-y < 0 ? -1 : floor((y - list.content-y) / row-height) < view.files.length
+            ? floor((y - list.content-y) / row-height) : -1;
+    }
+
+    pure function tree-row-at(y: length) -> int {
+        return y - tree-list.content-y < 0 ? -1 : floor((y - tree-list.content-y) / 24px) < view.tree.length
+            ? floor((y - tree-list.content-y) / 24px) : -1;
+    }
+
+    // ---- selection box: anchor in content coordinates, mouse in the list's ----
+    property <bool> box-armed;
+    property <bool> box-active;
+    property <length> box-ax;
+    property <length> box-ay;
+    property <length> box-mx;
+    property <length> box-my;
+
+    function box-press(x: length, y: length, ctrl: bool, shift: bool) {
+        box-armed = true;
+        box-active = false;
+        box-ax = x - list.content-x;
+        box-ay = y - list.content-y;
+        box-mx = x;
+        box-my = y;
+        root.box-start(root.side, ctrl, shift);
+    }
+
+    function box-drag(x: length, y: length) {
+        if (!box-armed) {
+            return;
+        }
+        box-mx = x;
+        box-my = y;
+        if (!box-active) {
+            if (abs(x - (box-ax + list.content-x)) < 4px && abs(y - (box-ay + list.content-y)) < 4px) {
+                return;
+            }
+            box-active = true;
+        }
+        box-update();
+    }
+
+    function box-update() {
+        root.box-moved(root.side, box-ay, box-my - list.content-y, row-height);
+    }
+
+    function box-release() {
+        if (box-armed) {
+            root.box-ended(root.side, box-active);
+        }
+        box-armed = false;
+        box-active = false;
+    }
 
     pure function cell(row: FileRow, col: int) -> string {
         return col == 1 ? row.size : col == 2 ? row.kind : col == 3 ? row.modified : col == 4 ? row.created
@@ -219,7 +296,7 @@ export component SidePane {
     }
     // Row the tree should scroll to (3 rows below the top, unless already in view); -1 once done.
     // Re-applied when the list's heights change: right after the rows change it hasn't measured
-    // them yet, and the scroll would be clamped.
+    // them yet, and the scroll would be clamped (the list does that a moment later, too).
     property <int> tree-target: -1;
     property <int> tree-seq: view.tree-seq;
     changed tree-seq => {
@@ -234,7 +311,10 @@ export component SidePane {
         if (tree-target * 24px < -tree-list.content-y || (tree-target + 1) * 24px > -tree-list.content-y + tree-list.visible-height) {
             tree-list.content-y = -max(0px, (tree-target - 3) * 24px);
         }
-        if (tree-target * 24px >= -tree-list.content-y && (tree-target + 1) * 24px <= -tree-list.content-y + tree-list.visible-height) {
+        // done once in view, and only once the list has measured rows down to it: until then
+        // the list clamps the scroll back
+        if (tree-target * 24px >= -tree-list.content-y && (tree-target + 1) * 24px <= -tree-list.content-y + tree-list.visible-height
+                && (tree-target + 1) * 24px <= tree-list.content-height) {
             tree-target = -1;
         }
     }
@@ -244,9 +324,10 @@ export component SidePane {
         VerticalLayout {
             // the file list keeps a usable width in a narrow window; the tree gives way
             width: max(80px, min(root.view.tree-width, root.width - 265px));
+            Rectangle {
             tree-list := ListView {
                 changed visible-height => { root.apply-tree-scroll(); }
-                changed viewport-height => { root.apply-tree-scroll(); }
+                changed content-height => { root.apply-tree-scroll(); }
                 for row[i] in root.view.tree: Rectangle {
                     height: 24px;
                     accessible-role: list-item;
@@ -255,11 +336,22 @@ export component SidePane {
                         x: 4px;
                         width: parent.width - 8px;
                         border-radius: 4px;
-                        background: row.current ? Palette.accent-background.with-alpha(0.18)
+                        background: i == root.tree-drop-row ? Palette.accent-background.with-alpha(0.3)
+                            : row.current ? Palette.accent-background.with-alpha(0.18)
                             : tree-touch.has-hover && !row.header ? Palette.foreground.with-alpha(0.06) : transparent;
-                        border-width: row.current ? 1px : 0px;
+                        border-width: row.current || i == root.tree-drop-row ? 1px : 0px;
                         border-color: Palette.accent-background.with-alpha(0.6);
                     }
+                    DragArea {
+                        enabled: row.draggable;
+                        data: root.drag-data;
+                        allow-move: true;
+                        allow-copy: true;
+                        changed dragging => {
+                            if (self.dragging) {
+                                root.drag-started(root.side, 1, i);
+                            }
+                        }
                     tree-touch := TouchArea {
                         pointer-event(event) => {
                             if (event.kind == PointerEventKind.down) {
@@ -282,6 +374,7 @@ export component SidePane {
                                 root.tree-toggled(root.side, i);
                             }
                         }
+                    }
                     }
                     HorizontalLayout {
                         padding-left: 6px + row.depth * 14px;
@@ -317,6 +410,24 @@ export component SidePane {
                         }
                     }
                 }
+            }
+            // drops onto a folder of the tree
+            DropArea {
+                can-drop(event) => {
+                    root.tree-drop-row = root.drop-check(root.side, 1, root.tree-row-at(event.position.y));
+                    return root.tree-drop-row >= 0 ? DragAction.move : DragAction.none;
+                }
+                dropped(event) => {
+                    root.tree-drop-row = -2;
+                    root.dropped(root.side, 1, root.tree-row-at(event.position.y));
+                    return DragAction.copy;
+                }
+                changed has-drag => {
+                    if (!self.has-drag) {
+                        root.tree-drop-row = -2;
+                    }
+                }
+            }
             }
         }
 
@@ -567,26 +678,44 @@ export component SidePane {
                             root.focus-keys();
                         }
                         if (event.kind == PointerEventKind.down && event.button == PointerEventButton.left) {
+                            root.box-press(self.mouse-x, self.mouse-y, event.modifiers.control || event.modifiers.meta, event.modifiers.shift);
                             root.empty-pressed(root.side);
+                        }
+                        if (event.kind == PointerEventKind.up && event.button == PointerEventButton.left) {
+                            root.box-release();
                         }
                         if (event.kind == PointerEventKind.down && event.button == PointerEventButton.right) {
                             root.row-menu(root.side, -1);
                             root.show-menu(self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y);
                         }
                     }
+                    moved => { root.box-drag(self.mouse-x, self.mouse-y); }
                 }
                 list := ListView {
                     content-width: max(root.columns-width, self.visible-width);
-                    for row[i] in root.view.files: Rectangle {
+                    for row[i] in root.view.files: file-row := Rectangle {
                         height: root.row-height;
                         width: max(root.columns-width, list.visible-width);
                         accessible-role: list-item;
                         accessible-label: row.name;
                         accessible-item-selected: row.selected;
-                        background: row.selected ? Palette.selection-background.with-alpha(root.focused ? 1.0 : 0.45)
+                        // files are dragged by their icon and name; elsewhere a press starts a selection box
+                        property <bool> on-name: row-touch.mouse-x <= name-text.x + min(name-text.width, name-text.preferred-width) + 4px;
+                        background: i == root.drop-row ? Palette.accent-background.with-alpha(0.3)
+                            : row.selected ? Palette.selection-background.with-alpha(root.focused ? 1.0 : 0.45)
                             : row-touch.has-hover ? Palette.foreground.with-alpha(0.05) : transparent;
-                        border-width: row.current && root.focused ? 1px : 0px;
+                        border-width: (row.current && root.focused) || i == root.drop-row ? 1px : 0px;
                         border-color: Palette.accent-background;
+                        row-drag := DragArea {
+                            enabled: file-row.on-name && !root.box-armed;
+                            data: root.drag-data;
+                            allow-move: true;
+                            allow-copy: true;
+                            changed dragging => {
+                                if (self.dragging) {
+                                    root.drag-started(root.side, 0, i);
+                                }
+                            }
                         row-touch := TouchArea {
                             pointer-event(event) => {
                                 if (event.kind == PointerEventKind.down) {
@@ -594,14 +723,26 @@ export component SidePane {
                                     root.focus-keys();
                                 }
                                 if (event.kind == PointerEventKind.down && event.button == PointerEventButton.left) {
+                                    if (!file-row.on-name) {
+                                        root.box-press(list.content-x + self.mouse-x, list.content-y + i * root.row-height + self.mouse-y,
+                                            event.modifiers.control || event.modifiers.meta, event.modifiers.shift);
+                                    }
                                     root.row-pressed(root.side, i, event.modifiers.control || event.modifiers.meta, event.modifiers.shift);
+                                }
+                                if (event.kind == PointerEventKind.up && event.button == PointerEventButton.left) {
+                                    root.box-release();
                                 }
                                 if (event.kind == PointerEventKind.down && event.button == PointerEventButton.right) {
                                     root.row-menu(root.side, i);
                                     root.show-menu(self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y);
                                 }
                             }
+                            moved => {
+                                root.box-drag(list.content-x + self.mouse-x, list.content-y + i * root.row-height + self.mouse-y);
+                            }
+                            clicked => { root.row-released(root.side, i); }
                             double-clicked => { root.row-activated(root.side, i); }
+                        }
                         }
                         HorizontalLayout {
                             property <color> fg: row.selected && root.focused ? Palette.selection-foreground : Palette.foreground;
@@ -615,7 +756,7 @@ export component SidePane {
                                     alignment: center;
                                     FileIcon { kind: row.icon; dimmed: row.hidden; }
                                 }
-                                Text {
+                                name-text := Text {
                                     text: row.name;
                                     vertical-alignment: center;
                                     overflow: elide;
@@ -635,6 +776,49 @@ export component SidePane {
                                     color: fg.with-alpha(0.8);
                                 }
                             }
+                        }
+                    }
+                }
+                // the selection box, clipped to the list
+                if root.box-active: Rectangle {
+                    property <length> x1: clamp(root.box-ax + list.content-x, 0px, list.visible-width);
+                    property <length> y1: clamp(root.box-ay + list.content-y, 0px, list.visible-height);
+                    property <length> x2: clamp(root.box-mx, 0px, list.visible-width);
+                    property <length> y2: clamp(root.box-my, 0px, list.visible-height);
+                    x: min(x1, x2);
+                    y: min(y1, y2);
+                    width: abs(x2 - x1);
+                    height: abs(y2 - y1);
+                    background: Palette.accent-background.with-alpha(0.15);
+                    border-width: 1px;
+                    border-color: Palette.accent-background;
+                    accessible-role: groupbox;
+                    accessible-label: "Selection box";
+                }
+                // above or below the list while drawing a box: scroll
+                Timer {
+                    interval: 30ms;
+                    running: root.box-active && (root.box-my < 0 || root.box-my > list.visible-height);
+                    triggered => {
+                        list.content-y = clamp(list.content-y - clamp((root.box-my < 0 ? root.box-my : root.box-my - list.visible-height) / 2, -40px, 40px),
+                            min(0px, list.visible-height - list.content-height), 0px);
+                        root.box-update();
+                    }
+                }
+                // drops onto a folder row, or anywhere else into the shown folder
+                DropArea {
+                    can-drop(event) => {
+                        root.drop-row = root.drop-check(root.side, 0, root.list-row-at(event.position.y));
+                        return root.drop-row >= -1 ? DragAction.move : DragAction.none;
+                    }
+                    dropped(event) => {
+                        root.drop-row = -2;
+                        root.dropped(root.side, 0, root.list-row-at(event.position.y));
+                        return DragAction.copy;
+                    }
+                    changed has-drag => {
+                        if (!self.has-drag) {
+                            root.drop-row = -2;
                         }
                     }
                 }

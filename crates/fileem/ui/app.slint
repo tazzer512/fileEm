@@ -70,6 +70,15 @@ export component AppWindow inherits Window {
     callback crumb-clicked(int, int);
     callback address-entered(int, string);
     callback filter-edited(int, string);
+    callback row-released(int, int);
+    callback box-start(int, bool, bool);
+    callback box-moved(int, length, length, length);
+    callback box-ended(int, bool);
+    // ---- drag & drop inside the window (see SidePane) ----
+    in property <data-transfer> drag-data;
+    callback drag-started(int, int, int);
+    callback drop-check(int, int, int) -> int;
+    callback dropped(int, int, int);
     // the directory watcher saw changes in a tab's folder (token: which watch)
     callback dir-changed(int);
 
@@ -100,6 +109,9 @@ export component AppWindow inherits Window {
     in property <[string]> dialog-lines;
     in property <string> dialog-ok: "OK";
     in property <bool> dialog-can-cancel: true;
+    // a second choice next to OK (Copy next to Move), empty for none
+    in property <string> dialog-alt;
+    callback dialog-alternative();
     callback dialog-accepted(string);
     callback dialog-cancelled();
     // key text (slint::platform::Key for special keys), ctrl/cmd, alt, shift; true when handled
@@ -181,19 +193,30 @@ export component AppWindow inherits Window {
             // placed by hand, not by a layout: their widths follow the divider
             sides := Rectangle {
                 property <length> split-x: (self.width - 5px) * root.side-split;
-                for s in (root.dual ? 2 : 1): SidePane {
+                // both always exist (the right one hidden without the second side): showing it
+                // must not rebuild the left one, which would lose its scroll positions
+                for s in 2: SidePane {
                     side: s;
-                    x: s == 0 ? 0px : sides.split-x + 5px;
+                    visible: s == 0 || root.dual;
+                    x: s == 0 ? 0px : root.dual ? sides.split-x + 5px : sides.width;
                     y: 0px;
-                    width: !root.dual ? sides.width : s == 0 ? sides.split-x : sides.width - sides.split-x - 5px;
-                    height: sides.height;
+                    width: !root.dual ? (s == 0 ? sides.width : 0px) : s == 0 ? sides.split-x : sides.width - sides.split-x - 5px;
+                    height: s == 0 || root.dual ? sides.height : 0px;
                     view: s == 0 ? root.left : root.right;
                     columns: root.columns;
                     name-width: root.name-width;
                     columns-width: root.columns-width;
                     keys-focused: keys.has-focus;
                     dual: root.dual;
+                    drag-data: root.drag-data;
                     activate(i) => { root.activate(i); }
+                    row-released(i, r) => { root.row-released(i, r); }
+                    box-start(i, c, sh) => { root.box-start(i, c, sh); }
+                    box-moved(i, a, b, h) => { root.box-moved(i, a, b, h); }
+                    box-ended(i, drawn) => { root.box-ended(i, drawn); }
+                    drag-started(i, kind, r) => { root.drag-started(i, kind, r); }
+                    drop-check(i, kind, r) => { return root.drop-check(i, kind, r); }
+                    dropped(i, kind, r) => { root.dropped(i, kind, r); }
                     focus-keys => { keys.focus(); }
                     show-menu(x, y) => { root.show-menu(x, y); }
                     tree-resized(i, w) => { root.tree-resized(i, w); }
@@ -380,6 +403,10 @@ export component AppWindow inherits Window {
                         if root.dialog-can-cancel: Button {
                             text: "Cancel";
                             clicked => { root.dialog-cancelled(); }
+                        }
+                        if root.dialog-alt != "": Button {
+                            text: root.dialog-alt;
+                            clicked => { root.dialog-alternative(); }
                         }
                         Button {
                             text: root.dialog-ok;
