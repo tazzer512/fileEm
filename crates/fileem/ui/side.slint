@@ -1,0 +1,669 @@
+// One explorer side: folder tree | tab bar, address bar (breadcrumbs or typed path) + filter,
+// details list with resizable columns, status line. Everything comes in through `view` (built by
+// src/app.rs); requests that would be function calls elsewhere (scroll to a row, edit the
+// address, focus the filter) arrive as sequence numbers that change.
+
+import { LineEdit, ListView, Palette } from "std-widgets.slint";
+import { Icons, FileIcon, ToolButton } from "icons.slint";
+
+export struct FileRow {
+    name: string,
+    size: string,
+    kind: string,
+    modified: string,
+    created: string,
+    accessed: string,
+    extension: string,
+    attributes: string,
+    // Category as an int: see FileIcon and src/app.rs `icon_of`.
+    icon: int,
+    selected: bool,
+    current: bool,
+    hidden: bool,
+}
+
+export struct TreeRow {
+    name: string,
+    depth: int,
+    // Section titles ("Quick access", "This computer") are not folders.
+    header: bool,
+    expandable: bool,
+    expanded: bool,
+    // Showing the tab's folder (boxed), or one of its parents (bold).
+    current: bool,
+    on-path: bool,
+    icon: int,
+}
+
+export struct TabRow {
+    title: string,
+    active: bool,
+}
+
+export struct CrumbRow {
+    label: string,
+    // the file system root: a drive icon
+    drive: bool,
+}
+
+// A visible column after Name; `col` is the src/columns.rs ColumnId index.
+export struct ColumnRow {
+    col: int,
+    title: string,
+    width: length,
+    align-right: bool,
+}
+
+export struct SideView {
+    files: [FileRow],
+    tree: [TreeRow],
+    tabs: [TabRow],
+    crumbs: [CrumbRow],
+    address: string,
+    status: string,
+    message: string,
+    filter: string,
+    // ColumnId index of the sort column
+    sort-column: int,
+    sort-ascending: bool,
+    // the side commands and keys act on
+    active: bool,
+    tree-width: length,
+    // scroll `ensure-row` into view whenever `ensure-seq` changes; likewise for the others
+    ensure-row: int,
+    ensure-seq: int,
+    top-seq: int,
+    edit-seq: int,
+    filter-seq: int,
+    tree-row: int,
+    tree-seq: int,
+}
+
+component HeaderCell {
+    in property <string> title;
+    in property <bool> sorted;
+    in property <bool> ascending;
+    in property <TextHorizontalAlignment> align: left;
+    callback clicked();
+    callback resized(length);
+    // right-click, in window coordinates
+    callback menu(length, length);
+    accessible-role: button;
+    accessible-label: title;
+    accessible-action-default => { clicked(); }
+    Rectangle {
+        background: touch.has-hover ? Palette.foreground.with-alpha(0.06) : transparent;
+    }
+    HorizontalLayout {
+        padding-left: 6px;
+        padding-right: 6px;
+        spacing: 4px;
+        Text {
+            text: title;
+            horizontal-alignment: root.align;
+            vertical-alignment: center;
+            overflow: elide;
+            color: Palette.foreground.with-alpha(0.75);
+        }
+        Text {
+            text: sorted ? (ascending ? "▲" : "▼") : "";
+            font-size: 9px;
+            vertical-alignment: center;
+            color: Palette.foreground.with-alpha(0.6);
+        }
+    }
+    touch := TouchArea {
+        pointer-event(event) => {
+            if (event.kind == PointerEventKind.down && event.button == PointerEventButton.right) {
+                root.menu(self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y);
+            }
+        }
+        clicked => { root.clicked(); }
+    }
+    // the right edge drags the width
+    Rectangle {
+        x: parent.width - 6px;
+        width: 6px;
+        Rectangle { x: 5px; width: 1px; background: Palette.border; }
+        edge := TouchArea {
+            mouse-cursor: col-resize;
+            moved => { root.resized(root.width + self.mouse-x - self.pressed-x); }
+        }
+    }
+}
+
+export component SidePane {
+    in property <int> side;
+    in property <SideView> view;
+    in property <[ColumnRow]> columns;
+    in property <length> name-width: 300px;
+    // Name plus the visible columns
+    in property <length> columns-width: 800px;
+    // the window's key handler has the focus (selection colors)
+    in property <bool> keys-focused;
+    in property <bool> dual;
+    out property <length> row-height: 24px;
+
+    // any press in this side makes it the active one
+    callback activate(int);
+    callback focus-keys();
+    callback tree-resized(int, length);
+    // window coordinates
+    callback show-menu(length, length);
+    // side, row, ctrl/cmd, shift
+    callback row-pressed(int, int, bool, bool);
+    callback row-activated(int, int);
+    // side, row (-1: empty space)
+    callback row-menu(int, int);
+    callback empty-pressed(int);
+    callback tree-clicked(int, int);
+    callback tree-toggled(int, int);
+    callback tree-menu(int, int) -> bool;
+    // side, ColumnId index
+    callback sort-by(int, int);
+    callback header-menu(int);
+    // ColumnId index, width
+    callback column-resized(int, length);
+    callback tab-clicked(int, int);
+    callback tab-closed(int, int);
+    callback tab-new(int);
+    callback tab-menu(int, int);
+    callback crumb-clicked(int, int);
+    callback address-entered(int, string);
+    callback filter-edited(int, string);
+
+    property <bool> focused: keys-focused && view.active;
+
+    pure function cell(row: FileRow, col: int) -> string {
+        return col == 1 ? row.size : col == 2 ? row.kind : col == 3 ? row.modified : col == 4 ? row.created
+            : col == 5 ? row.accessed : col == 6 ? row.extension : col == 7 ? row.attributes : row.name;
+    }
+
+    // ---- requests from Rust ----
+    property <int> ensure-seq: view.ensure-seq;
+    changed ensure-seq => {
+        if (view.ensure-row >= 0) {
+            if (view.ensure-row * row-height < -list.content-y) {
+                list.content-y = -view.ensure-row * row-height;
+            } else if ((view.ensure-row + 1) * row-height > -list.content-y + list.visible-height) {
+                list.content-y = -((view.ensure-row + 1) * row-height - list.visible-height);
+            }
+        }
+    }
+    property <int> top-seq: view.top-seq;
+    changed top-seq => { list.content-y = 0; list.content-x = 0; }
+    property <bool> editing;
+    property <int> edit-seq: view.edit-seq;
+    changed edit-seq => {
+        editing = true;
+        address-field.text = view.address;
+        address-field.focus();
+        address-field.select-all();
+    }
+    property <bool> address-focused: address-field.has-focus;
+    changed address-focused => {
+        if (!address-focused) {
+            editing = false;
+        }
+    }
+    property <int> filter-seq: view.filter-seq;
+    changed filter-seq => {
+        filter-field.focus();
+        filter-field.select-all();
+    }
+    property <string> filter-text: view.filter;
+    changed filter-text => {
+        if (filter-field.text != filter-text) {
+            filter-field.text = filter-text;
+        }
+    }
+    // Row the tree should scroll to (3 rows below the top, unless already in view); -1 once done.
+    // Re-applied when the list's heights change: right after the rows change it hasn't measured
+    // them yet, and the scroll would be clamped.
+    property <int> tree-target: -1;
+    property <int> tree-seq: view.tree-seq;
+    changed tree-seq => {
+        tree-target = view.tree-row;
+        apply-tree-scroll();
+    }
+
+    function apply-tree-scroll() {
+        if (tree-target < 0) {
+            return;
+        }
+        if (tree-target * 24px < -tree-list.content-y || (tree-target + 1) * 24px > -tree-list.content-y + tree-list.visible-height) {
+            tree-list.content-y = -max(0px, (tree-target - 3) * 24px);
+        }
+        if (tree-target * 24px >= -tree-list.content-y && (tree-target + 1) * 24px <= -tree-list.content-y + tree-list.visible-height) {
+            tree-target = -1;
+        }
+    }
+
+    HorizontalLayout {
+        // ---- folder tree ----
+        VerticalLayout {
+            // the file list keeps a usable width in a narrow window; the tree gives way
+            width: max(80px, min(root.view.tree-width, root.width - 265px));
+            tree-list := ListView {
+                changed visible-height => { root.apply-tree-scroll(); }
+                changed viewport-height => { root.apply-tree-scroll(); }
+                for row[i] in root.view.tree: Rectangle {
+                    height: 24px;
+                    accessible-role: list-item;
+                    accessible-label: row.name;
+                    Rectangle {
+                        x: 4px;
+                        width: parent.width - 8px;
+                        border-radius: 4px;
+                        background: row.current ? Palette.accent-background.with-alpha(0.18)
+                            : tree-touch.has-hover && !row.header ? Palette.foreground.with-alpha(0.06) : transparent;
+                        border-width: row.current ? 1px : 0px;
+                        border-color: Palette.accent-background.with-alpha(0.6);
+                    }
+                    tree-touch := TouchArea {
+                        pointer-event(event) => {
+                            if (event.kind == PointerEventKind.down) {
+                                root.activate(root.side);
+                            }
+                            // right-click: a menu, never a navigation
+                            if (event.kind == PointerEventKind.down && event.button == PointerEventButton.right) {
+                                if (root.tree-menu(root.side, i)) {
+                                    root.show-menu(self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y);
+                                }
+                            }
+                        }
+                        clicked => {
+                            if (!row.header) {
+                                root.tree-clicked(root.side, i);
+                            }
+                        }
+                        double-clicked => {
+                            if (row.expandable) {
+                                root.tree-toggled(root.side, i);
+                            }
+                        }
+                    }
+                    HorizontalLayout {
+                        padding-left: 6px + row.depth * 14px;
+                        padding-right: 6px;
+                        spacing: 4px;
+                        alignment: start;
+                        Rectangle {
+                            width: 16px;
+                            if row.expandable: Path {
+                                width: 14px;
+                                height: 14px;
+                                viewbox-width: 24;
+                                viewbox-height: 24;
+                                commands: row.expanded ? Icons.chevron-down : Icons.chevron-right;
+                                fill: Palette.foreground.with-alpha(0.6);
+                            }
+                            TouchArea {
+                                enabled: row.expandable;
+                                clicked => { root.tree-toggled(root.side, i); }
+                            }
+                        }
+                        if !row.header: VerticalLayout {
+                            alignment: center;
+                            FileIcon { kind: row.icon; }
+                        }
+                        Text {
+                            text: row.name;
+                            vertical-alignment: center;
+                            overflow: elide;
+                            font-weight: row.header || row.on-path ? 600 : 400;
+                            color: row.header ? Palette.foreground.with-alpha(0.6) : Palette.foreground;
+                            font-size: row.header ? 11px : 13px;
+                        }
+                    }
+                }
+            }
+        }
+
+        // ---- splitter ----
+        Rectangle {
+            width: 5px;
+            background: splitter.has-hover || splitter.pressed ? Palette.accent-background.with-alpha(0.3) : transparent;
+            Rectangle { x: 2px; width: 1px; background: Palette.border; }
+            splitter := TouchArea {
+                mouse-cursor: col-resize;
+                moved => {
+                    root.tree-resized(root.side, clamp(root.view.tree-width + self.mouse-x - self.pressed-x, 120px, max(120px, root.width - 260px)));
+                }
+            }
+        }
+
+        VerticalLayout {
+            min-width: 250px;
+            // ---- tab bar ----
+            Rectangle {
+                height: 32px;
+                background: Palette.alternate-background;
+                // the active side of two is marked
+                if root.dual && root.view.active: Rectangle { y: 0; height: 2px; background: Palette.accent-background; }
+                Rectangle { y: parent.height - 1px; height: 1px; background: Palette.border; }
+                HorizontalLayout {
+                    padding-left: 4px;
+                    padding-top: 3px;
+                    spacing: 2px;
+                    alignment: start;
+                    for tab[t] in root.view.tabs: Rectangle {
+                        min-width: 80px;
+                        max-width: 200px;
+                        preferred-width: tab-layout.preferred-width;
+                        border-radius: 4px;
+                        background: tab.active ? Palette.background : tab-touch.has-hover ? Palette.foreground.with-alpha(0.06) : transparent;
+                        border-width: tab.active ? 1px : 0px;
+                        border-color: Palette.border;
+                        accessible-role: AccessibleRole.tab;
+                        accessible-label: tab.title;
+                        accessible-item-selected: tab.active;
+                        accessible-action-default => { root.tab-clicked(root.side, t); }
+                        tab-touch := TouchArea {
+                            pointer-event(event) => {
+                                if (event.kind == PointerEventKind.down) {
+                                    root.activate(root.side);
+                                }
+                                if (event.kind == PointerEventKind.down && event.button == PointerEventButton.right) {
+                                    root.tab-menu(root.side, t);
+                                    root.show-menu(self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y);
+                                }
+                                if (event.kind == PointerEventKind.down && event.button == PointerEventButton.middle) {
+                                    root.tab-closed(root.side, t);
+                                }
+                            }
+                            clicked => { root.tab-clicked(root.side, t); }
+                        }
+                        tab-layout := HorizontalLayout {
+                            padding-left: 10px;
+                            padding-right: 4px;
+                            spacing: 4px;
+                            Text {
+                                text: tab.title;
+                                vertical-alignment: center;
+                                overflow: elide;
+                                font-weight: tab.active ? 600 : 400;
+                            }
+                            ToolButton {
+                                width: 20px;
+                                height: 20px;
+                                y: (parent.height - self.height) / 2;
+                                icon: Icons.close;
+                                tooltip: "Close tab";
+                                enabled: root.view.tabs.length > 1;
+                                clicked => { root.tab-closed(root.side, t); }
+                            }
+                        }
+                    }
+                    ToolButton {
+                        width: 26px;
+                        height: 26px;
+                        icon: Icons.plus;
+                        tooltip: "New tab (Ctrl+T)";
+                        clicked => { root.tab-new(root.side); }
+                    }
+                }
+            }
+
+            // ---- address bar + filter ----
+            HorizontalLayout {
+                padding: 5px;
+                spacing: 6px;
+                height: 42px;
+                Rectangle {
+                    min-width: 60px;
+                    horizontal-stretch: 1;
+                    border-radius: 4px;
+                    border-width: 1px;
+                    border-color: Palette.border;
+                    background: Palette.control-background;
+                    clip: true;
+                    accessible-role: groupbox;
+                    accessible-label: "Address";
+                    // a click next to the crumbs edits the path
+                    TouchArea {
+                        clicked => {
+                            root.activate(root.side);
+                            root.editing = true;
+                            address-field.text = root.view.address;
+                            address-field.focus();
+                            address-field.select-all();
+                        }
+                    }
+                    crumbs := HorizontalLayout {
+                        visible: !root.editing;
+                        // the end of a long path stays visible
+                        x: min(4px, parent.width - self.preferred-width - 4px);
+                        width: self.preferred-width;
+                        alignment: start;
+                        for crumb[c] in root.view.crumbs: HorizontalLayout {
+                            if c > 0: Text {
+                                text: "›";
+                                vertical-alignment: center;
+                                color: Palette.foreground.with-alpha(0.5);
+                            }
+                            Rectangle {
+                                width: crumb-layout.preferred-width;
+                                border-radius: 3px;
+                                background: crumb-touch.has-hover ? Palette.foreground.with-alpha(0.08) : transparent;
+                                accessible-role: button;
+                                accessible-label: crumb.drive ? "File System" : crumb.label;
+                                accessible-action-default => { root.crumb-clicked(root.side, c); }
+                                crumb-touch := TouchArea {
+                                    clicked => {
+                                        root.activate(root.side);
+                                        root.crumb-clicked(root.side, c);
+                                    }
+                                }
+                                crumb-layout := HorizontalLayout {
+                                    padding-left: 6px;
+                                    padding-right: 6px;
+                                    spacing: 4px;
+                                    if crumb.drive: VerticalLayout {
+                                        alignment: center;
+                                        FileIcon { kind: 21; width: 16px; height: 16px; }
+                                    }
+                                    if crumb.label != "": Text {
+                                        text: crumb.label;
+                                        vertical-alignment: center;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    address-field := LineEdit {
+                        visible: root.editing;
+                        min-width: 0px;
+                        accessible-label: "Address field";
+                        accepted(text) => {
+                            root.editing = false;
+                            root.address-entered(root.side, text);
+                        }
+                        key-pressed(event) => {
+                            if (event.text == Key.Escape) {
+                                root.editing = false;
+                                root.focus-keys();
+                                return EventResult.accept;
+                            }
+                            return EventResult.reject;
+                        }
+                    }
+                }
+                filter-field := LineEdit {
+                    // narrower in a narrow side
+                    min-width: 70px;
+                    preferred-width: 170px;
+                    max-width: 170px;
+                    horizontal-stretch: 0;
+                    placeholder-text: "Filter (*, ?)";
+                    accessible-label: "Filter";
+                    edited(text) => {
+                        root.activate(root.side);
+                        root.filter-edited(root.side, text);
+                    }
+                    key-pressed(event) => {
+                        if (event.text == Key.Escape) {
+                            self.text = "";
+                            root.filter-edited(root.side, "");
+                            root.focus-keys();
+                            return EventResult.accept;
+                        }
+                        if (event.text == Key.Return || event.text == Key.DownArrow) {
+                            root.focus-keys();
+                            return EventResult.accept;
+                        }
+                        return EventResult.reject;
+                    }
+                }
+            }
+            Rectangle { height: 1px; background: Palette.border; }
+
+            // ---- details list ----
+            Rectangle {
+                height: 26px;
+                clip: true;
+                // right-click: which columns to show
+                TouchArea {
+                    pointer-event(event) => {
+                        if (event.kind == PointerEventKind.down && event.button == PointerEventButton.right) {
+                            root.activate(root.side);
+                            root.header-menu(root.side);
+                            root.show-menu(self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y);
+                        }
+                    }
+                }
+                HorizontalLayout {
+                    x: list.content-x;
+                    width: max(root.columns-width, list.visible-width);
+                    alignment: start;
+                    HeaderCell {
+                        width: root.name-width;
+                        title: "Name";
+                        sorted: root.view.sort-column == 0;
+                        ascending: root.view.sort-ascending;
+                        clicked => { root.activate(root.side); root.sort-by(root.side, 0); }
+                        resized(w) => { root.column-resized(0, w); }
+                        menu(x, y) => { root.activate(root.side); root.header-menu(root.side); root.show-menu(x, y); }
+                    }
+                    for col in root.columns: HeaderCell {
+                        width: col.width;
+                        title: col.title;
+                        align: col.align-right ? TextHorizontalAlignment.right : TextHorizontalAlignment.left;
+                        sorted: root.view.sort-column == col.col;
+                        ascending: root.view.sort-ascending;
+                        clicked => { root.activate(root.side); root.sort-by(root.side, col.col); }
+                        resized(w) => { root.column-resized(col.col, w); }
+                        menu(x, y) => { root.activate(root.side); root.header-menu(root.side); root.show-menu(x, y); }
+                    }
+                }
+                Rectangle { y: parent.height - 1px; height: 1px; background: Palette.border; }
+            }
+            Rectangle {
+                // right-clicks on empty space pass through the list to here: the folder's menu
+                TouchArea {
+                    pointer-event(event) => {
+                        if (event.kind == PointerEventKind.down) {
+                            root.activate(root.side);
+                            root.focus-keys();
+                        }
+                        if (event.kind == PointerEventKind.down && event.button == PointerEventButton.left) {
+                            root.empty-pressed(root.side);
+                        }
+                        if (event.kind == PointerEventKind.down && event.button == PointerEventButton.right) {
+                            root.row-menu(root.side, -1);
+                            root.show-menu(self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y);
+                        }
+                    }
+                }
+                list := ListView {
+                    content-width: max(root.columns-width, self.visible-width);
+                    for row[i] in root.view.files: Rectangle {
+                        height: root.row-height;
+                        width: max(root.columns-width, list.visible-width);
+                        accessible-role: list-item;
+                        accessible-label: row.name;
+                        accessible-item-selected: row.selected;
+                        background: row.selected ? Palette.selection-background.with-alpha(root.focused ? 1.0 : 0.45)
+                            : row-touch.has-hover ? Palette.foreground.with-alpha(0.05) : transparent;
+                        border-width: row.current && root.focused ? 1px : 0px;
+                        border-color: Palette.accent-background;
+                        row-touch := TouchArea {
+                            pointer-event(event) => {
+                                if (event.kind == PointerEventKind.down) {
+                                    root.activate(root.side);
+                                    root.focus-keys();
+                                }
+                                if (event.kind == PointerEventKind.down && event.button == PointerEventButton.left) {
+                                    root.row-pressed(root.side, i, event.modifiers.control || event.modifiers.meta, event.modifiers.shift);
+                                }
+                                if (event.kind == PointerEventKind.down && event.button == PointerEventButton.right) {
+                                    root.row-menu(root.side, i);
+                                    root.show-menu(self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y);
+                                }
+                            }
+                            double-clicked => { root.row-activated(root.side, i); }
+                        }
+                        HorizontalLayout {
+                            property <color> fg: row.selected && root.focused ? Palette.selection-foreground : Palette.foreground;
+                            alignment: start;
+                            HorizontalLayout {
+                                width: root.name-width;
+                                padding-left: 6px;
+                                padding-right: 6px;
+                                spacing: 6px;
+                                VerticalLayout {
+                                    alignment: center;
+                                    FileIcon { kind: row.icon; dimmed: row.hidden; }
+                                }
+                                Text {
+                                    text: row.name;
+                                    vertical-alignment: center;
+                                    overflow: elide;
+                                    color: fg;
+                                }
+                            }
+                            // same widths and 6px insets as the header cells, so text lines up
+                            for col in root.columns: HorizontalLayout {
+                                width: col.width;
+                                padding-left: 6px;
+                                padding-right: 6px;
+                                Text {
+                                    text: root.cell(row, col.col);
+                                    horizontal-alignment: col.align-right ? TextHorizontalAlignment.right : TextHorizontalAlignment.left;
+                                    vertical-alignment: center;
+                                    overflow: elide;
+                                    color: fg.with-alpha(0.8);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            if root.view.files.length == 0 && root.view.message != "": Text {
+                text: root.view.message;
+                horizontal-alignment: center;
+                color: Palette.foreground.with-alpha(0.6);
+                height: 40px;
+            }
+
+            // ---- status line ----
+            Rectangle { height: 1px; background: Palette.border; }
+            Rectangle {
+                height: 24px;
+                background: Palette.alternate-background;
+                Text {
+                    x: 8px;
+                    width: parent.width - 16px;
+                    text: root.view.status;
+                    vertical-alignment: center;
+                    overflow: elide;
+                    color: Palette.foreground.with-alpha(0.75);
+                    font-size: 12px;
+                    accessible-role: text;
+                    accessible-label: "Status";
+                    accessible-value: root.view.status;
+                }
+            }
+        }
+    }
+}

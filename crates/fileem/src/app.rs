@@ -1,54 +1,54 @@
-//! The window's controller: wires the Slint callbacks to the tab and tree state, runs listings in
-//! the background and keeps the models in sync. All commands and keys live here (the Java
-//! `MainWindow`).
+//! The window's controller (the Java `MainWindow` + `ExplorerSide`): two sides, each with a folder
+//! tree and tabs; the second side shows in dual mode (F9). Commands and keys act on the active
+//! side's active tab. Slint draws what [`push_view`] hands it; all state lives here.
+//!
+//! - `nav`: navigation, listings, watching, the tree, tabs and sides
+//! - `commands`: operations, clipboard, dialogs, menus, properties
+//! - `keys`: the keyboard
+
+mod commands;
+mod keys;
+mod nav;
 
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use slint::platform::Key;
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 
-use fileem_core::fs::listing::{self, SortKey};
-use fileem_core::fs::measure::{self, Totals};
-use fileem_core::fs::watcher::{self, WatchHandle};
-use fileem_core::fs::{places, Category, FileEntry};
-use fileem_core::fs::trash;
-use fileem_core::ops::{names, Handle, Kind, State};
+use fileem_core::fs::listing::SortKey;
+use fileem_core::fs::places;
+use fileem_core::fs::watcher::WatchHandle;
+use fileem_core::fs::{Category, FileEntry};
 use fileem_core::session::Session;
 use fileem_core::util::{formats, fs_util};
 
-use crate::bg::{self, Job};
+use crate::address;
+use crate::bg::Job;
 use crate::clipboard::{self, FileClipboard};
-use crate::menu::{self, Command, Menu};
-use crate::ops_ui::{OpsUi, Outcome};
-use crate::properties;
-use crate::shell;
+use crate::columns::{ColumnId, Columns};
+use crate::menu::Command;
+use crate::ops_ui::OpsUi;
 use crate::tab::{Nav, Tab};
-use crate::tree::{NodeKind, Reveal, Tree};
-use crate::{AppWindow, FileRow, MenuRow, PropLine, PropertiesWindow, TreeRow};
+use crate::tree::{NodeKind, Tree};
+use crate::{AppWindow, ColumnRow, CrumbRow, FileRow, PropertiesWindow, SideView, TabRow, TreeRow};
 
-pub struct App {
-    ui: slint::Weak<AppWindow>,
-    session: Rc<Session>,
+pub use commands::{
+    clipboard_text, close_requested, close_windows, open_dialog, properties_windows, run_command, run_operation,
+    set_clipboard, Dialog, DialogSpec,
+};
+
+/// One tab: its folder state plus the bookkeeping of its listing and watch.
+pub struct TabState {
+    /// Async results find their tab by this id (tabs move when others close).
+    id: u64,
     tab: Tab,
-    tree: Tree,
-    files: Rc<VecModel<FileRow>>,
-    tree_rows: Rc<VecModel<TreeRow>>,
     load: Option<Job>,
     /// Drops listings that finished after a newer navigation started.
     generation: u64,
-    /// Drops tree loads of an older reveal.
-    reveal_token: u64,
-    type_ahead: String,
-    type_ahead_at: Option<Instant>,
-    /// The watch on the shown folder; dropping it stops watching.
-    watch: Option<(PathBuf, WatchHandle)>,
-    /// Drops watcher reports for a folder no longer shown.
-    watch_token: u64,
     /// A navigation (not a refresh) is loading: watcher refreshes wait, it lists fresh anyway.
     navigating: bool,
     /// A refresh is loading; further requests collapse into one follow-up.
@@ -56,8 +56,83 @@ pub struct App {
     refresh_pending: bool,
     /// How long the last listing took: follow-up refreshes wait twice that.
     last_list: Duration,
-    /// Selected once the next refresh is shown (a renamed or created item).
+    /// Selected once the next listing is shown (a renamed or created item, a typed file path).
     select_after: Option<PathBuf>,
+    /// The watch on the tab's folder; dropping it stops watching.
+    watch: Option<WatchHandle>,
+    /// Drops watcher reports for a folder no longer shown.
+    watch_token: u64,
+    /// This tab's session keys only the Java app uses (`.view`, `.size`), kept as they were.
+    extra: Vec<(String, String)>,
+}
+
+/// One explorer side: a tree and tabs, and the Slint models that show them.
+pub struct Side {
+    tree: Tree,
+    tabs: Vec<TabState>,
+    active: usize,
+    /// Drops tree loads of an older reveal.
+    reveal_token: u64,
+    tree_width: f32,
+    files: Rc<VecModel<FileRow>>,
+    tree_rows: Rc<VecModel<TreeRow>>,
+    tab_rows: Rc<VecModel<TabRow>>,
+    crumbs: Rc<VecModel<CrumbRow>>,
+    /// Requests to the view (scroll, edit the address, focus the filter): counters that change.
+    ensure_row: i32,
+    ensure_seq: i32,
+    top_seq: i32,
+    edit_seq: i32,
+    filter_seq: i32,
+    tree_row: i32,
+    tree_seq: i32,
+}
+
+impl Side {
+    fn new() -> Side {
+        Side {
+            tree: Tree::new(&places::quick_access(), &places::volumes()),
+            tabs: Vec::new(),
+            active: 0,
+            reveal_token: 0,
+            tree_width: 240.0,
+            files: Rc::new(VecModel::default()),
+            tree_rows: Rc::new(VecModel::default()),
+            tab_rows: Rc::new(VecModel::default()),
+            crumbs: Rc::new(VecModel::default()),
+            ensure_row: -1,
+            ensure_seq: 0,
+            top_seq: 0,
+            edit_seq: 0,
+            filter_seq: 0,
+            tree_row: -1,
+            tree_seq: 0,
+        }
+    }
+
+    fn tab(&self) -> &Tab {
+        &self.tabs[self.active].tab
+    }
+
+    fn tab_mut(&mut self) -> &mut Tab {
+        &mut self.tabs[self.active].tab
+    }
+}
+
+pub struct App {
+    ui: slint::Weak<AppWindow>,
+    session: Rc<Session>,
+    sides: [Side; 2],
+    /// The side commands and keys act on.
+    active: usize,
+    /// The second side is shown.
+    dual: bool,
+    show_hidden: bool,
+    columns: Columns,
+    /// Tab ids and watch tokens.
+    next_id: u64,
+    type_ahead: String,
+    type_ahead_at: Option<Instant>,
     ops: OpsUi,
     dialog: Dialog,
     clipboard: Box<dyn FileClipboard>,
@@ -65,102 +140,181 @@ pub struct App {
     menu: Vec<Command>,
     /// Open Properties windows by id; the flag stops their folder walk.
     properties: Vec<(u64, PropertiesWindow, Arc<AtomicBool>)>,
-    next_properties: u64,
 }
 
 pub type Shared = Rc<RefCell<App>>;
 
-/// Creates the controller for `ui`, restores the state saved in `session`, wires the callbacks and
-/// opens `start` (default: the folder open last time, else the home folder).
+const SIDE_IDS: [&str; 2] = ["left", "right"];
+
+impl App {
+    fn next_id(&mut self) -> u64 {
+        self.next_id += 1;
+        self.next_id
+    }
+
+    fn side(&self) -> &Side {
+        &self.sides[self.active]
+    }
+
+    fn side_mut(&mut self) -> &mut Side {
+        &mut self.sides[self.active]
+    }
+
+    /// The active side's active tab.
+    fn tab(&self) -> &Tab {
+        self.side().tab()
+    }
+
+    fn tab_mut(&mut self) -> &mut Tab {
+        self.side_mut().tab_mut()
+    }
+
+    fn active_tab_id(&self) -> u64 {
+        self.side().tabs[self.side().active].id
+    }
+
+    /// Side and index of the tab with `id`, if it is still open.
+    fn find(&self, id: u64) -> Option<(usize, usize)> {
+        (0..2).find_map(|s| self.sides[s].tabs.iter().position(|t| t.id == id).map(|i| (s, i)))
+    }
+
+    fn tab_state(&mut self, id: u64) -> Option<&mut TabState> {
+        let (s, i) = self.find(id)?;
+        Some(&mut self.sides[s].tabs[i])
+    }
+
+    /// Whether the tab with `id` is the one its side shows.
+    fn is_shown(&self, id: u64) -> bool {
+        self.find(id).is_some_and(|(s, i)| self.sides[s].active == i && (s == 0 || self.dual))
+    }
+
+    fn new_tab_state(&mut self, sort: (SortKey, bool)) -> TabState {
+        let mut tab = Tab::new();
+        tab.set_show_hidden(self.show_hidden);
+        tab.set_sort(sort.0, sort.1);
+        TabState {
+            id: self.next_id(),
+            tab,
+            load: None,
+            generation: 0,
+            navigating: false,
+            refreshing: false,
+            refresh_pending: false,
+            last_list: Duration::ZERO,
+            select_after: None,
+            watch: None,
+            watch_token: 0,
+            extra: Vec::new(),
+        }
+    }
+}
+
+/// Creates the controller for `ui`, restores the state saved in `session` (tabs of both sides,
+/// dual mode, hidden files, sort, columns, tree widths), wires the callbacks and opens the
+/// folders. `start` replaces the left side's selected tab's folder.
 pub fn install(ui: &AppWindow, session: Rc<Session>, start: Option<PathBuf>) -> Shared {
-    let files = Rc::new(VecModel::default());
-    let tree_rows = Rc::new(VecModel::default());
-    ui.set_files(ModelRc::from(files.clone()));
-    ui.set_tree(ModelRc::from(tree_rows.clone()));
-    let mut tab = Tab::new();
-    tab.set_show_hidden(session.get_bool("showHidden", false));
-    let sort = match session.get_or("sort.column", "name").as_str() {
-        "size" => SortKey::Size,
-        "type" => SortKey::Type,
-        "modified" => SortKey::Modified,
-        _ => SortKey::Name,
-    };
-    tab.set_sort(sort, session.get_bool("sort.ascending", true));
-    let mut tree = Tree::new(&places::quick_access(), &places::volumes());
-    tree.set_show_hidden(tab.show_hidden());
-    ui.set_tree_width(session.get_f64(&format!("{SIDE}.treeWidth"), 240.0).clamp(120.0, 800.0) as f32);
-    let saved = session
-        .get(&format!("{SIDE}.tab.{}", session.get_int(&format!("{SIDE}.selected"), 0)))
-        .filter(|p| !p.trim().is_empty())
-        .map(PathBuf::from);
+    let show_hidden = session.get_bool("showHidden", false);
+    let sort = (
+        SortKey::from_id(&session.get_or("sort.column", "name")).unwrap_or(SortKey::Name),
+        session.get_bool("sort.ascending", true),
+    );
     let app = Rc::new(RefCell::new(App {
         ui: ui.as_weak(),
-        session,
-        tab,
-        tree,
-        files,
-        tree_rows,
-        load: None,
-        generation: 0,
-        reveal_token: 0,
+        columns: Columns::restore(&session),
+        dual: session.get_bool("dual", false),
+        session: session.clone(),
+        sides: [Side::new(), Side::new()],
+        active: 0,
+        show_hidden,
+        next_id: 0,
         type_ahead: String::new(),
         type_ahead_at: None,
-        watch: None,
-        watch_token: 0,
-        navigating: false,
-        refreshing: false,
-        refresh_pending: false,
-        last_list: Duration::ZERO,
-        select_after: None,
         ops: OpsUi::new(),
         dialog: Dialog::None,
         clipboard: Box::new(clipboard::System::default()),
         menu: Vec::new(),
         properties: Vec::new(),
-        next_properties: 0,
     }));
+    ui.set_side_split(session.get_f64("split.sides", 0.5).clamp(0.2, 0.8) as f32);
+    let mut opening: Vec<(u64, PathBuf)> = Vec::new();
+    for (s, id) in SIDE_IDS.iter().enumerate() {
+        let mut a = app.borrow_mut();
+        a.sides[s].tree.set_show_hidden(show_hidden);
+        a.sides[s].tree_width = session.get_f64(&format!("{id}.treeWidth"), 240.0).clamp(120.0, 800.0) as f32;
+        // without a count (hand-edited files), the consecutive tab keys
+        let count = match session.get_int(&format!("{id}.tabs"), -1) {
+            n if n >= 0 => n.min(50),
+            _ => (0..50).take_while(|i| session.get(&format!("{id}.tab.{i}")).is_some()).count() as i64,
+        };
+        for i in 0..count {
+            let Some(dir) = session.get(&format!("{id}.tab.{i}")).filter(|p| !p.trim().is_empty()) else { continue };
+            let mut t = a.new_tab_state(sort);
+            for suffix in ["view", "size"] {
+                if let Some(v) = session.get(&format!("{id}.tab.{i}.{suffix}")) {
+                    t.extra.push((suffix.to_string(), v));
+                }
+            }
+            opening.push((t.id, PathBuf::from(dir)));
+            a.sides[s].tabs.push(t);
+        }
+        if a.sides[s].tabs.is_empty() {
+            let t = a.new_tab_state(sort);
+            opening.push((t.id, fileem_core::util::os::home()));
+            a.sides[s].tabs.push(t);
+        }
+        let n = a.sides[s].tabs.len();
+        a.sides[s].active = (session.get_int(&format!("{id}.selected"), 0).max(0) as usize).min(n - 1);
+    }
+    if let Some(dir) = start {
+        let id = app.borrow().sides[0].tabs[app.borrow().sides[0].active].id;
+        if let Some(entry) = opening.iter_mut().find(|(t, _)| *t == id) {
+            entry.1 = dir;
+        }
+    }
     wire(ui, &app);
-    sync_tree(&app);
-    sync_files(&app);
-    match (start, saved) {
-        (Some(dir), _) => go(&app, dir, Nav::Go),
-        // the folder from last time may be gone: its nearest existing parent then
-        (None, Some(dir)) => go_with(&app, dir, Nav::Go, true),
-        (None, None) => go(&app, fileem_core::util::os::home(), Nav::Go),
+    push_columns(&app);
+    for s in 0..2 {
+        sync_tabs(&app, s);
+        sync_tree(&app, s);
+        sync_files(&app, s);
+    }
+    sync_window(&app);
+    for (id, dir) in opening {
+        // a folder from last time may be gone: its nearest existing parent then
+        nav::go_with(&app, id, dir, Nav::Go, true);
     }
     app
 }
 
-/// The session side this window stands for. One side until the dual pane is ported; the right
-/// side's keys are left as the Java app wrote them.
-const SIDE: &str = "left";
-
 /// Copies the window's state into the session (autosave, close). Only keys this version knows
-/// are written; the rest (other tabs, columns, theme, …) stays as the Java app left it, so both
-/// versions can share the file during the migration.
+/// are written; the rest (theme, preview, …) stays as the Java app left it, so both versions can
+/// share the file during the migration.
 pub fn collect_session(app: &Shared) {
     let a = app.borrow();
     let s = &a.session;
-    s.put("showHidden", a.tab.show_hidden());
-    let (key, asc) = a.tab.sort();
-    let column = match key {
-        SortKey::Name => "name",
-        SortKey::Size => "size",
-        SortKey::Type => "type",
-        SortKey::Modified => "modified",
-    };
-    s.put("sort.column", column);
+    s.put("showHidden", a.show_hidden);
+    let (key, asc) = a.tab().sort();
+    s.put("sort.column", key.id());
     s.put("sort.ascending", asc);
-    if let Some(dir) = a.tab.dir() {
-        let selected = s.get_int(&format!("{SIDE}.selected"), 0).max(0);
-        if s.get_int(&format!("{SIDE}.tabs"), 0) <= selected {
-            s.put(&format!("{SIDE}.tabs"), selected + 1);
+    s.put("dual", a.dual);
+    a.columns.save(s);
+    for (side, id) in a.sides.iter().zip(SIDE_IDS) {
+        s.remove_prefix(&format!("{id}.tab."));
+        s.put(&format!("{id}.tabs"), side.tabs.len());
+        for (i, t) in side.tabs.iter().enumerate() {
+            let dir = t.tab.dir().map(Path::to_path_buf).unwrap_or_else(fileem_core::util::os::home);
+            s.put(&format!("{id}.tab.{i}"), dir.display());
+            for (suffix, value) in &t.extra {
+                s.put(&format!("{id}.tab.{i}.{suffix}"), value);
+            }
         }
-        s.put(&format!("{SIDE}.selected"), selected);
-        s.put(&format!("{SIDE}.tab.{selected}"), dir.display());
+        s.put(&format!("{id}.selected"), side.active);
+        s.put(&format!("{id}.treeWidth"), side.tree_width.round() as i64);
     }
     if let Some(ui) = a.ui.upgrade() {
-        s.put(&format!("{SIDE}.treeWidth"), ui.get_tree_width().round());
+        if a.dual {
+            s.put("split.sides", ui.get_side_split());
+        }
         let w = ui.window();
         s.put("window.maximized", w.is_maximized());
         if !w.is_maximized() && !w.is_minimized() {
@@ -178,1092 +332,146 @@ pub fn session(app: &Shared) -> Rc<Session> {
     app.borrow().session.clone()
 }
 
+// ---- read access for tests ----
+
+/// The active side (0 left, 1 right).
+pub fn active_side(app: &Shared) -> usize {
+    app.borrow().active
+}
+
+pub fn is_dual(app: &Shared) -> bool {
+    app.borrow().dual
+}
+
+/// The folders of a side's tabs, in order, and which one is selected.
+pub fn tabs(app: &Shared, side: usize) -> (Vec<Option<PathBuf>>, usize) {
+    let a = app.borrow();
+    let s = &a.sides[side];
+    (s.tabs.iter().map(|t| t.tab.dir().map(Path::to_path_buf)).collect(), s.active)
+}
+
+/// The selected paths of a side's active tab.
+pub fn selected_paths(app: &Shared, side: usize) -> Vec<PathBuf> {
+    app.borrow().sides[side].tab().selected_paths()
+}
+
+/// The operations of this window (tests start their own through it).
+pub fn ops(app: &Shared) -> OpsUi {
+    app.borrow().ops.clone()
+}
+
 fn wire(ui: &AppWindow, app: &Shared) {
-    let a = app.clone();
-    ui.on_back(move || back(&a));
-    let a = app.clone();
-    ui.on_forward(move || forward(&a));
-    let a = app.clone();
-    ui.on_up(move || up(&a));
-    let a = app.clone();
-    ui.on_refresh(move || refresh(&a));
-    let a = app.clone();
-    ui.on_toggle_hidden(move || toggle_hidden(&a));
-    let a = app.clone();
-    ui.on_navigate_address(move |text| navigate_address(&a, &text));
-    let a = app.clone();
-    ui.on_sort_by(move |col| sort_by(&a, col));
-    let a = app.clone();
-    ui.on_row_pressed(move |row, ctrl, shift| {
-        a.borrow_mut().tab.click(row as usize, ctrl, shift);
-        sync_selection(&a);
+    macro_rules! on {
+        ($setter:ident, $app:ident => |$($arg:ident),*| $body:expr) => {{
+            let a = app.clone();
+            ui.$setter(move |$($arg),*| {
+                let $app = &a;
+                $body
+            });
+        }};
+    }
+    on!(on_back, app => | | nav::back(app));
+    on!(on_forward, app => | | nav::forward(app));
+    on!(on_up, app => | | nav::up(app));
+    on!(on_refresh, app => | | nav::refresh_active(app));
+    on!(on_toggle_hidden, app => | | nav::toggle_hidden(app));
+    on!(on_toggle_dual, app => | | nav::toggle_dual(app));
+    on!(on_activate, app => |side| nav::set_active_side(app, side as usize));
+    on!(on_tree_resized, app => |side, width| {
+        app.borrow_mut().sides[side as usize].tree_width = width;
+        push_view(app, side as usize);
     });
-    let a = app.clone();
-    ui.on_row_activated(move |row| activate(&a, row as usize));
-    let a = app.clone();
-    ui.on_tree_clicked(move |row| tree_clicked(&a, row as usize));
-    let a = app.clone();
-    ui.on_tree_toggled(move |row| tree_toggled(&a, row as usize));
-    let a = app.clone();
-    ui.on_dialog_accepted(move |text| dialog_accepted(&a, &text));
-    let a = app.clone();
-    ui.on_dialog_cancelled(move || dialog_cancelled(&a));
-    let a = app.clone();
-    ui.on_dir_changed(move |token| dir_changed(&a, token));
-    let a = app.clone();
-    ui.on_key(move |text, ctrl, alt, shift| key(&a, &text, ctrl, alt, shift));
-    let a = app.clone();
-    ui.on_row_menu(move |row| row_menu(&a, row));
-    let a = app.clone();
-    ui.on_tree_menu(move |row| tree_menu(&a, row as usize));
-    let a = app.clone();
-    ui.on_keyboard_menu(move || {
-        let row = a.borrow().tab.current_row().filter(|&r| a.borrow().tab.is_selected(r));
-        show_file_menu(&a);
-        row.map_or(-1, |r| r as i32)
+    on!(on_row_pressed, app => |side, row, ctrl, shift| {
+        nav::set_active_side(app, side as usize);
+        app.borrow_mut().tab_mut().click(row as usize, ctrl, shift);
+        sync_selection(app, side as usize, false);
     });
-    let a = app.clone();
-    ui.on_menu_activated(move |id| menu_activated(&a, id));
-}
-
-// ---- navigation ----
-
-/// Lists `dir` in the background and shows it when done. File system calls stay off the UI
-/// thread, even the check whether `dir` is a folder: on a dead network mount they would hang.
-pub fn go(app: &Shared, dir: PathBuf, nav: Nav) {
-    go_with(app, dir, nav, false);
-}
-
-/// Like [`go`]; with `nearest`, a folder that no longer exists is replaced by its nearest existing
-/// parent (or home), looked up in the background.
-fn go_with(app: &Shared, dir: PathBuf, nav: Nav, nearest: bool) {
-    let generation = {
-        let mut a = app.borrow_mut();
-        if nav == Nav::Refresh {
-            if a.navigating {
-                return; // the navigation in flight lists its folder fresh anyway: don't drop it
-            }
-            a.refreshing = true;
-        } else {
-            a.navigating = true;
-            // a cancelled refresh never calls back, so it can't clear this itself
-            a.refreshing = false;
-        }
-        if let Some(job) = a.load.take() {
-            job.cancel();
-        }
-        a.generation += 1;
-        a.generation
-    };
-    let target = dir.clone();
-    let done_app = app.clone();
-    let job = bg::run(
-        move |cancel| {
-            let mut dir = std::path::absolute(&target).unwrap_or(target);
-            if nearest {
-                dir = dir.ancestors().find(|p| p.is_dir()).map(Path::to_path_buf).unwrap_or_else(fileem_core::util::os::home);
-            }
-            let started = Instant::now();
-            listing::list(&dir, cancel).map(|entries| (dir, entries, started.elapsed()))
-        },
-        move |result: std::io::Result<(PathBuf, Vec<FileEntry>, Duration)>| {
-            if done_app.borrow().generation != generation {
-                return;
-            }
-            {
-                let mut a = done_app.borrow_mut();
-                a.load = None;
-                a.navigating = false;
-            }
-            if nav == Nav::Refresh {
-                finish_refresh(&done_app);
-            }
-            match result {
-                Ok((dir, entries, took)) => {
-                    done_app.borrow_mut().last_list = took;
-                    shown(&done_app, dir, entries, nav);
-                }
-                // the shown folder is gone: its nearest existing parent
-                Err(_) if nav == Nav::Refresh => go_with(&done_app, dir, Nav::Go, true),
-                Err(e) => failed(&done_app, &dir, &e),
-            }
-        },
-    );
-    app.borrow_mut().load = Some(job);
-}
-
-fn shown(app: &Shared, dir: PathBuf, entries: Vec<FileEntry>, nav: Nav) {
-    let same = app.borrow().tab.dir() == Some(dir.as_path());
-    let folders_before = folder_set(app.borrow().tab.rows());
-    app.borrow_mut().tab.show(dir.clone(), entries, nav);
-    let select = app.borrow_mut().select_after.take();
-    let selected = select.is_some_and(|item| app.borrow_mut().tab.select_path(&item));
-    sync_files(app);
-    if same && nav == Nav::Refresh {
-        // a renamed or created item is shown; otherwise the scroll stays where the user left it
-        if let (true, Some(row)) = (selected, app.borrow().tab.current_row()) {
-            if let Some(ui) = app.borrow().ui.upgrade() {
-                ui.invoke_ensure_visible(row as i32);
-            }
-        }
-        // a watcher refresh keeps scroll and focus where the user left them
-        if folder_set(app.borrow().tab.rows()) != folders_before {
-            reload_tree_node(app, &dir);
-        }
-        return;
-    }
-    if !same || app.borrow().watch.is_none() {
-        watch_folder(app, &dir);
-    }
-    let Some(ui) = app.borrow().ui.upgrade() else { return };
-    ui.set_address(dir.display().to_string().into());
-    ui.set_window_title(format!("{} - fileEm", fs_util::display_name(&dir)).into());
-    if !same {
-        ui.invoke_scroll_to_top();
-    }
-    if let Some(row) = app.borrow().tab.current_row() {
-        ui.invoke_ensure_visible(row as i32);
-    }
-    ui.invoke_focus_list();
-    if nav != Nav::Refresh || !same {
-        reveal(app, dir);
-    }
-}
-
-fn folder_set<'a>(rows: impl Iterator<Item = &'a FileEntry>) -> std::collections::HashSet<PathBuf> {
-    rows.filter(|e| e.is_dir()).map(|e| e.path().to_path_buf()).collect()
-}
-
-// ---- watching ----
-
-/// Watches the shown folder; changes refresh it. Registering touches the file system (it can
-/// hang on a dead mount), so it happens in a background job.
-fn watch_folder(app: &Shared, dir: &Path) {
-    let (token, ui) = {
-        let mut a = app.borrow_mut();
-        a.watch = None;
-        a.watch_token += 1;
-        (a.watch_token, a.ui.clone())
-    };
-    let done_app = app.clone();
-    let path = dir.to_path_buf();
-    bg::run(
-        move |_| {
-            watcher::watch(&path, move || {
-                // from the watcher's thread to the event loop; the window may be gone by then
-                let _ = ui.upgrade_in_event_loop(move |ui| ui.invoke_dir_changed(token as i32));
-            })
-        },
-        move |handle| {
-            let mut a = done_app.borrow_mut();
-            if a.watch_token == token {
-                let dir = a.tab.dir().map(Path::to_path_buf).unwrap_or_default();
-                a.watch = Some((dir, handle));
-            }
-        },
-    );
-}
-
-/// A watcher report: refresh, coalesced (one follow-up at most while a refresh runs).
-fn dir_changed(app: &Shared, token: i32) {
-    if app.borrow().watch_token as i32 != token {
-        return; // a report for a folder no longer shown
-    }
-    request_refresh(app);
-}
-
-fn request_refresh(app: &Shared) {
-    let mut a = app.borrow_mut();
-    if a.refreshing {
-        a.refresh_pending = true;
-        return;
-    }
-    drop(a);
-    refresh(app);
-}
-
-/// After a refresh: a request that came in meanwhile runs after twice the listing time, so a big
-/// folder under heavy writes isn't listed continuously.
-fn finish_refresh(app: &Shared) {
-    let mut a = app.borrow_mut();
-    a.refreshing = false;
-    if a.refresh_pending {
-        a.refresh_pending = false;
-        let delay = (a.last_list * 2).max(Duration::from_millis(250));
-        let again = app.clone();
-        slint::Timer::single_shot(delay, move || request_refresh(&again));
-    }
-}
-
-/// Re-reads the subfolders of every loaded tree node showing `dir` (its set of subfolders changed).
-fn reload_tree_node(app: &Shared, dir: &Path) {
-    let ids = app.borrow().tree.loaded_nodes(dir);
-    if ids.is_empty() {
-        return;
-    }
-    let done_app = app.clone();
-    let path = dir.to_path_buf();
-    bg::run(
-        move |_| listing::subfolders(&path, true),
-        move |children: std::io::Result<Vec<FileEntry>>| {
-            if let Ok(children) = children {
-                for id in ids {
-                    done_app.borrow_mut().tree.set_children(id, children.clone());
-                }
-                sync_tree(&done_app);
-            }
-        },
-    );
-}
-
-fn failed(app: &Shared, dir: &Path, e: &std::io::Error) {
-    let a = app.borrow();
-    let Some(ui) = a.ui.upgrade() else { return };
-    let reason = match e.kind() {
-        std::io::ErrorKind::PermissionDenied => "Access denied".to_string(),
-        std::io::ErrorKind::NotFound => "Not found".to_string(),
-        std::io::ErrorKind::NotADirectory => "Not a folder".to_string(),
-        _ => e.to_string(),
-    };
-    ui.set_status(format!("Cannot open \u{201c}{}\u{201d}: {reason}", dir.display()).into());
-    // the address bar goes back to the folder still shown
-    if let Some(cur) = a.tab.dir() {
-        ui.set_address(cur.display().to_string().into());
-    }
-}
-
-fn back(app: &Shared) {
-    let target = app.borrow().tab.back_target().map(Path::to_path_buf);
-    if let Some(t) = target {
-        go(app, t, Nav::Back);
-    }
-}
-
-fn forward(app: &Shared) {
-    let target = app.borrow().tab.forward_target().map(Path::to_path_buf);
-    if let Some(t) = target {
-        go(app, t, Nav::Forward);
-    }
-}
-
-fn up(app: &Shared) {
-    let target = app.borrow().tab.up_target().map(Path::to_path_buf);
-    if let Some(t) = target {
-        go(app, t, Nav::Go);
-    }
-}
-
-fn refresh(app: &Shared) {
-    let dir = app.borrow().tab.dir().map(Path::to_path_buf);
-    if let Some(d) = dir {
-        go(app, d, Nav::Refresh);
-    }
-}
-
-fn navigate_address(app: &Shared, text: &str) {
-    let text = text.trim();
-    if text.is_empty() {
-        return;
-    }
-    let path = match text.strip_prefix('~') {
-        Some(rest) => fileem_core::util::os::home().join(rest.trim_start_matches(['/', '\\'])),
-        None => PathBuf::from(text),
-    };
-    go(app, path, Nav::Go);
-}
-
-fn activate(app: &Shared, row: usize) {
-    let entry = {
-        let a = app.borrow();
-        if row >= a.tab.len() {
-            return;
-        }
-        a.tab.row(row).clone()
-    };
-    if entry.is_dir() {
-        go(app, entry.path().to_path_buf(), Nav::Go);
-    } else if let Err(e) = shell::open(entry.path()) {
-        set_status(app, format!("Cannot open \u{201c}{}\u{201d}: {e}", entry.name()));
-    }
-}
-
-fn sort_by(app: &Shared, col: i32) {
-    let key = match col {
-        1 => SortKey::Size,
-        2 => SortKey::Type,
-        3 => SortKey::Modified,
-        _ => SortKey::Name,
-    };
-    app.borrow_mut().tab.sort_by(key);
-    sync_files(app);
-}
-
-fn toggle_hidden(app: &Shared) {
-    {
-        let mut a = app.borrow_mut();
-        let show = !a.tab.show_hidden();
-        a.tab.set_show_hidden(show);
-        a.tree.set_show_hidden(show);
-    }
-    sync_files(app);
-    sync_tree(app);
-}
-
-// ---- operations ----
-
-/// Asks, then moves the selection to the Trash or deletes it, with a row in the progress window.
-fn delete_selection(app: &Shared, permanent: bool) {
-    let paths = app.borrow().tab.selected_paths();
-    delete(app, paths, permanent);
-}
-
-fn delete(app: &Shared, paths: Vec<PathBuf>, permanent: bool) {
-    if paths.is_empty() {
-        return;
-    }
-    let trash = !permanent && trash::is_supported();
-    let what = describe(&paths);
-    let (title, question, ok) = if trash {
-        ("Move to Trash", format!("Move {what} to the Trash?"), "Move to Trash")
-    } else {
-        ("Delete permanently", format!("Permanently delete {what}?\n\nThis cannot be undone."), "Delete")
-    };
-    open_dialog(app, Dialog::Delete { paths, trash }, DialogSpec::confirm(title, &question, ok));
-}
-
-/// "“a.txt”" for one item, "3 items" for more.
-fn describe(paths: &[PathBuf]) -> String {
-    match paths {
-        [one] => format!("\u{201c}{}\u{201d}", fs_util::display_name(one)),
-        many => format!("{} items", many.len()),
-    }
-}
-
-/// Starts an operation with a row in the progress window; when it ends, the folders it touched
-/// are refreshed (the watcher is slow on some systems) and its problems are listed.
-pub fn run_operation(app: &Shared, kind: Kind, sources: Vec<PathBuf>, target: Option<PathBuf>) -> Handle {
-    let ops = app.borrow().ops.clone();
-    let done_app = app.clone();
-    ops.run(kind, sources, target, move |outcome| operation_done(&done_app, outcome))
-}
-
-fn operation_done(app: &Shared, outcome: Outcome) {
-    let shown = app.borrow().tab.dir().map(Path::to_path_buf);
-    // what Compress / Extract made is selected when it lands in the folder shown
-    let made = outcome.result.clone().filter(|r| outcome.state == State::Succeeded && r.parent() == shown.as_deref());
-    if let Some(item) = made {
-        refresh_selecting(app, item);
-    } else if shown.as_ref().is_some_and(|d| outcome.affected.contains(d)) {
-        refresh(app);
-    }
-    for dir in &outcome.affected {
-        reload_tree_node(app, dir);
-    }
-    let problem = match &outcome.state {
-        State::Failed(msg) => Some((msg.clone(), Vec::new())),
-        _ if !outcome.errors.is_empty() => {
-            let n = outcome.errors.len();
-            let text = if n == 1 { "1 item could not be processed.".to_string() } else { format!("{n} items could not be processed.") };
-            Some((text, outcome.errors.clone()))
-        }
-        _ => None,
-    };
-    if let Some((message, lines)) = problem {
-        let spec = DialogSpec { lines, ..DialogSpec::info(&outcome.title, &message) };
-        open_dialog(app, Dialog::Info, spec);
-    }
-}
-
-// ---- clipboard ----
-
-/// Ctrl+C / Ctrl+X: the selection goes on the OS clipboard (cut: a paste moves it).
-fn clipboard_put(app: &Shared, cut: bool) {
-    let paths = app.borrow().tab.selected_paths();
-    put_files(app, paths, cut);
-}
-
-fn put_files(app: &Shared, paths: Vec<PathBuf>, cut: bool) {
-    if !paths.is_empty() {
-        app.borrow_mut().clipboard.put(&paths, cut);
-    }
-}
-
-/// Ctrl+V: copies (or, after a cut, moves) the clipboard's files into the shown folder.
-fn paste(app: &Shared) {
-    let Some(target) = app.borrow().tab.dir().map(Path::to_path_buf) else { return };
-    paste_into(app, target);
-}
-
-fn paste_into(app: &Shared, target: PathBuf) {
-    let Some(files) = app.borrow_mut().clipboard.get() else { return };
-    if files.cut {
-        // moved files are gone from where the clipboard says they are
-        app.borrow_mut().clipboard.clear();
-    }
-    run_operation(app, if files.cut { Kind::Move } else { Kind::Copy }, files.paths, Some(target));
-}
-
-/// Replaces the clipboard (tests use [`clipboard::Memory`], never the user's clipboard).
-pub fn set_clipboard(app: &Shared, clipboard: Box<dyn FileClipboard>) {
-    app.borrow_mut().clipboard = clipboard;
-}
-
-/// The clipboard's text (tests).
-pub fn clipboard_text(app: &Shared) -> Option<String> {
-    app.borrow_mut().clipboard.text()
-}
-
-/// F2: asks for a new name; the old name is shown with the part before the extension selected.
-fn rename_selection(app: &Shared) {
-    let sel = app.borrow().tab.selected_paths();
-    if let [src] = sel.as_slice() {
-        rename(app, src.clone());
-    }
-}
-
-fn rename(app: &Shared, src: PathBuf) {
-    let name = fs_util::display_name(&src);
-    let spec = DialogSpec::ask("Rename", "New name:", &name, "Rename");
-    open_dialog(app, Dialog::Rename { src }, spec);
-}
-
-/// F7, Ctrl+Shift+N: a new folder in the shown folder, under a free name.
-fn new_folder(app: &Shared) {
-    let Some(dir) = app.borrow().tab.dir().map(Path::to_path_buf) else { return };
-    new_item(app, dir, true);
-}
-
-/// Asks for the name of a new folder or (empty) text file in `dir`, offering a free name.
-fn new_item(app: &Shared, dir: PathBuf, folder: bool) {
-    let (default, title, prompt) =
-        if folder { ("New folder", "New folder", "Folder name:") } else { ("New text file.txt", "New text file", "File name:") };
-    let name = fs_util::display_name(&fs_util::unique_name(&dir.join(default), false));
-    let spec = DialogSpec::ask(title, prompt, &name, "Create");
-    open_dialog(app, Dialog::New { dir, folder }, spec);
-}
-
-/// Re-reads the shown folder and selects `item` in it.
-fn refresh_selecting(app: &Shared, item: PathBuf) {
-    app.borrow_mut().select_after = Some(item);
-    refresh(app);
-}
-
-// ---- right-click menus ----
-
-fn menu_state(app: &Shared) -> menu::State {
-    let can_paste = app.borrow_mut().clipboard.get().is_some();
-    let a = app.borrow();
-    menu::State { can_paste, trash: trash::is_supported(), sort: a.tab.sort(), show_hidden: a.tab.show_hidden() }
-}
-
-/// A right-click on list row `row` (-1: empty space): selects as Explorer does, then builds the
-/// menu for the selection (or the folder).
-fn row_menu(app: &Shared, row: i32) {
-    app.borrow_mut().tab.context_click(usize::try_from(row).ok());
-    sync_selection(app);
-    show_file_menu(app);
-}
-
-fn show_file_menu(app: &Shared) {
-    let st = menu_state(app);
-    let m = {
-        let a = app.borrow();
-        let items: Vec<menu::Item> = a.tab.selected_entries().into_iter().map(|e| menu::Item { path: e.path(), is_dir: e.is_dir() }).collect();
-        menu::file_menu(&items, a.tab.dir(), &st)
-    };
-    set_menu(app, m);
-}
-
-/// A right-click in the tree: its menu, without navigating. False for rows without one.
-fn tree_menu(app: &Shared, row: usize) -> bool {
-    let node = {
-        let a = app.borrow();
-        a.tree.rows().get(row).map(|&id| a.tree.node(id).clone())
-    };
-    let Some((path, kind)) = node.and_then(|n| n.path.map(|p| (p, n.kind))) else { return false };
-    let st = menu_state(app);
-    set_menu(app, menu::tree_menu(&path, kind, &st));
-    true
-}
-
-/// Hands `m` to app.slint's sections; the commands stay here by id.
-fn set_menu(app: &Shared, m: Menu) {
-    let mut commands = Vec::new();
-    let mut rows = |entries: &[menu::Entry]| -> ModelRc<MenuRow> {
-        let rows: Vec<MenuRow> = entries
-            .iter()
-            .map(|e| {
-                commands.push(e.command.clone());
-                MenuRow {
-                    id: commands.len() as i32 - 1,
-                    title: e.title.as_str().into(),
-                    enabled: e.enabled,
-                    checkable: e.checked.is_some(),
-                    checked: e.checked == Some(true),
-                }
-            })
-            .collect();
-        ModelRc::from(Rc::new(VecModel::from(rows)))
-    };
-    let section = |i: usize| m.sections.get(i).map(Vec::as_slice).unwrap_or_default();
-    debug_assert!(m.sections.len() <= menu::SECTIONS);
-    let Some(ui) = app.borrow().ui.upgrade() else { return };
-    ui.set_menu_s0(rows(section(0)));
-    ui.set_menu_s1(rows(section(1)));
-    ui.set_menu_sort(rows(&m.sort));
-    ui.set_menu_new(rows(&m.new));
-    ui.set_menu_s2(rows(section(2)));
-    ui.set_menu_s3(rows(section(3)));
-    ui.set_menu_s4(rows(section(4)));
-    ui.set_menu_s5(rows(section(5)));
-    app.borrow_mut().menu = commands;
-}
-
-fn menu_activated(app: &Shared, id: i32) {
-    let command = usize::try_from(id).ok().and_then(|i| app.borrow().menu.get(i).cloned());
-    if let Some(c) = command {
-        run_command(app, c);
-    }
-}
-
-/// Runs a menu command (tests call it with the commands of [`menu`]'s menus).
-pub fn run_command(app: &Shared, command: Command) {
-    let parent = |paths: &[PathBuf]| paths.first().and_then(|p| p.parent()).map(Path::to_path_buf);
-    match command {
-        Command::OpenSelection => open_selection(app),
-        Command::OpenFolder(dir) => go(app, dir, Nav::Go),
-        Command::OpenTerminal(dir) => launch(app, "Open in terminal", move || shell::open_terminal(&dir)),
-        Command::Reveal(p) => launch(app, &format!("Show in {}", shell::file_manager_name()), move || shell::reveal(&p)),
-        Command::OpenInFileManager(dir) => launch(app, "Open", move || shell::open(&dir)),
-        Command::Cut(paths) => put_files(app, paths, true),
-        Command::Copy(paths) => put_files(app, paths, false),
-        Command::PasteInto(dir) => paste_into(app, dir),
-        Command::Duplicate(paths) => {
-            // copying onto itself makes "name - Copy"
-            if let Some(dir) = parent(&paths) {
-                run_operation(app, Kind::Copy, paths, Some(dir));
-            }
-        }
-        Command::Compress(paths) => {
-            if let Some(dir) = parent(&paths) {
-                run_operation(app, Kind::Compress, paths, Some(dir));
-            }
-        }
-        Command::Extract(zip) => {
-            if let Some(dir) = zip.parent().map(Path::to_path_buf) {
-                run_operation(app, Kind::Extract, vec![zip], Some(dir));
-            }
-        }
-        Command::Rename(p) => rename(app, p),
-        Command::Trash(paths) => delete(app, paths, false),
-        Command::Delete(paths) => delete(app, paths, true),
-        Command::CopyPath(paths) => {
-            let text = paths.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join("\n");
-            app.borrow_mut().clipboard.put_text(&text);
-        }
-        Command::Properties(paths) => open_properties(app, paths),
-        Command::NewFolder(dir) => new_item(app, dir, true),
-        Command::NewFile(dir) => new_item(app, dir, false),
-        Command::SortBy(key) => {
-            let asc = app.borrow().tab.sort().1;
-            app.borrow_mut().tab.set_sort(key, asc);
-            sync_files(app);
-        }
-        Command::SortAscending(asc) => {
-            let key = app.borrow().tab.sort().0;
-            app.borrow_mut().tab.set_sort(key, asc);
-            sync_files(app);
-        }
-        Command::ToggleHidden => toggle_hidden(app),
-        Command::Refresh => refresh(app),
-    }
-}
-
-/// Starts a program in the background (it may block briefly); a failure is shown in a dialog.
-fn launch(app: &Shared, title: &str, start: impl FnOnce() -> std::io::Result<()> + Send + 'static) {
-    let (done_app, title) = (app.clone(), title.to_string());
-    bg::run(
-        move |_| start().map_err(|e| e.to_string()),
-        move |result: Result<(), String>| {
-            if let Err(msg) = result {
-                open_dialog(&done_app, Dialog::Info, DialogSpec::info(&title, &msg));
-            }
-        },
-    );
-}
-
-/// "Open": one selected folder opens in the tab; files open with their programs.
-fn open_selection(app: &Shared) {
-    let (dirs, files): (Vec<FileEntry>, Vec<FileEntry>) =
-        app.borrow().tab.selected_entries().into_iter().cloned().partition(|e| e.is_dir());
-    if let ([dir], []) = (dirs.as_slice(), files.as_slice()) {
-        return go(app, dir.path().to_path_buf(), Nav::Go);
-    }
-    for f in files {
-        if let Err(e) = shell::open(f.path()) {
-            set_status(app, format!("Cannot open \u{201c}{}\u{201d}: {e}", f.name()));
-        }
-    }
-}
-
-// ---- properties ----
-
-/// Alt+Enter: the selection's properties, or the folder's when nothing is selected.
-fn properties_of_selection(app: &Shared) {
-    let (sel, dir) = {
-        let a = app.borrow();
-        (a.tab.selected_paths(), a.tab.dir().map(Path::to_path_buf))
-    };
-    match (sel.is_empty(), dir) {
-        (false, _) => open_properties(app, sel),
-        (true, Some(d)) => open_properties(app, vec![d]),
-        (true, None) => {}
-    }
-}
-
-/// Opens a Properties window (not modal; several can be open). Reading the items happens in the
-/// background, and so does counting folders, which stops when the window closes.
-fn open_properties(app: &Shared, paths: Vec<PathBuf>) {
-    if paths.is_empty() {
-        return;
-    }
-    let done_app = app.clone();
-    let read = paths.clone();
-    bg::run(move |_| properties::sheet(&read), move |sheet| show_properties(&done_app, paths, sheet));
-}
-
-fn show_properties(app: &Shared, paths: Vec<PathBuf>, sheet: properties::Sheet) {
-    let Ok(w) = PropertiesWindow::new() else { return };
-    w.set_window_title(sheet.title.into());
-    w.set_header(sheet.header.into());
-    w.set_item_icon(sheet.entry.as_ref().map_or(-1, icon_of));
-    let lines: Vec<PropLine> = sheet
-        .lines
-        .into_iter()
-        .map(|l| PropLine { label: l.label.into(), value: l.value.into(), selectable: l.selectable, group_start: l.group_start })
-        .collect();
-    w.set_lines(ModelRc::from(Rc::new(VecModel::from(lines))));
-    let stop = Arc::new(AtomicBool::new(false));
-    let id = {
-        let mut a = app.borrow_mut();
-        a.next_properties += 1;
-        a.next_properties
-    };
-    let close_app = app.clone();
-    w.on_close_clicked(move || close_properties(&close_app, id));
-    let close_app = app.clone();
-    w.window().on_close_requested(move || {
-        close_properties(&close_app, id);
-        slint::CloseRequestResponse::HideWindow
+    on!(on_row_activated, app => |side, row| {
+        nav::set_active_side(app, side as usize);
+        commands::activate(app, row as usize);
     });
-    if sheet.walk {
-        let (weak, stop) = (w.as_weak(), stop.clone());
-        std::thread::Builder::new()
-            .name("fileem-properties".into())
-            .spawn(move || {
-                let post = |t: Totals| {
-                    let _ = weak.upgrade_in_event_loop(move |w| set_totals(&w, t));
-                };
-                let total = measure::measure(&paths, &stop, post);
-                post(total);
-            })
-            .expect("spawn the properties walk");
-    }
-    let _ = w.show();
-    app.borrow_mut().properties.push((id, w, stop));
-}
-
-fn set_totals(w: &PropertiesWindow, t: Totals) {
-    let (size, contains) = properties::totals_text(t);
-    let lines = w.get_lines();
-    for i in 0..lines.row_count() {
-        let Some(mut l) = lines.row_data(i) else { continue };
-        let value = match l.label.as_str() {
-            properties::SIZE => &size,
-            properties::CONTAINS => &contains,
-            _ => continue,
-        };
-        l.value = value.as_str().into();
-        lines.set_row_data(i, l);
-    }
-}
-
-fn close_properties(app: &Shared, id: u64) {
-    let closed = {
-        let mut a = app.borrow_mut();
-        a.properties.iter().position(|(i, ..)| *i == id).map(|at| a.properties.remove(at))
-    };
-    if let Some((_, w, stop)) = closed {
-        stop.store(true, Ordering::Relaxed);
-        let _ = w.hide();
-    }
-}
-
-/// The open Properties windows (tests).
-pub fn properties_windows(app: &Shared) -> Vec<PropertiesWindow> {
-    app.borrow().properties.iter().map(|(_, w, _)| w.clone_strong()).collect()
-}
-
-/// Closes the windows that belong to this one (the main window is closing).
-pub fn close_windows(app: &Shared) {
-    let ids: Vec<u64> = app.borrow().properties.iter().map(|(i, ..)| *i).collect();
-    for id in ids {
-        close_properties(app, id);
-    }
-}
-
-// ---- dialogs ----
-
-/// What the open dialog is for.
-pub enum Dialog {
-    None,
-    Info,
-    Delete { paths: Vec<PathBuf>, trash: bool },
-    Rename { src: PathBuf },
-    New { dir: PathBuf, folder: bool },
-    Quit,
-}
-
-/// How a dialog looks.
-pub struct DialogSpec {
-    title: String,
-    message: String,
-    input: Option<String>,
-    lines: Vec<String>,
-    ok: String,
-    can_cancel: bool,
-}
-
-impl DialogSpec {
-    fn info(title: &str, message: &str) -> DialogSpec {
-        DialogSpec {
-            title: title.into(),
-            message: message.into(),
-            input: None,
-            lines: Vec::new(),
-            ok: "OK".into(),
-            can_cancel: false,
-        }
-    }
-
-    fn confirm(title: &str, question: &str, ok: &str) -> DialogSpec {
-        DialogSpec { ok: ok.into(), can_cancel: true, ..DialogSpec::info(title, question) }
-    }
-
-    fn ask(title: &str, prompt: &str, initial: &str, ok: &str) -> DialogSpec {
-        DialogSpec { input: Some(initial.into()), ..DialogSpec::confirm(title, prompt, ok) }
-    }
-}
-
-pub fn open_dialog(app: &Shared, dialog: Dialog, spec: DialogSpec) {
-    app.borrow_mut().dialog = dialog;
-    let Some(ui) = app.borrow().ui.upgrade() else { return };
-    ui.set_dialog_title(spec.title.into());
-    ui.set_dialog_message(spec.message.into());
-    ui.set_dialog_input(spec.input.is_some());
-    let text = spec.input.unwrap_or_default();
-    // select the name without its extension, as Explorer does
-    let end = match text.rfind('.') {
-        Some(dot) if dot > 0 => dot,
-        _ => text.len(),
-    };
-    ui.set_dialog_select_end(end as i32);
-    ui.set_dialog_text(text.into());
-    ui.set_dialog_error("".into());
-    ui.set_dialog_lines(ModelRc::from(Rc::new(VecModel::from(
-        spec.lines.into_iter().map(SharedString::from).collect::<Vec<_>>(),
-    ))));
-    ui.set_dialog_ok(spec.ok.into());
-    ui.set_dialog_can_cancel(spec.can_cancel);
-    ui.set_dialog_open(true);
-}
-
-fn close_dialog(app: &Shared) {
-    app.borrow_mut().dialog = Dialog::None;
-    if let Some(ui) = app.borrow().ui.upgrade() {
-        ui.set_dialog_open(false);
-        ui.invoke_focus_list();
-    }
-}
-
-fn dialog_error(app: &Shared, text: String) {
-    if let Some(ui) = app.borrow().ui.upgrade() {
-        ui.set_dialog_error(text.into());
-    }
-}
-
-fn dialog_cancelled(app: &Shared) {
-    close_dialog(app);
-}
-
-fn dialog_accepted(app: &Shared, text: &str) {
-    let dialog = std::mem::replace(&mut app.borrow_mut().dialog, Dialog::None);
-    match dialog {
-        Dialog::None | Dialog::Info => close_dialog(app),
-        Dialog::Delete { paths, trash } => {
-            close_dialog(app);
-            run_operation(app, if trash { Kind::Trash } else { Kind::Delete }, paths, None);
-        }
-        Dialog::Rename { src } => {
-            let dir = src.parent().map(Path::to_path_buf).unwrap_or_default();
-            if let Some(problem) = names::name_problem(&dir, text, Some(&src)) {
-                app.borrow_mut().dialog = Dialog::Rename { src };
-                return dialog_error(app, problem);
-            }
-            match names::rename(&src, text) {
-                Ok(target) => {
-                    close_dialog(app);
-                    if app.borrow().tab.dir() == Some(dir.as_path()) {
-                        refresh_selecting(app, target);
-                    }
-                    // a folder renamed from the tree may sit elsewhere
-                    reload_tree_node(app, &dir);
-                }
-                Err(e) => {
-                    let name = fs_util::display_name(&src);
-                    app.borrow_mut().dialog = Dialog::Rename { src };
-                    dialog_error(app, format!("Cannot rename \u{201c}{name}\u{201d}: {}", reason(&e)));
-                }
-            }
-        }
-        Dialog::New { dir, folder } => {
-            if let Some(problem) = names::name_problem(&dir, text, None) {
-                app.borrow_mut().dialog = Dialog::New { dir, folder };
-                return dialog_error(app, problem);
-            }
-            let made = if folder { names::create_folder(&dir, text) } else { names::create_file(&dir, text) };
-            match made {
-                Ok(created) => {
-                    close_dialog(app);
-                    if app.borrow().tab.dir() == Some(dir.as_path()) {
-                        refresh_selecting(app, created);
-                    }
-                    if folder {
-                        reload_tree_node(app, &dir);
-                    }
-                }
-                Err(e) => {
-                    app.borrow_mut().dialog = Dialog::New { dir, folder };
-                    dialog_error(app, format!("Cannot create \u{201c}{}\u{201d}: {}", text.trim(), reason(&e)));
-                }
-            }
-        }
-        Dialog::Quit => {
-            close_dialog(app);
-            quit_after_cancelling(app);
-        }
-    }
-}
-
-fn reason(e: &std::io::Error) -> String {
-    match e.kind() {
-        std::io::ErrorKind::PermissionDenied => "Access denied".into(),
-        std::io::ErrorKind::AlreadyExists => "An item with that name already exists".into(),
-        std::io::ErrorKind::NotFound => "Not found".into(),
-        _ => e.to_string(),
-    }
-}
-
-// ---- closing ----
-
-/// The window's close button: with operations running it asks first. Returns whether the window
-/// may close now.
-pub fn close_requested(app: &Shared) -> bool {
-    let n = app.borrow().ops.running().len();
-    if n == 0 {
-        return true;
-    }
-    let what = if n == 1 { "An operation is".to_string() } else { format!("{n} operations are") };
-    let spec = DialogSpec::confirm(
-        "Operations running",
-        &format!("{what} still running. Cancel and close fileEm?\n\nUnfinished copies are removed; nothing is lost."),
-        "Cancel and close",
-    );
-    open_dialog(app, Dialog::Quit, spec);
-    false
-}
-
-/// Cancels every operation, waits (off the UI thread) until their cleanup is done, then quits.
-fn quit_after_cancelling(app: &Shared) {
-    let handles = app.borrow().ops.running();
-    set_status(app, "Stopping operations…".into());
-    std::thread::spawn(move || {
-        OpsUi::cancel_all_and_wait(&handles, Duration::from_secs(10));
-        let _ = slint::invoke_from_event_loop(|| {
-            let _ = slint::quit_event_loop();
-        });
+    on!(on_row_menu, app => |side, row| {
+        nav::set_active_side(app, side as usize);
+        commands::row_menu(app, row);
     });
-}
-
-// ---- tree ----
-
-/// Reveals `dir` in the tree, loading folders along the way in the background.
-fn reveal(app: &Shared, dir: PathBuf) {
-    let token = {
-        let mut a = app.borrow_mut();
-        a.reveal_token += 1;
-        a.reveal_token
-    };
-    reveal_step(app, dir, token);
-}
-
-fn reveal_step(app: &Shared, dir: PathBuf, token: u64) {
-    let step = app.borrow_mut().tree.reveal(&dir);
-    match step {
-        Reveal::Load(id, path) => {
-            let done_app = app.clone();
-            bg::run(
-                move |_| listing::subfolders(&path, true),
-                move |children: std::io::Result<Vec<FileEntry>>| {
-                    if done_app.borrow().reveal_token != token {
-                        return;
-                    }
-                    // an unreadable folder shows no children rather than asking again forever
-                    done_app.borrow_mut().tree.set_children(id, children.unwrap_or_default());
-                    reveal_step(&done_app, dir, token);
-                },
-            );
+    on!(on_empty_pressed, app => |side| {
+        nav::set_active_side(app, side as usize);
+        app.borrow_mut().tab_mut().context_click(None);
+        sync_selection(app, side as usize, false);
+    });
+    on!(on_tree_clicked, app => |side, row| nav::tree_clicked(app, side as usize, row as usize));
+    on!(on_tree_toggled, app => |side, row| nav::tree_toggled(app, side as usize, row as usize));
+    on!(on_tree_menu, app => |side, row| {
+        nav::set_active_side(app, side as usize);
+        commands::tree_menu(app, side as usize, row as usize)
+    });
+    on!(on_sort_by, app => |side, col| {
+        nav::set_active_side(app, side as usize);
+        if let Some(key) = ColumnId::from_index(col as usize).and_then(ColumnId::sort_key) {
+            app.borrow_mut().tab_mut().sort_by(key);
+            sync_files(app, side as usize);
         }
-        Reveal::Done(row) => {
-            sync_tree(app);
-            if let Some(ui) = app.borrow().ui.upgrade() {
-                ui.set_tree_scroll_target(row as i32);
-                ui.invoke_apply_tree_scroll();
-            }
+    });
+    on!(on_header_menu, app => |side| {
+        nav::set_active_side(app, side as usize);
+        commands::header_menu(app);
+    });
+    on!(on_column_resized, app => |col, width| {
+        if let Some(c) = ColumnId::from_index(col as usize) {
+            app.borrow_mut().columns.set_width(c, width);
+            push_columns(app);
         }
-        Reveal::NotFound => sync_tree(app),
-    }
-}
-
-fn tree_clicked(app: &Shared, row: usize) {
-    let path = {
-        let a = app.borrow();
-        a.tree.rows().get(row).and_then(|&id| a.tree.node(id).path.clone())
-    };
-    if let Some(p) = path {
-        go(app, p, Nav::Go);
-    }
-}
-
-fn tree_toggled(app: &Shared, row: usize) {
-    let load = app.borrow_mut().tree.toggle(row);
-    sync_tree(app);
-    if let Some((id, path)) = load {
-        let done_app = app.clone();
-        bg::run(
-            move |_| listing::subfolders(&path, true),
-            move |children: std::io::Result<Vec<FileEntry>>| {
-                done_app.borrow_mut().tree.set_children(id, children.unwrap_or_default());
-                sync_tree(&done_app);
-            },
-        );
-    }
-}
-
-// ---- keys ----
-
-/// The single keyboard handler (the Java `MainWindow.onKey`). Returns true when handled.
-fn key(app: &Shared, text: &str, ctrl: bool, alt: bool, shift: bool) -> bool {
-    let Some(c) = text.chars().next() else { return false };
-    let is = |k: Key| c == char::from(k);
-    let page = 20;
-    if alt && is(Key::LeftArrow) {
-        back(app);
-    } else if alt && is(Key::RightArrow) {
-        forward(app);
-    } else if (alt && is(Key::UpArrow)) || (!ctrl && !alt && is(Key::Backspace)) {
-        up(app);
-    } else if is(Key::UpArrow) {
-        move_focus(app, -1, ctrl, shift);
-    } else if is(Key::DownArrow) {
-        move_focus(app, 1, ctrl, shift);
-    } else if is(Key::PageUp) {
-        move_focus(app, -page, ctrl, shift);
-    } else if is(Key::PageDown) {
-        move_focus(app, page, ctrl, shift);
-    } else if is(Key::Home) {
-        move_focus(app, isize::MIN / 2, ctrl, shift);
-    } else if is(Key::End) {
-        move_focus(app, isize::MAX / 2, ctrl, shift);
-    } else if (is(Key::Return) || c == '\n') && alt {
-        properties_of_selection(app);
-    } else if is(Key::Return) || c == '\n' {
-        let row = app.borrow().tab.current_row();
-        if let Some(r) = row {
-            activate(app, r);
+    });
+    on!(on_tab_clicked, app => |side, i| {
+        nav::set_active_side(app, side as usize);
+        nav::select_tab(app, side as usize, i as usize);
+    });
+    on!(on_tab_closed, app => |side, i| nav::close_tab(app, side as usize, i as usize));
+    on!(on_tab_new, app => |side| {
+        nav::set_active_side(app, side as usize);
+        let dir = app.borrow().sides[side as usize].tab().dir().map(Path::to_path_buf);
+        nav::new_tab(app, side as usize, dir.unwrap_or_else(fileem_core::util::os::home), true);
+    });
+    on!(on_tab_menu, app => |side, i| commands::tab_menu(app, side as usize, i as usize));
+    on!(on_crumb_clicked, app => |side, i| {
+        nav::set_active_side(app, side as usize);
+        let target = app.borrow().tab().dir().and_then(|d| address::crumbs(d).get(i as usize).map(|c| c.path.clone()));
+        if let Some(dir) = target {
+            let id = app.borrow().active_tab_id();
+            nav::go(app, id, dir, Nav::Go);
         }
-    } else if ctrl && c == ' ' {
-        app.borrow_mut().tab.toggle_current();
-        sync_selection(app);
-    } else if ctrl && !alt && !shift && c.eq_ignore_ascii_case(&'c') {
-        clipboard_put(app, false);
-    } else if ctrl && !alt && !shift && c.eq_ignore_ascii_case(&'x') {
-        clipboard_put(app, true);
-    } else if ctrl && !alt && !shift && c.eq_ignore_ascii_case(&'v') {
-        paste(app);
-    } else if ctrl && !alt && c.eq_ignore_ascii_case(&'a') {
-        app.borrow_mut().tab.select_all();
-        sync_selection(app);
-    } else if ctrl && !alt && c.eq_ignore_ascii_case(&'r') {
-        refresh(app);
-    } else if ctrl && !alt && c.eq_ignore_ascii_case(&'h') {
-        toggle_hidden(app);
-    } else if ctrl && !alt && c.eq_ignore_ascii_case(&'l') {
-        if let Some(ui) = app.borrow().ui.upgrade() {
-            ui.invoke_focus_address();
-        }
-    } else if is(Key::Delete) || is(Key::F8) {
-        delete_selection(app, shift);
-    } else if is(Key::F2) && !ctrl && !alt {
-        rename_selection(app);
-    } else if is(Key::F7) || (ctrl && shift && c.eq_ignore_ascii_case(&'n')) {
-        new_folder(app);
-    } else if !ctrl && !alt && !c.is_control() && !is_special(c) {
-        type_ahead(app, c);
-    } else {
-        return false;
-    }
-    true
-}
-
-/// Slint sends special keys (arrows, F-keys) as private-use characters.
-fn is_special(c: char) -> bool {
-    ('\u{F700}'..='\u{F8FF}').contains(&c)
-}
-
-fn move_focus(app: &Shared, delta: isize, ctrl: bool, shift: bool) {
-    app.borrow_mut().tab.move_focus(delta, ctrl, shift);
-    sync_selection(app);
-}
-
-/// Typing a name's first letters jumps to it; a pause of a second starts a new search.
-fn type_ahead(app: &Shared, c: char) {
-    let found = {
-        let mut a = app.borrow_mut();
-        let now = Instant::now();
-        if a.type_ahead_at.is_none_or(|t| now - t > Duration::from_secs(1)) {
-            a.type_ahead.clear();
-        }
-        a.type_ahead_at = Some(now);
-        a.type_ahead.extend(c.to_lowercase());
-        let prefix = a.type_ahead.clone();
-        let path = a.tab.rows().find(|e| e.name().to_lowercase().starts_with(&prefix)).map(|e| e.path().to_path_buf());
-        path.is_some_and(|p| a.tab.select_path(&p))
-    };
-    if found {
-        sync_selection(app);
-    }
+    });
+    on!(on_address_entered, app => |side, text| {
+        nav::set_active_side(app, side as usize);
+        nav::navigate_address(app, &text);
+    });
+    on!(on_filter_edited, app => |side, text| {
+        nav::set_active_side(app, side as usize);
+        app.borrow_mut().tab_mut().set_filter(&text);
+        sync_files(app, side as usize);
+    });
+    on!(on_dir_changed, app => |token| nav::dir_changed(app, token as u64));
+    on!(on_keyboard_menu, app => | | commands::keyboard_menu(app));
+    on!(on_menu_activated, app => |id| commands::menu_activated(app, id));
+    on!(on_dialog_accepted, app => |text| commands::dialog_accepted(app, &text));
+    on!(on_dialog_cancelled, app => | | commands::close_dialog(app));
+    on!(on_key, app => |text, ctrl, alt, shift| keys::key(app, &text, ctrl, alt, shift));
 }
 
 // ---- models ----
 
+/// A message in the active side's status line, until the list or selection changes.
 fn set_status(app: &Shared, text: String) {
-    if let Some(ui) = app.borrow().ui.upgrade() {
-        ui.set_status(text.into());
+    let side = app.borrow().active;
+    let Some(ui) = app.borrow().ui.upgrade() else { return };
+    if side == 0 {
+        ui.set_left(SideView { status: text.into(), ..ui.get_left() });
+    } else {
+        ui.set_right(SideView { status: text.into(), ..ui.get_right() });
     }
 }
 
-/// Category to the icon numbers `FileIcon` in app.slint draws.
+/// Category to the icon numbers `FileIcon` in icons.slint draws.
 fn icon_of(e: &FileEntry) -> i32 {
     match e.category() {
         Category::Folder => 0,
@@ -1283,13 +491,20 @@ fn icon_of(e: &FileEntry) -> i32 {
     }
 }
 
-fn file_row(tab: &Tab, row: usize) -> FileRow {
+fn file_row(tab: &Tab, row: usize, cols: &Columns) -> FileRow {
     let e = tab.row(row);
+    // the extra columns cost per row (attributes look up the owner): only when shown
+    let shown = |c: ColumnId| cols.is_visible(c);
+    let text = |c: ColumnId, f: &dyn Fn() -> String| if shown(c) { SharedString::from(f()) } else { SharedString::new() };
     FileRow {
         name: e.name().into(),
         size: formats::size(e.size()).into(),
         kind: e.type_name().into(),
         modified: formats::date(e.modified()).into(),
+        created: text(ColumnId::Created, &|| formats::date(e.created())),
+        accessed: text(ColumnId::Accessed, &|| formats::date(e.accessed())),
+        extension: text(ColumnId::Extension, &|| e.extension().to_string()),
+        attributes: text(ColumnId::Attributes, &|| e.attributes().to_string()),
         icon: icon_of(e),
         selected: tab.is_selected(row),
         current: tab.current_row() == Some(row),
@@ -1297,53 +512,67 @@ fn file_row(tab: &Tab, row: usize) -> FileRow {
     }
 }
 
-/// Rebuilds the file rows (after a listing, sort or filter change).
-fn sync_files(app: &Shared) {
-    let a = app.borrow();
-    let rows: Vec<FileRow> = (0..a.tab.len()).map(|r| file_row(&a.tab, r)).collect();
-    a.files.set_vec(rows);
-    let (key, asc) = a.tab.sort();
-    if let Some(ui) = a.ui.upgrade() {
-        ui.set_sort_column(match key {
-            SortKey::Name => 0,
-            SortKey::Size => 1,
-            SortKey::Type => 2,
-            SortKey::Modified => 3,
-        });
-        ui.set_sort_ascending(asc);
-        ui.set_show_hidden(a.tab.show_hidden());
-        ui.set_can_back(a.tab.back_target().is_some());
-        ui.set_can_forward(a.tab.forward_target().is_some());
-        ui.set_can_up(a.tab.up_target().is_some());
-        ui.set_status(a.tab.status().into());
-        ui.set_message(SharedString::from(if a.tab.is_empty() { "This folder is empty." } else { "" }));
+/// Rebuilds a side's file rows and crumbs (after a listing, sort, filter or tab change).
+fn sync_files(app: &Shared, side: usize) {
+    {
+        let a = app.borrow();
+        let s = &a.sides[side];
+        let tab = s.tab();
+        let rows: Vec<FileRow> = (0..tab.len()).map(|r| file_row(tab, r, &a.columns)).collect();
+        s.files.set_vec(rows);
+        let crumbs: Vec<CrumbRow> = tab
+            .dir()
+            .map(address::crumbs)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|c| CrumbRow { label: c.label.into(), drive: c.drive })
+            .collect();
+        s.crumbs.set_vec(crumbs);
     }
+    push_view(app, side);
+    sync_window(app);
 }
 
-/// Updates only the selection flags of rows that changed, then scrolls the focus into view.
-fn sync_selection(app: &Shared) {
-    let a = app.borrow();
-    let current = a.tab.current_row();
-    for r in 0..a.files.row_count() {
-        let Some(mut row) = a.files.row_data(r) else { continue };
-        let (sel, cur) = (a.tab.is_selected(r), current == Some(r));
-        if row.selected != sel || row.current != cur {
-            row.selected = sel;
-            row.current = cur;
-            a.files.set_row_data(r, row);
+/// Updates only the selection flags of rows that changed; with `scroll`, the focused row is
+/// scrolled into view.
+fn sync_selection(app: &Shared, side: usize, scroll: bool) {
+    {
+        let mut a = app.borrow_mut();
+        let s = &mut a.sides[side];
+        let current = s.tab().current_row();
+        for r in 0..s.files.row_count() {
+            let Some(mut row) = s.files.row_data(r) else { continue };
+            let (sel, cur) = (s.tab().is_selected(r), current == Some(r));
+            if row.selected != sel || row.current != cur {
+                row.selected = sel;
+                row.current = cur;
+                s.files.set_row_data(r, row);
+            }
+        }
+        if let (true, Some(r)) = (scroll, current) {
+            s.ensure_row = r as i32;
+            s.ensure_seq += 1;
         }
     }
-    if let Some(ui) = a.ui.upgrade() {
-        ui.set_status(a.tab.status().into());
-        if let Some(r) = current {
-            ui.invoke_ensure_visible(r as i32);
-        }
-    }
+    push_view(app, side);
 }
 
-fn sync_tree(app: &Shared) {
+/// Scrolls the focused row of `side` into view.
+fn ensure_visible(app: &Shared, side: usize) {
+    {
+        let mut a = app.borrow_mut();
+        let s = &mut a.sides[side];
+        if let Some(r) = s.tab().current_row() {
+            s.ensure_row = r as i32;
+            s.ensure_seq += 1;
+        }
+    }
+    push_view(app, side);
+}
+
+fn sync_tree(app: &Shared, side: usize) {
     let a = app.borrow();
-    let t = &a.tree;
+    let t = &a.sides[side].tree;
     let rows: Vec<TreeRow> = t
         .rows()
         .iter()
@@ -1365,10 +594,98 @@ fn sync_tree(app: &Shared) {
             }
         })
         .collect();
-    a.tree_rows.set_vec(rows);
+    a.sides[side].tree_rows.set_vec(rows);
 }
 
-/// The operations of this window (tests start their own through it).
-pub fn ops(app: &Shared) -> OpsUi {
-    app.borrow().ops.clone()
+fn sync_tabs(app: &Shared, side: usize) {
+    {
+        let a = app.borrow();
+        let s = &a.sides[side];
+        let rows: Vec<TabRow> = s
+            .tabs
+            .iter()
+            .enumerate()
+            .map(|(i, t)| TabRow {
+                title: t.tab.dir().map(fs_util::display_name).unwrap_or_else(|| "…".into()).into(),
+                active: i == s.active,
+            })
+            .collect();
+        s.tab_rows.set_vec(rows);
+    }
+    push_view(app, side);
+}
+
+/// Hands a side's state to its `SideView`.
+fn push_view(app: &Shared, side: usize) {
+    let a = app.borrow();
+    let Some(ui) = a.ui.upgrade() else { return };
+    let s = &a.sides[side];
+    let tab = s.tab();
+    let (key, asc) = tab.sort();
+    let sort_col = ColumnId::ALL.iter().find(|c| c.sort_key() == Some(key)).map_or(0, |c| c.index());
+    let message = match (tab.is_empty() && tab.dir().is_some(), tab.filter().trim().is_empty()) {
+        (false, _) => "",
+        (true, true) => "This folder is empty.",
+        (true, false) => "No items match the filter.",
+    };
+    let view = SideView {
+        files: ModelRc::from(s.files.clone()),
+        tree: ModelRc::from(s.tree_rows.clone()),
+        tabs: ModelRc::from(s.tab_rows.clone()),
+        crumbs: ModelRc::from(s.crumbs.clone()),
+        address: tab.dir().map(|d| d.display().to_string()).unwrap_or_default().into(),
+        status: tab.status().into(),
+        message: message.into(),
+        filter: tab.filter().into(),
+        sort_column: sort_col as i32,
+        sort_ascending: asc,
+        active: side == a.active,
+        tree_width: s.tree_width,
+        ensure_row: s.ensure_row,
+        ensure_seq: s.ensure_seq,
+        top_seq: s.top_seq,
+        edit_seq: s.edit_seq,
+        filter_seq: s.filter_seq,
+        tree_row: s.tree_row,
+        tree_seq: s.tree_seq,
+    };
+    if side == 0 {
+        ui.set_left(view);
+    } else {
+        ui.set_right(view);
+    }
+}
+
+/// Toolbar state and title, from the active tab.
+fn sync_window(app: &Shared) {
+    let a = app.borrow();
+    let Some(ui) = a.ui.upgrade() else { return };
+    let tab = a.tab();
+    ui.set_dual(a.dual);
+    ui.set_active_side(a.active as i32);
+    ui.set_show_hidden(a.show_hidden);
+    ui.set_can_back(tab.back_target().is_some());
+    ui.set_can_forward(tab.forward_target().is_some());
+    ui.set_can_up(tab.up_target().is_some());
+    let title = tab.dir().map(|d| format!("{} - fileEm", fs_util::display_name(d))).unwrap_or_else(|| "fileEm".into());
+    ui.set_window_title(title.into());
+}
+
+/// The visible columns (shared by both sides).
+fn push_columns(app: &Shared) {
+    let a = app.borrow();
+    let Some(ui) = a.ui.upgrade() else { return };
+    let mut name_width = 300.0;
+    let mut rows = Vec::new();
+    for c in a.columns.visible() {
+        if c.id == ColumnId::Name {
+            name_width = c.width;
+        } else {
+            rows.push(ColumnRow { col: c.id.index() as i32, title: c.id.title().into(), width: c.width, align_right: c.id == ColumnId::Size });
+        }
+    }
+    let total = name_width + rows.iter().map(|r| r.width).sum::<f32>();
+    ui.set_name_width(name_width);
+    ui.set_columns_width(total);
+    ui.set_columns(ModelRc::from(Rc::new(VecModel::from(rows))));
 }

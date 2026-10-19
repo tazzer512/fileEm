@@ -49,9 +49,16 @@ crates/fileem-core/        no UI: everything that touches the file system
                            (rename / create, never replacing)
   src/session.rs           session.properties shared with the Java app (Java Session)
 crates/fileem/             the app
-  ui/app.slint             window layout and drawing only (icons.slint: shared icons)
-  src/app.rs               controller: callbacks, keys, models (Java MainWindow)
-  src/tab.rs, tree.rs      tab and tree state, toolkit-free and unit-tested
+  ui/app.slint             main window: toolbar, one or two sides, menu, dialogs (layout only)
+  ui/side.slint            one side: tree, tab bar, address + filter, columns, list, status
+  ui/icons.slint           shared icons and the tool button
+  src/app.rs               controller: state, session, wiring, models (Java MainWindow)
+  src/app/nav.rs           listings per tab, watching, trees, tabs, sides (Java ExplorerSide/FileTab)
+  src/app/commands.rs      operations, clipboard, dialogs, menus, properties
+  src/app/keys.rs          the keyboard handler (Java MainWindow.onKey)
+  src/tab.rs, tree.rs      tab (rows, filter, selection) and tree state, toolkit-free, unit-tested
+  src/columns.rs           details columns: visible, widths, session (Java FileTable)
+  src/address.rs           breadcrumbs and typed paths (Java AddressBar)
   src/bg.rs                background jobs with results on the UI thread (Java Bg)
   src/progress.rs          progress rows: detail line, estimate, conflict question (toolkit-free)
   src/ops_ui.rs            runs operations with a progress window row (Java OperationUi)
@@ -67,7 +74,10 @@ Notes for the UI test: Slint's testing backend can be initialized once per proce
 `tests/ui.rs` has one `#[test]` that runs each scenario with its own window and folder. Elements
 are found by accessible label (debug builds compile the UI with element info for that, see
 `build.rs`). The window needs a size, or the list views create no rows. Wait with
-`wait_until(..)`, which pumps the event loop; never sleep.
+`wait_until(..)`, which pumps the event loop; never sleep. The window's state is read through
+`Fixture::view()` (the active side's `SideView`) and `app::tabs`, `app::active_side`,
+`app::is_dual`; items inside an open menu are clicked with `Fixture::pick` (it adds the popup's
+offset).
 
 ## Differences from the Java version (on purpose)
 
@@ -79,6 +89,7 @@ are found by accessible label (debug builds compile the UI with element info for
 - Zip names: the `zip` crate decodes CP437 / UTF-8 itself.
 - Folder-into-itself checks resolve links in both paths (Java resolved only the target's).
 - The tree shows a hidden folder while you are in it.
+- A session without `<side>.tabs` reads the consecutive `<side>.tab.N` keys.
 
 ## Port status
 

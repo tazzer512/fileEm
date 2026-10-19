@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use fileem_core::fs::listing::{self, SortKey};
 use fileem_core::fs::FileEntry;
-use fileem_core::util::formats;
+use fileem_core::util::{formats, fs_util};
 
 /// How a finished listing changes the history.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -31,6 +31,9 @@ pub struct Tab {
     sort: SortKey,
     ascending: bool,
     show_hidden: bool,
+    /// The filter box: `*` / `?` wildcards, else "contains".
+    filter: String,
+    matcher: Box<dyn Fn(&str) -> bool + Send + Sync>,
     selected: HashSet<PathBuf>,
     current: Option<PathBuf>,
     anchor: Option<PathBuf>,
@@ -54,6 +57,8 @@ impl Tab {
             sort: SortKey::Name,
             ascending: true,
             show_hidden: false,
+            filter: String::new(),
+            matcher: fs_util::name_matcher(""),
             selected: HashSet::new(),
             current: None,
             anchor: None,
@@ -102,6 +107,10 @@ impl Tab {
         }
         self.entries = entries;
         let same_folder = old.as_deref() == Some(dir.as_path());
+        if !same_folder {
+            self.filter.clear();
+            self.matcher = fs_util::name_matcher("");
+        }
         self.dir = Some(dir);
         if nav != Nav::Refresh || !same_folder {
             self.selected.clear();
@@ -125,7 +134,9 @@ impl Tab {
 
     fn rebuild(&mut self) {
         let show_hidden = self.show_hidden;
-        let mut view: Vec<usize> = (0..self.entries.len()).filter(|&i| show_hidden || !self.entries[i].is_hidden()).collect();
+        let mut view: Vec<usize> = (0..self.entries.len())
+            .filter(|&i| (show_hidden || !self.entries[i].is_hidden()) && (self.matcher)(self.entries[i].name()))
+            .collect();
         let (key, asc) = (self.sort, self.ascending);
         view.sort_by(|&a, &b| listing::compare(&self.entries[a], &self.entries[b], key, asc));
         self.row_of = view.iter().enumerate().map(|(row, &i)| (self.entries[i].path().to_path_buf(), row)).collect();
@@ -176,6 +187,22 @@ impl Tab {
     /// Hidden entries stay loaded and are only filtered, so toggling needs no reload.
     pub fn set_show_hidden(&mut self, show: bool) {
         self.show_hidden = show;
+        self.rebuild();
+        let visible = &self.row_of;
+        self.selected.retain(|p| visible.contains_key(p));
+        if self.current.as_ref().is_none_or(|c| !visible.contains_key(c)) {
+            self.current = self.view.first().map(|&i| self.entries[i].path().to_path_buf());
+        }
+    }
+
+    pub fn filter(&self) -> &str {
+        &self.filter
+    }
+
+    /// Narrows the rows to names matching `text`; the selection keeps only what stays visible.
+    pub fn set_filter(&mut self, text: &str) {
+        self.filter = text.to_string();
+        self.matcher = fs_util::name_matcher(text);
         self.rebuild();
         let visible = &self.row_of;
         self.selected.retain(|p| visible.contains_key(p));
@@ -305,10 +332,15 @@ impl Tab {
         }
     }
 
-    /// "12 items", "12 items, 3 selected (4.50 KB)".
+    /// "12 items", "12 items (2 hidden)", "3 items (9 filtered out), 3 selected (4.50 KB)".
     pub fn status(&self) -> String {
         let n = self.len();
         let mut s = format!("{} {}", formats::count(n as u64), if n == 1 { "item" } else { "items" });
+        let left_out = self.entries.len() - n;
+        if left_out > 0 {
+            let why = if self.filter.trim().is_empty() { "hidden" } else { "filtered out" };
+            s.push_str(&format!(" ({} {why})", formats::count(left_out as u64)));
+        }
         let sel: Vec<&FileEntry> = self.rows().filter(|e| self.selected.contains(e.path())).collect();
         if !sel.is_empty() {
             s.push_str(&format!(", {} selected", formats::count(sel.len() as u64)));
@@ -344,6 +376,26 @@ mod tests {
             fs::write(d.join(n), "x".repeat(size)).unwrap();
         }
         tmp
+    }
+
+    #[test]
+    fn the_filter_narrows_rows_and_a_new_folder_clears_it() {
+        let tmp = folder();
+        let mut tab = Tab::new();
+        tab.show(tmp.path().to_path_buf(), listing(tmp.path()), Nav::Go);
+        tab.click(3, false, false); // b.txt
+        tab.set_filter("a*.txt");
+        assert_eq!(names(&tab), ["a9.txt", "a10.txt"]);
+        assert!(tab.selected_paths().is_empty(), "b.txt is filtered out, and so out of the selection");
+        assert_eq!(tab.status(), "2 items (3 filtered out)");
+        tab.set_filter("SUB");
+        assert_eq!(names(&tab), ["sub"], "plain text: contains, any case");
+        tab.show(tmp.path().to_path_buf(), listing(tmp.path()), Nav::Refresh);
+        assert_eq!(tab.filter(), "SUB", "a refresh keeps the filter");
+        tab.show(tmp.path().join("sub"), listing(&tmp.path().join("sub")), Nav::Go);
+        assert_eq!((tab.filter(), tab.len()), ("", 1), "another folder clears it");
+        tab.show(tmp.path().to_path_buf(), listing(tmp.path()), Nav::Back);
+        assert_eq!(tab.status(), "4 items (1 hidden), 1 selected", "back selects the folder we came from");
     }
 
     #[test]
@@ -440,7 +492,7 @@ mod tests {
         assert_eq!(tab.selected_paths(), [root.join("sub"), root.join("a10.txt")], "ctrl toggles");
         tab.click(3, false, false);
         assert_eq!(tab.selected_paths(), [root.join("b.txt")]);
-        assert_eq!(tab.status(), "4 items, 1 selected (3 bytes)");
+        assert_eq!(tab.status(), "4 items (1 hidden), 1 selected (3 bytes)");
     }
 
     #[test]
@@ -462,7 +514,7 @@ mod tests {
         tab.toggle_current();
         assert_eq!(tab.selected_paths().len(), 4);
         tab.select_all();
-        assert_eq!(tab.status(), "4 items, 4 selected (6 bytes)");
+        assert_eq!(tab.status(), "4 items (1 hidden), 4 selected (6 bytes)");
     }
 
     #[test]

@@ -1,5 +1,5 @@
 //! Visual checks without a desktop (`cargo test -p fileem --test snapshots -- --ignored`): renders
-//! the main window with a dialog and a right-click menu open, the progress window with a conflict
+//! the main window (also with both sides), a dialog and a right-click menu open, the progress window with a conflict
 //! question and a Properties window, in the
 //! headless backend's software renderer, to `target/snapshots/*.ppm`. Look at them after UI
 //! changes; they are not compared automatically.
@@ -64,8 +64,18 @@ fn snapshots() {
     ui.window().set_size(slint::LogicalSize::new(900.0, 560.0));
     let a = app::install(&ui, Rc::new(Session::load(&tmp.path().join("s.properties"))), Some(dir.clone()));
     ui.show().unwrap();
-    pump_until("listed", || ui.get_files().row_count() == 4);
+    pump_until("listed", || ui.get_left().files.row_count() == 4);
     save(ui.window(), "main");
+
+    // the second side, with a second tab and a filter on the left
+    ui.window().dispatch_event(WindowEvent::KeyPressed { text: Key::F9.into() });
+    ui.invoke_tab_new(0);
+    pump_until("second tab", || ui.get_left().tabs.row_count() == 2 && ui.get_left().files.row_count() == 4);
+    ui.invoke_filter_edited(0, "*.txt".into());
+    pump_until("right side listed", || ui.get_right().files.row_count() > 0);
+    save(ui.window(), "dual");
+    ui.invoke_filter_edited(0, "".into());
+    ui.window().dispatch_event(WindowEvent::KeyPressed { text: Key::F9.into() });
 
     ui.window().dispatch_event(WindowEvent::KeyPressed { text: Key::F7.into() });
     pump_until("dialog", || ui.get_dialog_open());
@@ -81,8 +91,8 @@ fn snapshots() {
     app::ops(&a).running().iter().for_each(|h| h.cancel());
 
     // a right-click menu on a file, and its Properties window
-    ui.invoke_row_pressed(1, false, false);
-    ui.invoke_row_menu(1);
+    ui.invoke_row_pressed(0, 1, false, false);
+    ui.invoke_row_menu(0, 1);
     ui.invoke_show_menu(520.0, 120.0);
     pump_until("laid out", || true);
     save(ui.window(), "menu-file");

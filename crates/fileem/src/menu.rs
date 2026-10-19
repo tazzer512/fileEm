@@ -2,13 +2,13 @@
 //! `MainWindow.fileMenuItems` / `treeMenuItems`). Toolkit-free: app.slint shows the sections, the
 //! controller runs the chosen [`Command`].
 //!
-//! Not yet ported (they need later stages): open in new tab / other side, copy / move to the other
-//! side, search, bookmarks, view modes, eject.
+//! Not yet ported (they need later stages): search, bookmarks, view modes, eject.
 
 use std::path::{Path, PathBuf};
 
 use fileem_core::fs::listing::SortKey;
 
+use crate::columns::{ColumnId, Columns};
 use crate::shell;
 use crate::tree::NodeKind;
 
@@ -19,6 +19,11 @@ pub enum Command {
     OpenSelection,
     /// A folder from the tree opens in the tab.
     OpenFolder(PathBuf),
+    OpenInNewTab(PathBuf),
+    OpenInOtherSide(PathBuf),
+    /// F5 / F6: asks for the target, prefilled with the other side's folder.
+    CopyToOther(Vec<PathBuf>),
+    MoveToOther(Vec<PathBuf>),
     OpenTerminal(PathBuf),
     Reveal(PathBuf),
     /// The folder shown, in the OS file manager.
@@ -40,6 +45,12 @@ pub enum Command {
     SortAscending(bool),
     ToggleHidden,
     Refresh,
+    ToggleColumn(ColumnId),
+    /// A tab of a side (side, index).
+    DuplicateTab(usize, usize),
+    TabToOtherSide(usize, usize),
+    CloseTab(usize, usize),
+    CloseOtherTabs(usize, usize),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -114,6 +125,8 @@ pub struct State {
     pub trash: bool,
     pub sort: (SortKey, bool),
     pub show_hidden: bool,
+    /// The second side is shown: copy / move to it.
+    pub dual: bool,
 }
 
 pub fn is_zip(p: &Path) -> bool {
@@ -133,6 +146,10 @@ pub fn file_menu(selection: &[Item], dir: Option<&Path>, st: &State) -> Menu {
     if let Some(d) = terminal_dir {
         open.push(item("Open in terminal", Command::OpenTerminal(d)));
     }
+    if single_dir {
+        open.insert(1, item("Open in new tab", Command::OpenInNewTab(p.clone())));
+        open.insert(2, item("Open in other side", Command::OpenInOtherSide(p.clone())));
+    }
     if single {
         open.push(item(format!("Show in {}", shell::file_manager_name()), Command::Reveal(p.clone())));
     }
@@ -144,7 +161,12 @@ pub fn file_menu(selection: &[Item], dir: Option<&Path>, st: &State) -> Menu {
             (false, None) => item("Paste", Command::PasteInto(PathBuf::new())).enabled(false),
         });
     }
-    let mut archive = vec![item("Duplicate", Command::Duplicate(sel.clone())), item("Compress to ZIP", Command::Compress(sel.clone()))];
+    let transfer = vec![
+        item("Copy to other side…  (F5)", Command::CopyToOther(sel.clone())).enabled(st.dual),
+        item("Move to other side…  (F6)", Command::MoveToOther(sel.clone())).enabled(st.dual),
+        item("Duplicate", Command::Duplicate(sel.clone())),
+    ];
+    let mut archive = vec![item("Compress to ZIP", Command::Compress(sel.clone()))];
     if single && !first.is_dir && is_zip(first.path) {
         archive.push(item("Extract here", Command::Extract(p.clone())));
     }
@@ -154,7 +176,7 @@ pub fn file_menu(selection: &[Item], dir: Option<&Path>, st: &State) -> Menu {
     }
     remove.push(item("Delete permanently  (Shift+Del)", Command::Delete(sel.clone())));
     let info = vec![item("Copy path", Command::CopyPath(sel.clone())), item("Properties  (Alt+Enter)", Command::Properties(sel))];
-    Menu { sections: vec![open, clip, archive, remove, info], ..Menu::default() }
+    Menu { sections: vec![open, clip, transfer, archive, remove, info], ..Menu::default() }
 }
 
 /// Right-click on empty space in the list: the folder shown.
@@ -181,10 +203,7 @@ fn background_menu(dir: Option<&Path>, st: &State) -> Menu {
 
 /// The "Sort by" submenu: the columns, then the direction, the current ones checked.
 fn sort_entries((key, ascending): (SortKey, bool)) -> Vec<Entry> {
-    let mut v: Vec<Entry> = [("Name", SortKey::Name), ("Size", SortKey::Size), ("Type", SortKey::Type), ("Date modified", SortKey::Modified)]
-        .into_iter()
-        .map(|(t, k)| check(t, k == key, Command::SortBy(k)))
-        .collect();
+    let mut v: Vec<Entry> = SortKey::ALL.into_iter().map(|k| check(k.title(), k == key, Command::SortBy(k))).collect();
     v.push(check("Ascending", ascending, Command::SortAscending(true)));
     v.push(check("Descending", !ascending, Command::SortAscending(false)));
     v
@@ -202,6 +221,8 @@ pub fn tree_menu(dir: &Path, kind: NodeKind, st: &State) -> Menu {
     let volume = kind == NodeKind::Volume;
     let open = vec![
         item("Open", Command::OpenFolder(d.clone())),
+        item("Open in new tab", Command::OpenInNewTab(d.clone())),
+        item("Open in other side", Command::OpenInOtherSide(d.clone())),
         item("Open in terminal", Command::OpenTerminal(d.clone())),
         item(format!("Show in {}", shell::file_manager_name()), Command::Reveal(d.clone())),
     ];
@@ -231,12 +252,39 @@ pub fn tree_menu(dir: &Path, kind: NodeKind, st: &State) -> Menu {
     Menu { sections: vec![open, clip, change, info], sort: Vec::new(), new: new_entries(dir) }
 }
 
+/// Right-click on the column headers: which columns to show (Name always stays).
+pub fn header_menu(columns: &Columns) -> Menu {
+    let entries = columns
+        .all()
+        .iter()
+        .map(|c| check(c.id.title(), c.visible, Command::ToggleColumn(c.id)).enabled(c.id != ColumnId::Name))
+        .collect();
+    Menu { sections: vec![entries], ..Menu::default() }
+}
+
+/// Right-click on a tab.
+pub fn tab_menu(side: usize, index: usize, tabs: usize) -> Menu {
+    Menu {
+        sections: vec![
+            vec![
+                item("Duplicate tab", Command::DuplicateTab(side, index)),
+                item("Open in other side", Command::TabToOtherSide(side, index)),
+            ],
+            vec![
+                item("Close tab  (Ctrl+W)", Command::CloseTab(side, index)).enabled(tabs > 1),
+                item("Close other tabs", Command::CloseOtherTabs(side, index)).enabled(tabs > 1),
+            ],
+        ],
+        ..Menu::default()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn state(can_paste: bool) -> State {
-        State { can_paste, trash: true, sort: (SortKey::Name, true), show_hidden: false }
+        State { can_paste, trash: true, sort: (SortKey::Name, true), show_hidden: false, dual: false }
     }
 
     fn has(m: &Menu, prefix: &str) -> bool {
@@ -257,6 +305,10 @@ mod tests {
             assert!(has(&file, expected), "{expected} in {:?}", file.titles());
         }
         assert!(!has(&file, "Extract here"), "only zips can be extracted");
+        assert!(!has(&file, "Open in new tab"), "files don't open in tabs");
+        assert!(!file.find("Copy to other side").unwrap().enabled, "needs the second side");
+        let dual = file_menu(&[Item { path: &doc, is_dir: false }], Some(dir), &State { dual: true, ..state(false) });
+        assert!(dual.find("Move to other side").unwrap().enabled);
         assert!(!has(&file, "Paste"), "nothing to paste");
         assert_eq!(file.find("Open in terminal").unwrap().command, Command::OpenTerminal(dir.into()), "a file's terminal opens in its folder");
 
@@ -267,6 +319,8 @@ mod tests {
         let folder = file_menu(&[Item { path: &sub, is_dir: true }], Some(dir), &state(true));
         assert_eq!(folder.find("Paste into folder").unwrap().command, Command::PasteInto(sub.clone()));
         assert_eq!(folder.find("Open in terminal").unwrap().command, Command::OpenTerminal(sub.clone()));
+        assert_eq!(folder.find("Open in new tab").unwrap().command, Command::OpenInNewTab(sub.clone()));
+        assert!(has(&folder, "Open in other side"));
 
         let two = file_menu(&[Item { path: &doc, is_dir: false }, Item { path: &sub, is_dir: true }], Some(dir), &state(true));
         assert!(!two.find("Rename").unwrap().enabled, "rename needs one item");
@@ -306,6 +360,7 @@ mod tests {
         for expected in ["Open", "Open in terminal", "Cut", "Copy", "Paste into folder", "Folder", "Text file", "Duplicate", "Compress to ZIP", "Rename…", "Delete permanently", "Properties"] {
             assert!(has(&folder, expected), "{expected} in {:?}", folder.titles());
         }
+        assert!(has(&folder, "Open in new tab") && has(&folder, "Open in other side"));
         let quick = tree_menu(dir, NodeKind::Quick, &state(true));
         assert!(has(&quick, "Copy") && has(&quick, "Paste into folder"));
         for forbidden in ["Cut", "Rename…", "Move to Trash", "Delete permanently", "Duplicate"] {
@@ -316,5 +371,23 @@ mod tests {
             assert!(!offers(&volume, forbidden), "{forbidden} must not be offered for a drive");
         }
         assert!(!volume.find("Paste into folder").unwrap().enabled);
+    }
+
+    #[test]
+    fn the_header_menu_lists_every_column_and_keeps_name() {
+        let m = header_menu(&Columns::default());
+        assert_eq!(m.titles(), ["Name", "Size", "Type", "Date modified", "Date created", "Date accessed", "Extension", "Attributes"]);
+        assert!(!m.find("Name").unwrap().enabled);
+        assert_eq!(m.find("Size").unwrap().checked, Some(true));
+        assert_eq!(m.find("Extension").unwrap().checked, Some(false));
+        assert_eq!(m.find("Extension").unwrap().command, Command::ToggleColumn(ColumnId::Extension));
+    }
+
+    #[test]
+    fn the_last_tab_cant_be_closed_from_its_menu() {
+        assert!(!tab_menu(0, 0, 1).find("Close tab").unwrap().enabled);
+        let m = tab_menu(1, 2, 3);
+        assert!(m.find("Close other tabs").unwrap().enabled);
+        assert_eq!(m.find("Duplicate tab").unwrap().command, Command::DuplicateTab(1, 2));
     }
 }

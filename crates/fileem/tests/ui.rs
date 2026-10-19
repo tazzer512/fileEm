@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 
 use std::rc::Rc;
 
-use fileem::{app, shell, AppWindow, FileRow, ProgressWindow, PropertiesWindow, TreeRow};
+use fileem::{app, shell, AppWindow, FileRow, ProgressWindow, PropertiesWindow, SideView, TreeRow};
 use fileem_core::ops::{Decision, FileOperation, Kind, Resolution};
 use fileem_core::session::Session;
 use i_slint_backend_testing::ElementHandle;
@@ -58,8 +58,17 @@ fn open_window_with(prepare: impl FnOnce(&Session, &Path), start_there: bool) ->
 }
 
 impl Fixture {
+    /// The active side's view.
+    fn view(&self) -> SideView {
+        if app::active_side(&self.app) == 1 {
+            self.ui.get_right()
+        } else {
+            self.ui.get_left()
+        }
+    }
+
     fn rows(&self) -> Vec<FileRow> {
-        self.ui.get_files().iter().collect()
+        self.view().files.iter().collect()
     }
 
     fn names(&self) -> Vec<String> {
@@ -75,11 +84,11 @@ impl Fixture {
     }
 
     fn tree(&self) -> Vec<TreeRow> {
-        self.ui.get_tree().iter().collect()
+        self.view().tree.iter().collect()
     }
 
     fn address(&self) -> PathBuf {
-        PathBuf::from(self.ui.get_address().as_str())
+        PathBuf::from(self.view().address.as_str())
     }
 
     fn key(&self, text: impl Into<SharedString>) {
@@ -112,9 +121,11 @@ impl Fixture {
             .unwrap_or_else(|| panic!("no button labelled {label:?}"))
     }
 
+    /// A click near the element's left end (rows are as wide as all columns, which can reach
+    /// past the side they are in).
     fn click_at(&self, e: &ElementHandle) {
         let (pos, size) = (e.absolute_position(), e.size());
-        let position = LogicalPosition::new(pos.x + size.width / 2.0, pos.y + size.height / 2.0);
+        let position = LogicalPosition::new(pos.x + (size.width / 2.0).min(30.0), pos.y + size.height / 2.0);
         let w = self.ui.window();
         w.dispatch_event(WindowEvent::PointerMoved { position });
         w.dispatch_event(WindowEvent::PointerPressed { position, button: PointerEventButton::Left });
@@ -135,19 +146,19 @@ impl Fixture {
 
     fn right_click(&self, e: &ElementHandle) {
         let (pos, size) = (e.absolute_position(), e.size());
-        self.right_click_at(LogicalPosition::new(pos.x + size.width / 2.0, pos.y + size.height / 2.0));
+        self.right_click_at(LogicalPosition::new(pos.x + (size.width / 2.0).min(30.0), pos.y + size.height / 2.0));
     }
 
     /// A row of the file list (the tree may show the same name).
     fn list_row(&self, name: &str) -> ElementHandle {
-        let tree_width = self.ui.get_tree_width();
+        let tree_width = self.ui.get_left().tree_width;
         ElementHandle::find_by_accessible_label(&self.ui, name)
             .find(|e| e.accessible_role() == Some(i_slint_backend_testing::AccessibleRole::ListItem) && e.absolute_position().x > tree_width)
             .unwrap_or_else(|| panic!("no list row {name:?}"))
     }
 
     fn tree_row(&self, name: &str) -> ElementHandle {
-        let tree_width = self.ui.get_tree_width();
+        let tree_width = self.ui.get_left().tree_width;
         ElementHandle::find_by_accessible_label(&self.ui, name)
             .find(|e| e.accessible_role() == Some(i_slint_backend_testing::AccessibleRole::ListItem) && e.absolute_position().x < tree_width)
             .unwrap_or_else(|| panic!("no tree row {name:?}"))
@@ -177,6 +188,21 @@ impl Fixture {
         w.dispatch_event(WindowEvent::PointerPressed { position, button: PointerEventButton::Left });
         w.dispatch_event(WindowEvent::PointerReleased { position, button: PointerEventButton::Left });
         pump();
+    }
+
+    /// A tab of the tab bars by its title.
+    fn tab_button(&self, title: &str, side: usize) -> ElementHandle {
+        let split = if app::is_dual(&self.app) { self.ui.window().size().width as f32 / self.ui.window().scale_factor() / 2.0 } else { f32::MAX };
+        ElementHandle::find_by_accessible_label(&self.ui, title)
+            .filter(|e| e.accessible_role() == Some(i_slint_backend_testing::AccessibleRole::Tab))
+            .find(|e| (e.absolute_position().x < split) == (side == 0))
+            .unwrap_or_else(|| panic!("no tab {title:?} on side {side}"))
+    }
+
+    fn type_text(&self, text: &str) {
+        for c in text.chars() {
+            self.key(c.to_string());
+        }
     }
 
     fn property(&self, w: &PropertiesWindow, label: &str) -> String {
@@ -254,12 +280,24 @@ fn ui() {
     new_text_file_from_the_menu();
     duplicate_compress_and_extract_from_the_menu();
     paste_into_a_folder_from_its_menu();
+    ctrl_t_opens_and_ctrl_w_closes_tabs_but_never_the_last();
+    the_tab_bar_switches_adds_and_closes_tabs();
+    f9_opens_the_second_side_and_tab_switches();
+    f5_copies_and_f6_moves_to_the_other_side();
+    copy_and_move_to_the_other_side_need_the_second_side();
+    the_filter_box_narrows_the_list_and_escape_clears_it();
+    ctrl_l_edits_the_address_and_a_file_path_selects_the_file();
+    crumbs_show_names_as_they_are_and_navigate();
+    the_header_menu_shows_more_columns_and_they_sort();
+    the_session_restores_tabs_and_the_second_side();
+    renaming_a_folder_moves_the_tabs_inside_it();
+    both_lists_stay_usable_in_a_narrow_dual_window();
 }
 
 fn lists_folders_first_with_status_and_no_hidden_files() {
     let f = open_window();
     assert_eq!(f.names(), ["alpha", "beta", "a.png", "big.bin", "notes.txt"]);
-    assert_eq!(f.ui.get_status(), "5 items");
+    assert_eq!(f.view().status, "5 items (1 hidden)");
     assert_eq!(f.address(), f.dir);
     assert_eq!(f.current().as_deref(), Some("alpha"), "the first row has the focus");
     let png = &f.rows()[2];
@@ -284,7 +322,7 @@ fn alt_arrows_go_back_and_forward() {
     let f = open_window();
     f.double_click("beta");
     wait_until(&f, "beta is open", |f| f.address() == f.dir.join("beta"));
-    assert_eq!(f.ui.get_message(), "This folder is empty.");
+    assert_eq!(f.view().message, "This folder is empty.");
     f.chord(&[Key::Alt], Key::LeftArrow);
     wait_until(&f, "back", |f| f.address() == f.dir);
     assert!(f.ui.get_can_forward());
@@ -300,7 +338,7 @@ fn keyboard_selection_and_enter_opens_files_without_launching() {
     assert_eq!(f.selected(), ["notes.txt"]);
     f.chord(&[Key::Shift], Key::UpArrow);
     assert_eq!(f.selected(), ["big.bin", "notes.txt"]);
-    assert_eq!(f.ui.get_status(), "5 items, 2 selected (4.89 KB)");
+    assert_eq!(f.view().status, "5 items (1 hidden), 2 selected (4.89 KB)");
     f.key(Key::Home);
     assert_eq!(f.selected(), ["alpha"]);
     f.chord(&[Key::Control], "a");
@@ -329,7 +367,7 @@ fn clicking_a_column_header_sorts_and_again_reverses() {
     assert_eq!(f.names(), ["alpha", "beta", "a.png", "notes.txt", "big.bin"]);
     f.click("Size");
     assert_eq!(f.names(), ["beta", "alpha", "big.bin", "notes.txt", "a.png"], "folders stay first");
-    assert!(!f.ui.get_sort_ascending());
+    assert!(!f.view().sort_ascending);
 }
 
 fn typing_jumps_to_a_name() {
@@ -357,11 +395,11 @@ fn click_ctrl_click_and_shift_click_select() {
 
 fn the_address_bar_navigates_and_reports_bad_paths() {
     let f = open_window();
-    f.ui.invoke_navigate_address(f.dir.join("alpha").display().to_string().into());
+    f.ui.invoke_address_entered(0, f.dir.join("alpha").display().to_string().into());
     wait_until(&f, "alpha", |f| f.names() == ["inside.txt"]);
     let missing = f.dir.join("missing");
-    f.ui.invoke_navigate_address(missing.display().to_string().into());
-    wait_until(&f, "the error", |f| f.ui.get_status().contains("Not found"));
+    f.ui.invoke_address_entered(0, missing.display().to_string().into());
+    wait_until(&f, "the error", |f| f.view().status.contains("Not found"));
     assert_eq!(f.address(), f.dir.join("alpha"), "the address bar returns to the folder still shown");
     assert_eq!(f.names(), ["inside.txt"]);
 }
@@ -380,10 +418,10 @@ fn the_tree_reveals_the_current_folder_and_navigates_on_click() {
 
     // expanding it shows its subfolders, a click on one navigates
     let row = f.tree().iter().position(|r| r.current).unwrap();
-    f.ui.invoke_tree_toggled(row as i32);
+    f.ui.invoke_tree_toggled(0, row as i32);
     wait_until(&f, "subfolders", |f| f.tree().iter().any(|r| r.name == "alpha"));
     let alpha = f.tree().iter().position(|r| r.name == "alpha").unwrap();
-    f.ui.invoke_tree_clicked(alpha as i32);
+    f.ui.invoke_tree_clicked(0, alpha as i32);
     wait_until(&f, "alpha", |f| f.address() == f.dir.join("alpha"));
     wait_until(&f, "alpha is current in the tree", |f| f.tree().iter().any(|r| r.current && r.name == "alpha"));
 }
@@ -405,10 +443,10 @@ fn the_session_restores_hidden_files_sort_and_the_last_folder() {
     wait_until(&f, "the last folder with hidden files", |f| f.names().len() == 6);
     assert_eq!(f.address(), f.dir, "the selected tab's folder");
     assert!(f.ui.get_show_hidden());
-    assert_eq!(f.ui.get_sort_column(), 1);
-    assert!(!f.ui.get_sort_ascending());
+    assert_eq!(f.view().sort_column, 1);
+    assert!(!f.view().sort_ascending);
     assert_eq!(f.names()[2], "big.bin", "largest file first");
-    assert_eq!(f.ui.get_tree_width(), 300.0);
+    assert_eq!(f.view().tree_width, 300.0);
 }
 
 fn a_vanished_last_folder_opens_its_nearest_parent() {
@@ -419,18 +457,23 @@ fn a_vanished_last_folder_opens_its_nearest_parent() {
 
 fn saving_the_session_keeps_what_only_the_java_app_uses() {
     let f = open_window_with(
-        |s, _| {
+        |s, dir| {
             s.put("left.tabs", 3);
             s.put("left.selected", 1);
-            s.put("left.tab.0", "/java/tab0");
-            s.put("left.tab.1", "/java/tab1");
-            s.put("left.tab.2", "/java/tab2");
-            s.put("right.tab.0", "/java/right");
+            s.put("left.tab.0", dir.join("beta").display());
+            s.put("left.tab.0.view", "large-icons");
+            s.put("left.tab.0.size", "large-icons:2");
+            s.put("left.tab.1", dir.display());
+            s.put("left.tab.2", dir.display());
+            s.put("right.tabs", 1);
+            s.put("right.tab.0", dir.join("alpha").display());
             s.put("columns.size.width", 120);
             s.put("theme.name", "aurora");
+            s.put("preview.enabled", true);
         },
-        true,
+        false,
     );
+    wait_until(&f, "the selected tab", |f| f.names().len() == 5);
     f.double_click("alpha");
     wait_until(&f, "alpha", |f| f.address() == f.dir.join("alpha"));
     f.chord(&[Key::Control], "h");
@@ -440,15 +483,20 @@ fn saving_the_session_keeps_what_only_the_java_app_uses() {
     let saved = Session::load(app::session(&f.app).file());
     assert_eq!(saved.get("left.tab.1").map(PathBuf::from), Some(f.dir.join("alpha")), "the shown tab's folder");
     assert!(saved.get_bool("showHidden", false));
+    let dir = |p: &Path| p.display().to_string();
     for (k, v) in [
-        ("left.tabs", "3"),
-        ("left.tab.0", "/java/tab0"),
-        ("left.tab.2", "/java/tab2"),
-        ("right.tab.0", "/java/right"),
-        ("columns.size.width", "120"),
-        ("theme.name", "aurora"),
+        ("left.tabs", "3".to_string()),
+        ("left.selected", "1".to_string()),
+        ("left.tab.0", dir(&f.dir.join("beta"))),
+        ("left.tab.0.view", "large-icons".to_string()),
+        ("left.tab.0.size", "large-icons:2".to_string()),
+        ("left.tab.2", dir(&f.dir)),
+        ("right.tab.0", dir(&f.dir.join("alpha"))),
+        ("columns.size.width", "120".to_string()),
+        ("theme.name", "aurora".to_string()),
+        ("preview.enabled", "true".to_string()),
     ] {
-        assert_eq!(saved.get(k).as_deref(), Some(v), "{k} left alone");
+        assert_eq!(saved.get(k).as_deref(), Some(v.as_str()), "{k} kept");
     }
     assert!(saved.get_f64("window.w", 0.0) > 0.0);
 }
@@ -461,14 +509,14 @@ fn changes_made_elsewhere_show_up_and_keep_the_selection() {
     wait_until(&f, "the watcher refreshed", |f| f.names().contains(&"added.txt".to_string()));
     assert!(!f.names().contains(&"a.png".to_string()));
     assert_eq!(f.selected(), ["notes.txt"], "the selection survives a refresh");
-    assert_eq!(f.ui.get_status(), "5 items, 1 selected (10 bytes)");
+    assert_eq!(f.view().status, "5 items (1 hidden), 1 selected (10 bytes)");
 }
 
 fn a_new_subfolder_shows_up_in_the_tree() {
     let f = open_window();
     wait_until(&f, "the tree shows the folder", |f| f.tree().iter().any(|r| r.current));
     let row = f.tree().iter().position(|r| r.current).unwrap();
-    f.ui.invoke_tree_toggled(row as i32);
+    f.ui.invoke_tree_toggled(0, row as i32);
     wait_until(&f, "subfolders", |f| f.tree().iter().any(|r| r.name == "alpha"));
     fs::create_dir(f.dir.join("gamma")).unwrap();
     wait_until(&f, "the new folder in the tree", |f| f.tree().iter().any(|r| r.name == "gamma"));
@@ -711,7 +759,7 @@ fn right_click_selects_the_row_and_opens_its_menu() {
 fn right_click_on_a_selected_row_keeps_the_selection() {
     let f = open_window();
     f.click("notes.txt");
-    f.ui.invoke_row_pressed(3, true, false); // Ctrl+click big.bin
+    f.ui.invoke_row_pressed(0, 3, true, false); // Ctrl+click big.bin
     f.right_click(&f.list_row("notes.txt"));
     assert_eq!(f.selected(), ["big.bin", "notes.txt"]);
     f.pick("Copy");
@@ -732,7 +780,7 @@ fn right_click_on_empty_space_offers_the_folder_menu() {
     wait_until(&f, "the sort submenu", |f| f.menu_item("Descending").is_some());
     f.pick("Descending");
     wait_until(&f, "sorted descending", |f| f.names() == ["beta", "alpha", "notes.txt", "big.bin", "a.png"]);
-    assert!(!f.ui.get_sort_ascending());
+    assert!(!f.view().sort_ascending);
 }
 
 fn right_click_in_the_tree_opens_a_menu_without_navigating() {
@@ -797,7 +845,7 @@ fn duplicate_compress_and_extract_from_the_menu() {
 
     f.click("notes.txt");
     let big = f.names().iter().position(|n| n == "big.bin").unwrap();
-    f.ui.invoke_row_pressed(big as i32, true, false);
+    f.ui.invoke_row_pressed(0, big as i32, true, false);
     f.right_click(&f.list_row("notes.txt"));
     f.pick("Compress to ZIP");
     wait_until(&f, "the archive selected", |f| f.selected() == ["Archive.zip"]);
@@ -817,4 +865,207 @@ fn paste_into_a_folder_from_its_menu() {
     f.pick("Paste into folder");
     wait_until(&f, "pasted into beta", |f| f.dir.join("beta/notes.txt").exists());
     assert_eq!(f.address(), f.dir, "the folder stays shown");
+}
+
+// ---- tabs, the second side, address bar, filter, columns ----
+
+fn tab_dirs(f: &Fixture, side: usize) -> Vec<PathBuf> {
+    app::tabs(&f.app, side).0.into_iter().map(|d| d.unwrap_or_default()).collect()
+}
+
+fn ctrl_t_opens_and_ctrl_w_closes_tabs_but_never_the_last() {
+    let f = open_window();
+    f.chord(&[Key::Control], "t");
+    wait_until(&f, "a second tab, listed", |f| app::tabs(&f.app, 0).0.len() == 2 && f.names().len() == 5);
+    assert_eq!(app::tabs(&f.app, 0).1, 1, "the new tab is selected");
+    assert_eq!(tab_dirs(&f, 0), [f.dir.clone(), f.dir.clone()], "it opens the folder you were in");
+    f.chord(&[Key::Control], "w");
+    assert_eq!(app::tabs(&f.app, 0).0.len(), 1);
+    f.chord(&[Key::Control], "w");
+    assert_eq!(app::tabs(&f.app, 0).0.len(), 1, "the last tab stays");
+}
+
+fn the_tab_bar_switches_adds_and_closes_tabs() {
+    let f = open_window();
+    f.click_at(&f.button("New tab (Ctrl+T)"));
+    wait_until(&f, "a second tab", |f| app::tabs(&f.app, 0).0.len() == 2 && f.names().len() == 5);
+    f.double_click("alpha");
+    wait_until(&f, "alpha in the second tab", |f| f.address() == f.dir.join("alpha"));
+    f.click_at(&f.tab_button("files", 0));
+    wait_until(&f, "the first tab again", |f| f.address() == f.dir && f.names().len() == 5);
+    assert_eq!(f.view().tabs.iter().map(|t| t.title.to_string()).collect::<Vec<_>>(), ["files", "alpha"]);
+    f.right_click(&f.tab_button("files", 0));
+    f.pick("Close other tabs");
+    wait_until(&f, "one tab", |f| app::tabs(&f.app, 0).0.len() == 1);
+    assert_eq!(f.address(), f.dir);
+}
+
+fn f9_opens_the_second_side_and_tab_switches() {
+    let f = open_window();
+    f.key(Key::F9);
+    assert!(app::is_dual(&f.app));
+    assert_eq!(app::active_side(&f.app), 0);
+    f.key(Key::Tab);
+    assert_eq!(app::active_side(&f.app), 1);
+    f.key(Key::Tab);
+    assert_eq!(app::active_side(&f.app), 0);
+    f.key(Key::Tab);
+    f.key(Key::F9);
+    assert!(!app::is_dual(&f.app));
+    assert_eq!(app::active_side(&f.app), 0, "the left side takes over");
+}
+
+fn f5_copies_and_f6_moves_to_the_other_side() {
+    let f = open_window();
+    f.key(Key::F9);
+    f.ui.invoke_address_entered(1, f.dir.join("alpha").display().to_string().into());
+    wait_until(&f, "the right side in alpha", |f| f.ui.get_right().address == f.dir.join("alpha").display().to_string());
+    f.ui.invoke_activate(0);
+    f.click("notes.txt");
+    f.key(Key::F5);
+    assert_eq!(f.ui.get_dialog_title(), "Copy");
+    assert_eq!(f.ui.get_dialog_text(), f.dir.join("alpha").display().to_string(), "the other side's folder");
+    f.button("Copy").invoke_accessible_default_action();
+    wait_until(&f, "copied", |f| f.dir.join("alpha/notes.txt").exists());
+    assert!(f.dir.join("notes.txt").exists());
+
+    f.click("big.bin");
+    f.key(Key::F6);
+    f.button("Move").invoke_accessible_default_action();
+    wait_until(&f, "moved, and both sides refreshed", |f| {
+        let right: Vec<String> = f.ui.get_right().files.iter().map(|r| r.name.to_string()).collect();
+        right == ["big.bin", "inside.txt", "notes.txt"] && !f.names().contains(&"big.bin".to_string())
+    });
+
+    f.click("a.png");
+    f.key(Key::F5);
+    f.ui.set_dialog_text("no/such/folder".into());
+    f.button("Copy").invoke_accessible_default_action();
+    wait_until(&f, "the error", |f| f.ui.get_dialog_title() == "Copy" && f.ui.get_dialog_message().contains("does not exist"));
+    f.button("OK").invoke_accessible_default_action();
+}
+
+fn copy_and_move_to_the_other_side_need_the_second_side() {
+    let f = open_window();
+    f.click("notes.txt");
+    f.key(Key::F5);
+    f.key(Key::F6);
+    assert!(!dialog_open(&f), "no target dialog without the second side");
+    f.right_click(&f.list_row("notes.txt"));
+    assert!(f.menu_item("Copy to other side…  (F5)").is_some());
+    f.key(Key::Escape);
+    pump();
+}
+
+fn the_filter_box_narrows_the_list_and_escape_clears_it() {
+    let f = open_window();
+    f.chord(&[Key::Control], "f");
+    pump();
+    f.type_text("b*");
+    wait_until(&f, "filtered", |f| f.names() == ["beta", "big.bin"]);
+    assert_eq!(f.view().status, "2 items (4 filtered out)");
+    f.key(Key::Escape);
+    wait_until(&f, "cleared", |f| f.names().len() == 5);
+    assert_eq!(f.view().filter, "");
+    f.key(Key::DownArrow);
+    assert_eq!(f.current().as_deref(), Some("a.png"), "the list has the keys again (focus was on beta)");
+
+    f.chord(&[Key::Control], "f");
+    pump();
+    f.type_text("NOTES");
+    wait_until(&f, "contains, any case", |f| f.names() == ["notes.txt"]);
+    f.key(Key::Return);
+    f.ui.invoke_address_entered(0, f.dir.join("alpha").display().to_string().into());
+    wait_until(&f, "another folder, unfiltered", |f| f.names() == ["inside.txt"]);
+    assert_eq!(f.view().filter, "");
+}
+
+fn ctrl_l_edits_the_address_and_a_file_path_selects_the_file() {
+    let f = open_window();
+    f.chord(&[Key::Control], "l");
+    pump();
+    let field = f.element("Address field");
+    assert_eq!(field.accessible_value().as_deref(), Some(f.dir.display().to_string().as_str()));
+    f.type_text(&f.dir.join("alpha/inside.txt").display().to_string()); // replaces the selected text
+    f.key(Key::Return);
+    wait_until(&f, "the file's folder", |f| f.address() == f.dir.join("alpha"));
+    wait_until(&f, "the file selected", |f| f.selected() == ["inside.txt"]);
+
+    f.chord(&[Key::Control], "l");
+    pump();
+    f.type_text("..");
+    f.key(Key::Return);
+    wait_until(&f, "relative to the folder shown", |f| f.address() == f.dir);
+}
+
+fn crumbs_show_names_as_they_are_and_navigate() {
+    let f = open_window();
+    fs::create_dir(f.dir.join("2019_09_08")).unwrap();
+    f.ui.invoke_address_entered(0, f.dir.join("2019_09_08").display().to_string().into());
+    wait_until(&f, "the folder", |f| f.address() == f.dir.join("2019_09_08"));
+    let crumbs: Vec<String> = f.view().crumbs.iter().map(|c| c.label.to_string()).collect();
+    assert_eq!(crumbs.last().map(String::as_str), Some("2019_09_08"));
+    assert!(f.view().crumbs.iter().next().unwrap().drive, "the root is a drive");
+    f.click_at(&f.button("files"));
+    wait_until(&f, "a click on a crumb opens it", |f| f.address() == f.dir);
+}
+
+fn the_header_menu_shows_more_columns_and_they_sort() {
+    let f = open_window();
+    assert!(ElementHandle::find_by_accessible_label(&f.ui, "Extension").next().is_none());
+    let header = f.button("Name");
+    f.right_click(&header);
+    f.pick("Extension");
+    wait_until(&f, "the Extension column", |f| f.ui.get_columns().iter().any(|c| c.title == "Extension"));
+    assert_eq!(f.rows().iter().find(|r| r.name == "notes.txt").unwrap().extension, "txt");
+    f.click_at(&f.button("Extension"));
+    wait_until(&f, "sorted by extension", |f| f.names() == ["alpha", "beta", "big.bin", "a.png", "notes.txt"]);
+    app::collect_session(&f.app);
+    assert!(app::session(&f.app).get_bool("columns.extension.visible", false));
+    assert_eq!(app::session(&f.app).get("sort.column").as_deref(), Some("extension"));
+}
+
+fn the_session_restores_tabs_and_the_second_side() {
+    let f = open_window();
+    f.chord(&[Key::Control], "t");
+    wait_until(&f, "a second tab", |f| app::tabs(&f.app, 0).0.len() == 2 && f.names().len() == 5);
+    f.double_click("alpha");
+    wait_until(&f, "alpha", |f| f.address() == f.dir.join("alpha"));
+    f.key(Key::F9);
+    app::collect_session(&f.app);
+
+    let ui = AppWindow::new().unwrap();
+    let again = app::install(&ui, app::session(&f.app), None);
+    app::set_clipboard(&again, Box::new(fileem::clipboard::Memory::default()));
+    let start = Instant::now();
+    while app::tabs(&again, 0).0 != [Some(f.dir.clone()), Some(f.dir.join("alpha"))] {
+        assert!(start.elapsed() < Duration::from_secs(10), "tabs restored: {:?}", app::tabs(&again, 0));
+        pump();
+    }
+    assert_eq!(app::tabs(&again, 0).1, 1, "the selected tab");
+    assert!(app::is_dual(&again));
+}
+
+fn renaming_a_folder_moves_the_tabs_inside_it() {
+    let f = open_window();
+    fs::create_dir(f.dir.join("alpha/inner")).unwrap();
+    f.ui.invoke_address_entered(0, f.dir.join("alpha/inner").display().to_string().into());
+    wait_until(&f, "inner", |f| f.address() == f.dir.join("alpha/inner"));
+    app::run_command(&f.app, fileem::menu::Command::Rename(f.dir.join("alpha")));
+    f.ui.set_dialog_text("renamed".into());
+    f.button("Rename").invoke_accessible_default_action();
+    wait_until(&f, "the tab followed", |f| f.address() == f.dir.join("renamed/inner"));
+    assert!(f.dir.join("renamed/inner").is_dir());
+}
+
+fn both_lists_stay_usable_in_a_narrow_dual_window() {
+    let f = open_window();
+    f.ui.window().set_size(slint::LogicalSize::new(700.0, 500.0));
+    f.key(Key::F9);
+    pump();
+    let lists: Vec<f32> = ElementHandle::find_by_accessible_label(&f.ui, "Status").map(|e| e.size().width).collect();
+    assert_eq!(lists.len(), 2);
+    for w in lists {
+        assert!(w >= 200.0, "a file list keeps a usable width: {w}");
+    }
 }

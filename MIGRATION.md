@@ -8,9 +8,9 @@ rules (tests, integrity, conventions) that apply to both versions.
 executable with a much smaller memory footprint (measured: Java ~360 MB, Rust ~105 MB with
 OpenGL, ~32 MB with the software renderer).
 
-**Status (2026-10-19)**: stages 0, 1 and 2 done on branch `rust`. The Java app in `src/` is
-still the complete, daily-use version; nothing was removed from it. Next: stage 3 (tabs, dual
-pane, breadcrumb address bar, filter, more columns).
+**Status (2026-10-19)**: stages 0–3 done on branch `rust`. The Java app in `src/` is still the
+complete, daily-use version; nothing was removed from it. Next: stage 4 (drag & drop, selection
+box).
 
 ## How to work a stage
 
@@ -128,14 +128,39 @@ are the Java sources, as a size hint.
   "menu closed" event to remove the outline again.
 - Not ported from Java: "Open with…" never existed there either (the plan's old note).
 
-### Stage 3: tabs, dual pane, address bar, filter
+### Stage 3: tabs, dual pane, address bar, filter (done)
 
-- Tabs per side (`ExplorerSide` 246, `FileTab` 872), Ctrl+T/W; dual pane F9, Tab switches side,
-  F5/F6 copy/move to the other side with an editable target.
-- Breadcrumb address bar (`AddressBar` 190), Ctrl+L edits.
-- Filter box (Ctrl+F) with `fs_util::name_matcher`.
-- More columns (created, accessed, extension, attributes) with chooser and widths
-  (`FileTable` 286), saved in the session.
+- [x] **Structure**: `app.rs` (state, session, wiring, view sync) + `app/nav.rs` (listings per
+  tab, watching, trees, tabs, sides) + `app/commands.rs` (operations, clipboard, dialogs, menus,
+  properties) + `app/keys.rs`. `App.sides: [Side; 2]`, each with a `Tree` and `Vec<TabState>`;
+  every tab has an id that async results (listings, watch tokens) look up, so closing or adding
+  tabs never misroutes a result. Each tab watches its own folder. Slint: `ui/side.slint`
+  (`SidePane`, driven by one `SideView` struct per side; requests such as "scroll to row" or
+  "edit the address" are sequence numbers that change); app.slint shows one or two panes.
+- [x] **Tabs** per side: tab bar with close buttons and +, Ctrl+T (current folder) / Ctrl+W
+  (never the last), middle-click closes, tab menu (Duplicate tab, Open in other side, Close
+  tab, Close other tabs). New tabs sort like the tab you were in.
+- [x] **Second side**: F9 / toolbar button, Tab switches sides, a press anywhere in a side
+  activates it (accent line on its tab bar), draggable divider (`split.sides`). F5/F6 ask for
+  the target (prefilled with the other side's folder, typed paths resolved and checked in the
+  background); only with the second side shown. Menus: Open in new tab / other side, Copy /
+  Move to other side (greyed out without the second side). Operations refresh every tab and
+  tree showing a touched folder.
+- [x] **Address bar**: breadcrumbs (`address.rs`; the root as a drive, names as they are, the
+  end stays visible); a click beside the crumbs or Ctrl+L edits; `~`, relative paths and `..`
+  resolve; a file path opens its folder with the file selected; Escape cancels.
+- [x] **Filter** (Ctrl+F): `*`/`?` wildcards, else "contains"; Escape clears, Enter/Down back
+  to the list; a new folder clears it; status "n items (m filtered out)" / "(m hidden)".
+- [x] **Columns** (`columns.rs`): Name, Size, Type, Date modified/created/accessed, Extension,
+  Attributes; header right-click chooses, the header's right edge drags the width, click sorts
+  (Created and Extension sort too); `columns.<id>.visible/width` saved, `columns.order` read
+  (no reordering yet). Extra column texts are filled only while shown (attributes look up the
+  owner).
+- [x] **Session**: all tabs of both sides with their selected tab, `dual`, `split.sides`, tree
+  widths; Java's per-tab `.view`/`.size` keys are carried along unchanged. Missing tab folders
+  walk up to an existing parent (as in Java). Renaming a folder moves the tabs inside it.
+- Not yet: the F-key bar at the bottom (Java has one with F5 Copy, F6 Move, …), dragging tabs or
+  columns to reorder them, per-tab view modes (stage 5).
 
 ### Stage 4: drag & drop and selection box
 
@@ -229,5 +254,16 @@ are the Java sources, as a size hint.
 - Testing backend: elements inside a popup report positions relative to the popup; add the
   popup's `ChildWindow` location (`i_slint_core::window::WindowInner::active_popups`, dev-dep
   pinned like the testing backend) before clicking menu items (`Fixture::pick`).
+- Sizing children from the window's width inside a layout (`width: root.width * f`) is a binding
+  loop; place such children by hand in a plain `Rectangle` (the two sides). A `for` can't give
+  its instances ids, so per-instance requests go in as properties (sequence numbers +
+  `changed`). In an `on!` style wiring macro, take the closure's variable name from the call
+  site (macro hygiene).
+- A `TouchArea` takes presses of every button: a right-click on a header cell never reaches a
+  handler behind it; handle it in the cell.
+- `LineEdit` has `key-pressed` (Escape in the address and filter fields) and a min-width of
+  160px: set `min-width` (or preferred/max) to let it shrink, never `width` together with it.
+- Rows as wide as all columns reach past a half-width side: test clicks go near an element's
+  left end (`Fixture::click_at`).
 - `Window` already has `icon` and similar properties: a component inheriting `Window` can't
   declare its own (`item-icon`); `GridLayout` rows from a `for` set `col` themselves.

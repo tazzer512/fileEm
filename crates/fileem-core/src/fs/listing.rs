@@ -44,6 +44,40 @@ pub enum SortKey {
     Size,
     Type,
     Modified,
+    Created,
+    Extension,
+}
+
+impl SortKey {
+    pub const ALL: [SortKey; 6] = [SortKey::Name, SortKey::Size, SortKey::Type, SortKey::Modified, SortKey::Created, SortKey::Extension];
+
+    /// The column id, as the session stores it (`sort.column`).
+    pub fn id(self) -> &'static str {
+        match self {
+            SortKey::Name => "name",
+            SortKey::Size => "size",
+            SortKey::Type => "type",
+            SortKey::Modified => "modified",
+            SortKey::Created => "created",
+            SortKey::Extension => "extension",
+        }
+    }
+
+    pub fn from_id(id: &str) -> Option<SortKey> {
+        SortKey::ALL.into_iter().find(|k| k.id() == id)
+    }
+
+    /// The menu title.
+    pub fn title(self) -> &'static str {
+        match self {
+            SortKey::Name => "Name",
+            SortKey::Size => "Size",
+            SortKey::Type => "Type",
+            SortKey::Modified => "Date modified",
+            SortKey::Created => "Date created",
+            SortKey::Extension => "Extension",
+        }
+    }
 }
 
 /// Folders first, then the chosen column, then the natural name order (also the tie-breaker).
@@ -58,6 +92,8 @@ pub fn compare(a: &FileEntry, b: &FileEntry, key: SortKey, ascending: bool) -> O
         SortKey::Size => a.size().cmp(&b.size()),
         SortKey::Type => natural_order::compare(a.type_name(), b.type_name()),
         SortKey::Modified => a.modified().cmp(&b.modified()),
+        SortKey::Created => a.created().cmp(&b.created()),
+        SortKey::Extension => natural_order::compare(a.extension(), b.extension()),
     };
     let ord = by_key.then_with(|| natural_order::compare(a.name(), b.name()));
     if ascending {
@@ -71,6 +107,27 @@ pub fn compare(a: &FileEntry, b: &FileEntry, key: SortKey, ascending: bool) -> O
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn sort_keys_round_trip_their_session_ids() {
+        for k in SortKey::ALL {
+            assert_eq!(SortKey::from_id(k.id()), Some(k));
+        }
+        assert_eq!(SortKey::from_id("attributes"), None, "not a sort column");
+    }
+
+    #[test]
+    fn sorting_by_extension_keeps_folders_first() {
+        let tmp = tempfile::tempdir().unwrap();
+        let d = tmp.path();
+        fs::create_dir(d.join("z.dir")).unwrap();
+        for n in ["b.txt", "a.zip", "c.md"] {
+            fs::write(d.join(n), "").unwrap();
+        }
+        let mut e = list(d, &AtomicBool::new(false)).unwrap();
+        e.sort_by(|a, b| compare(a, b, SortKey::Extension, true));
+        assert_eq!(names(&e), ["z.dir", "c.md", "b.txt", "a.zip"]);
+    }
 
     fn names(entries: &[FileEntry]) -> Vec<&str> {
         entries.iter().map(FileEntry::name).collect()

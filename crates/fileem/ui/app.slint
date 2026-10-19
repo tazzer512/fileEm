@@ -1,22 +1,13 @@
-// fileEm main window: toolbar with address bar, folder tree, details list, status line.
-// All commands and keys go to Rust (see src/app.rs); this file only lays out and draws.
+// fileEm main window: toolbar, one explorer side or two (Commander style), the right-click menu
+// and dialogs. All commands and keys go to Rust (see src/app.rs); the .slint files only lay out
+// and draw.
 
-import { Button, LineEdit, ScrollView, ListView, Palette } from "std-widgets.slint";
-import { Icons, FileIcon } from "icons.slint";
+import { Button, LineEdit, ListView, Palette } from "std-widgets.slint";
+import { Icons, ToolButton } from "icons.slint";
+import { SidePane, SideView, ColumnRow } from "side.slint";
+export { FileRow, TreeRow, TabRow, CrumbRow, ColumnRow, SideView } from "side.slint";
 export { ProgressWindow, OpRow } from "progress.slint";
 export { PropertiesWindow, PropLine } from "properties.slint";
-
-export struct FileRow {
-    name: string,
-    size: string,
-    kind: string,
-    modified: string,
-    // Category as an int: see icon-path / icon-color below and src/app.rs `icon_of`.
-    icon: int,
-    selected: bool,
-    current: bool,
-    hidden: bool,
-}
 
 // One item of a right-click menu (src/menu.rs); `id` is handed back to `menu-activated`.
 export struct MenuRow {
@@ -25,86 +16,6 @@ export struct MenuRow {
     enabled: bool,
     checkable: bool,
     checked: bool,
-}
-
-export struct TreeRow {
-    name: string,
-    depth: int,
-    // Section titles ("Quick access", "This computer") are not folders.
-    header: bool,
-    expandable: bool,
-    expanded: bool,
-    // Showing the tab's folder (boxed), or one of its parents (bold).
-    current: bool,
-    on-path: bool,
-    icon: int,
-}
-
-component ToolButton {
-    in property <string> icon;
-    in property <string> tooltip;
-    in property <bool> enabled: true;
-    in property <bool> checked;
-    callback clicked();
-    width: 30px;
-    height: 30px;
-    accessible-role: button;
-    accessible-label: tooltip;
-    accessible-action-default => { if (enabled) { clicked(); } }
-    Rectangle {
-        border-radius: 4px;
-        background: touch.pressed && enabled ? Palette.foreground.with-alpha(0.16)
-            : checked ? Palette.accent-background.with-alpha(0.22)
-            : touch.has-hover && enabled ? Palette.foreground.with-alpha(0.08) : transparent;
-    }
-    Path {
-        width: 18px;
-        height: 18px;
-        viewbox-width: 24;
-        viewbox-height: 24;
-        commands: icon;
-        fill: Palette.foreground;
-        opacity: enabled ? 1.0 : 0.35;
-    }
-    touch := TouchArea {
-        enabled: root.enabled;
-        clicked => { root.clicked(); }
-    }
-}
-
-component HeaderCell {
-    in property <string> title;
-    in property <bool> sorted;
-    in property <bool> ascending;
-    in property <TextHorizontalAlignment> align: left;
-    callback clicked();
-    accessible-role: button;
-    accessible-label: title;
-    accessible-action-default => { clicked(); }
-    Rectangle {
-        background: touch.has-hover ? Palette.foreground.with-alpha(0.06) : transparent;
-    }
-    HorizontalLayout {
-        padding-left: 6px;
-        padding-right: 6px;
-        spacing: 4px;
-        Text {
-            text: title;
-            horizontal-alignment: root.align;
-            vertical-alignment: center;
-            overflow: elide;
-            color: Palette.foreground.with-alpha(0.75);
-        }
-        Text {
-            text: sorted ? (ascending ? "▲" : "▼") : "";
-            font-size: 9px;
-            vertical-alignment: center;
-            color: Palette.foreground.with-alpha(0.6);
-        }
-    }
-    touch := TouchArea {
-        clicked => { root.clicked(); }
-    }
 }
 
 export component AppWindow inherits Window {
@@ -117,33 +28,49 @@ export component AppWindow inherits Window {
     background: Palette.background;
     default-font-size: 13px;
 
-    in-out property <string> address;
-    in property <[FileRow]> files;
-    in property <[TreeRow]> tree;
-    in property <string> status;
-    in property <string> message;
-    in property <int> sort-column;
-    in property <bool> sort-ascending: true;
+    in property <SideView> left;
+    in property <SideView> right;
+    // the second side (F9)
+    in property <bool> dual;
+    in property <int> active-side;
+    // the visible columns after Name, shared by both sides
+    in property <[ColumnRow]> columns;
+    in property <length> name-width: 300px;
+    in property <length> columns-width: 800px;
     in property <bool> show-hidden;
     in property <bool> can-back;
     in property <bool> can-forward;
     in property <bool> can-up;
-    in-out property <length> tree-width: 240px;
-    out property <length> row-height: 24px;
+    // the left side's share of the width in dual mode
+    in-out property <float> side-split: 0.5;
 
     callback back();
     callback forward();
     callback up();
     callback refresh();
     callback toggle-hidden();
-    callback navigate-address(string);
-    callback sort-by(int);
-    // index, ctrl/cmd, shift
-    callback row-pressed(int, bool, bool);
-    callback row-activated(int);
-    callback tree-clicked(int);
-    callback tree-toggled(int);
-    // the directory watcher saw changes in the shown folder (token: which watch)
+    callback toggle-dual();
+    // ---- from the sides (first argument: 0 left, 1 right) ----
+    callback activate(int);
+    callback tree-resized(int, length);
+    callback row-pressed(int, int, bool, bool);
+    callback row-activated(int, int);
+    callback row-menu(int, int);
+    callback empty-pressed(int);
+    callback tree-clicked(int, int);
+    callback tree-toggled(int, int);
+    callback tree-menu(int, int) -> bool;
+    callback sort-by(int, int);
+    callback header-menu(int);
+    callback column-resized(int, length);
+    callback tab-clicked(int, int);
+    callback tab-closed(int, int);
+    callback tab-new(int);
+    callback tab-menu(int, int);
+    callback crumb-clicked(int, int);
+    callback address-entered(int, string);
+    callback filter-edited(int, string);
+    // the directory watcher saw changes in a tab's folder (token: which watch)
     callback dir-changed(int);
 
     // ---- right-click menus (built by src/menu.rs on each request) ----
@@ -156,12 +83,8 @@ export component AppWindow inherits Window {
     in property <[MenuRow]> menu-s5;
     in property <[MenuRow]> menu-sort;
     in property <[MenuRow]> menu-new;
-    // a right-click on a row (-1: empty space): selects as needed and builds the menu
-    callback row-menu(int);
-    // a right-click in the tree: builds its menu, false when the row has none (headers)
-    callback tree-menu(int) -> bool;
-    // the keyboard's menu key: builds the selection's menu, returns the focused row (or -1)
-    callback keyboard-menu() -> int;
+    // the keyboard's menu key: builds the active side's selection menu
+    callback keyboard-menu();
     callback menu-activated(int);
 
     // ---- dialog (drawn over the window; see src/app.rs `Dialog`) ----
@@ -182,38 +105,6 @@ export component AppWindow inherits Window {
     // key text (slint::platform::Key for special keys), ctrl/cmd, alt, shift; true when handled
     callback key(string, bool, bool, bool) -> bool;
 
-    // Scrolls the file list so `row` is visible.
-    public function ensure-visible(row: int) {
-        if (row < 0) {
-            return;
-        }
-        if (row * row-height < -list.content-y) {
-            list.content-y = -row * row-height;
-        } else if ((row + 1) * row-height > -list.content-y + list.visible-height) {
-            list.content-y = -((row + 1) * row-height - list.visible-height);
-        }
-    }
-
-    // Row the tree should scroll to (3 rows below the top, unless already in view); -1 once done.
-    // Re-applied when the list's heights change: right after the rows change it hasn't measured
-    // them yet, and the scroll would be clamped.
-    in-out property <int> tree-scroll-target: -1;
-
-    public function apply-tree-scroll() {
-        if (tree-scroll-target < 0) {
-            return;
-        }
-        if (tree-scroll-target * 24px < -tree-list.content-y || (tree-scroll-target + 1) * 24px > -tree-list.content-y + tree-list.visible-height) {
-            tree-list.content-y = -max(0px, (tree-scroll-target - 3) * 24px);
-        }
-        if (tree-scroll-target * 24px >= -tree-list.content-y && (tree-scroll-target + 1) * 24px <= -tree-list.content-y + tree-list.visible-height) {
-            tree-scroll-target = -1;
-        }
-    }
-
-    public function scroll-to-top() {
-        list.content-y = 0;
-    }
 
     // `x`, `y` in window coordinates
     public function show-menu(x: length, y: length) {
@@ -224,18 +115,12 @@ export component AppWindow inherits Window {
         keys.focus();
     }
 
-    public function focus-address() {
-        address-field.focus();
-        address-field.select-all();
-    }
-
     keys := FocusScope {
         key-pressed(event) => {
             if (event.text == Key.Menu || (event.text == Key.F10 && event.modifiers.shift)) {
-                // at the focused row, or the list's top left
-                let row = root.keyboard-menu();
-                root.show-menu(list.absolute-position.x + 40px,
-                    list.absolute-position.y + (row < 0 ? 8px : clamp(row * row-height + list.content-y + row-height, 0, list.visible-height)));
+                root.keyboard-menu();
+                root.show-menu((root.dual && root.active-side == 1 ? sides.split-x + 5px : 0px)
+                    + (root.active-side == 1 ? root.right.tree-width : root.left.tree-width) + 60px, 140px);
                 return EventResult.accept;
             }
             if (root.key(event.text, event.modifiers.control || event.modifiers.meta, event.modifiers.alt, event.modifiers.shift)) {
@@ -275,15 +160,13 @@ export component AppWindow inherits Window {
                         tooltip: "Refresh (Ctrl+R)";
                         clicked => { root.refresh(); }
                     }
-                    Rectangle { width: 6px; }
-                    address-field := LineEdit {
-                        text <=> root.address;
-                        accessible-label: "Address";
-                        accepted(text) => {
-                            root.navigate-address(text);
-                        }
+                    Rectangle { horizontal-stretch: 1; }
+                    ToolButton {
+                        icon: Icons.split;
+                        tooltip: "Second side (F9)";
+                        checked: root.dual;
+                        clicked => { root.toggle-dual(); }
                     }
-                    Rectangle { width: 6px; }
                     ToolButton {
                         icon: Icons.eye;
                         tooltip: "Show hidden files (Ctrl+H)";
@@ -294,243 +177,56 @@ export component AppWindow inherits Window {
             }
             Rectangle { height: 1px; background: Palette.border; }
 
-            HorizontalLayout {
-                // ---- folder tree ----
-                VerticalLayout {
-                    width: root.tree-width;
-                    tree-list := ListView {
-                        changed visible-height => { root.apply-tree-scroll(); }
-                        changed viewport-height => { root.apply-tree-scroll(); }
-                        for row[i] in root.tree: Rectangle {
-                            height: 24px;
-                            accessible-role: list-item;
-                            accessible-label: row.name;
-                            Rectangle {
-                                x: 4px;
-                                width: parent.width - 8px;
-                                border-radius: 4px;
-                                background: row.current ? Palette.accent-background.with-alpha(0.18)
-                                    : tree-touch.has-hover && !row.header ? Palette.foreground.with-alpha(0.06) : transparent;
-                                border-width: row.current ? 1px : 0px;
-                                border-color: Palette.accent-background.with-alpha(0.6);
-                            }
-                            tree-touch := TouchArea {
-                                pointer-event(event) => {
-                                    // right-click: a menu, never a navigation
-                                    if (event.kind == PointerEventKind.down && event.button == PointerEventButton.right) {
-                                        if (root.tree-menu(i)) {
-                                            root.show-menu(self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y);
-                                        }
-                                    }
-                                }
-                                clicked => {
-                                    if (!row.header) {
-                                        root.tree-clicked(i);
-                                    }
-                                }
-                                double-clicked => {
-                                    if (row.expandable) {
-                                        root.tree-toggled(i);
-                                    }
-                                }
-                            }
-                            HorizontalLayout {
-                                padding-left: 6px + row.depth * 14px;
-                                padding-right: 6px;
-                                spacing: 4px;
-                                alignment: start;
-                                Rectangle {
-                                    width: 16px;
-                                    if row.expandable: Path {
-                                        width: 14px;
-                                        height: 14px;
-                                        viewbox-width: 24;
-                                        viewbox-height: 24;
-                                        commands: row.expanded ? Icons.chevron-down : Icons.chevron-right;
-                                        fill: Palette.foreground.with-alpha(0.6);
-                                    }
-                                    TouchArea {
-                                        enabled: row.expandable;
-                                        clicked => { root.tree-toggled(i); }
-                                    }
-                                }
-                                if !row.header: VerticalLayout {
-                                    alignment: center;
-                                    FileIcon { kind: row.icon; }
-                                }
-                                Text {
-                                    text: row.name;
-                                    vertical-alignment: center;
-                                    overflow: elide;
-                                    font-weight: row.header || row.on-path ? 600 : 400;
-                                    color: row.header ? Palette.foreground.with-alpha(0.6) : Palette.foreground;
-                                    font-size: row.header ? 11px : 13px;
-                                }
-                            }
-                        }
-                    }
+            // ---- the sides ----
+            // placed by hand, not by a layout: their widths follow the divider
+            sides := Rectangle {
+                property <length> split-x: (self.width - 5px) * root.side-split;
+                for s in (root.dual ? 2 : 1): SidePane {
+                    side: s;
+                    x: s == 0 ? 0px : sides.split-x + 5px;
+                    y: 0px;
+                    width: !root.dual ? sides.width : s == 0 ? sides.split-x : sides.width - sides.split-x - 5px;
+                    height: sides.height;
+                    view: s == 0 ? root.left : root.right;
+                    columns: root.columns;
+                    name-width: root.name-width;
+                    columns-width: root.columns-width;
+                    keys-focused: keys.has-focus;
+                    dual: root.dual;
+                    activate(i) => { root.activate(i); }
+                    focus-keys => { keys.focus(); }
+                    show-menu(x, y) => { root.show-menu(x, y); }
+                    tree-resized(i, w) => { root.tree-resized(i, w); }
+                    row-pressed(i, r, c, sh) => { root.row-pressed(i, r, c, sh); }
+                    row-activated(i, r) => { root.row-activated(i, r); }
+                    row-menu(i, r) => { root.row-menu(i, r); }
+                    empty-pressed(i) => { root.empty-pressed(i); }
+                    tree-clicked(i, r) => { root.tree-clicked(i, r); }
+                    tree-toggled(i, r) => { root.tree-toggled(i, r); }
+                    tree-menu(i, r) => { return root.tree-menu(i, r); }
+                    sort-by(i, c) => { root.sort-by(i, c); }
+                    header-menu(i) => { root.header-menu(i); }
+                    column-resized(c, w) => { root.column-resized(c, w); }
+                    tab-clicked(i, t) => { root.tab-clicked(i, t); }
+                    tab-closed(i, t) => { root.tab-closed(i, t); }
+                    tab-new(i) => { root.tab-new(i); }
+                    tab-menu(i, t) => { root.tab-menu(i, t); }
+                    crumb-clicked(i, c) => { root.crumb-clicked(i, c); }
+                    address-entered(i, text) => { root.address-entered(i, text); }
+                    filter-edited(i, text) => { root.filter-edited(i, text); }
                 }
-
-                // ---- splitter ----
-                Rectangle {
+                // the divider between the sides
+                if root.dual: Rectangle {
+                    x: sides.split-x;
                     width: 5px;
-                    background: splitter.has-hover || splitter.pressed ? Palette.accent-background.with-alpha(0.3) : transparent;
+                    background: side-splitter.has-hover || side-splitter.pressed ? Palette.accent-background.with-alpha(0.3) : Palette.alternate-background;
                     Rectangle { x: 2px; width: 1px; background: Palette.border; }
-                    splitter := TouchArea {
+                    side-splitter := TouchArea {
                         mouse-cursor: col-resize;
                         moved => {
-                            root.tree-width = clamp(root.tree-width + self.mouse-x - self.pressed-x, 120px, root.width - 240px);
+                            root.side-split = clamp((sides.split-x + self.mouse-x - self.pressed-x) / (sides.width - 5px), 0.2, 0.8);
                         }
                     }
-                }
-
-                // ---- details list ----
-                VerticalLayout {
-                    Rectangle {
-                        height: 26px;
-                        HorizontalLayout {
-                            HeaderCell {
-                                title: "Name";
-                                sorted: root.sort-column == 0;
-                                ascending: root.sort-ascending;
-                                clicked => { root.sort-by(0); }
-                            }
-                            HeaderCell {
-                                width: 90px;
-                                title: "Size";
-                                align: right;
-                                sorted: root.sort-column == 1;
-                                ascending: root.sort-ascending;
-                                clicked => { root.sort-by(1); }
-                            }
-                            HeaderCell {
-                                width: 150px;
-                                title: "Type";
-                                sorted: root.sort-column == 2;
-                                ascending: root.sort-ascending;
-                                clicked => { root.sort-by(2); }
-                            }
-                            HeaderCell {
-                                width: 170px;
-                                title: "Date modified";
-                                sorted: root.sort-column == 3;
-                                ascending: root.sort-ascending;
-                                clicked => { root.sort-by(3); }
-                            }
-                        }
-                        Rectangle { y: parent.height - 1px; height: 1px; background: Palette.border; }
-                    }
-                    Rectangle {
-                        // right-clicks on empty space pass through the list to here: the folder's menu
-                        TouchArea {
-                            pointer-event(event) => {
-                                if (event.kind == PointerEventKind.down && event.button == PointerEventButton.right) {
-                                    keys.focus();
-                                    root.row-menu(-1);
-                                    root.show-menu(self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y);
-                                }
-                            }
-                        }
-                        list := ListView {
-                            for row[i] in root.files: Rectangle {
-                                height: root.row-height;
-                                accessible-role: list-item;
-                                accessible-label: row.name;
-                                accessible-item-selected: row.selected;
-                                background: row.selected ? Palette.selection-background.with-alpha(keys.has-focus ? 1.0 : 0.45)
-                                    : row-touch.has-hover ? Palette.foreground.with-alpha(0.05) : transparent;
-                                border-width: row.current && keys.has-focus ? 1px : 0px;
-                                border-color: Palette.accent-background;
-                                row-touch := TouchArea {
-                                    pointer-event(event) => {
-                                        if (event.kind == PointerEventKind.down && event.button == PointerEventButton.left) {
-                                            keys.focus();
-                                            root.row-pressed(i, event.modifiers.control || event.modifiers.meta, event.modifiers.shift);
-                                        }
-                                        if (event.kind == PointerEventKind.down && event.button == PointerEventButton.right) {
-                                            keys.focus();
-                                            root.row-menu(i);
-                                            root.show-menu(self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y);
-                                        }
-                                    }
-                                    double-clicked => { root.row-activated(i); }
-                                }
-                                HorizontalLayout {
-                                    property <color> fg: row.selected && keys.has-focus ? Palette.selection-foreground : Palette.foreground;
-                                    HorizontalLayout {
-                                        padding-left: 6px;
-                                        spacing: 6px;
-                                        VerticalLayout {
-                                            alignment: center;
-                                            FileIcon { kind: row.icon; dimmed: row.hidden; }
-                                        }
-                                        Text {
-                                            text: row.name;
-                                            vertical-alignment: center;
-                                            overflow: elide;
-                                            color: fg;
-                                        }
-                                    }
-                                    // same widths and 6px insets as the header cells, so text lines up and never touches
-                                    HorizontalLayout {
-                                        width: 90px;
-                                        padding-left: 6px;
-                                        padding-right: 6px;
-                                        Text {
-                                            text: row.size;
-                                            horizontal-alignment: right;
-                                            vertical-alignment: center;
-                                            color: fg.with-alpha(0.8);
-                                        }
-                                    }
-                                    HorizontalLayout {
-                                        width: 150px;
-                                        padding-left: 6px;
-                                        padding-right: 6px;
-                                        Text {
-                                            text: row.kind;
-                                            vertical-alignment: center;
-                                            overflow: elide;
-                                            color: fg.with-alpha(0.8);
-                                        }
-                                    }
-                                    HorizontalLayout {
-                                        width: 170px;
-                                        padding-left: 6px;
-                                        padding-right: 6px;
-                                        Text {
-                                            text: row.modified;
-                                            vertical-alignment: center;
-                                            overflow: elide;
-                                            color: fg.with-alpha(0.8);
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    if root.files.length == 0 && root.message != "": Text {
-                        text: root.message;
-                        horizontal-alignment: center;
-                        color: Palette.foreground.with-alpha(0.6);
-                        height: 40px;
-                    }
-                }
-            }
-
-            // ---- status line ----
-            Rectangle { height: 1px; background: Palette.border; }
-            Rectangle {
-                height: 24px;
-                background: Palette.alternate-background;
-                Text {
-                    x: 8px;
-                    width: parent.width - 16px;
-                    text: root.status;
-                    vertical-alignment: center;
-                    overflow: elide;
-                    color: Palette.foreground.with-alpha(0.75);
-                    font-size: 12px;
                 }
             }
         }

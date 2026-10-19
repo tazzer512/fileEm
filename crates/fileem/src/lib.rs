@@ -3,9 +3,11 @@
 
 slint::include_modules!();
 
+pub mod address;
 pub mod app;
 pub mod bg;
 pub mod clipboard;
+pub mod columns;
 pub mod menu;
 pub mod ops_ui;
 pub mod progress;
