@@ -1,0 +1,29 @@
+[package]
+name = "fileem"
+description = "fileEm: an Explorer-style file manager with an optional Commander-style second side"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "fileem"
+path = "src/main.rs"
+
+[dependencies]
+fileem-core = { path = "../fileem-core" }
+# No Qt backend: winit (Wayland, X11, Windows, macOS) with the OpenGL renderer, and the software
+# renderer as a fallback where OpenGL is missing.
+slint = { version = "1", default-features = false, features = [
+    "std",
+    "compat-1-2",
+    "backend-winit",
+    "renderer-femtovg",
+    "renderer-software",
+    "accessibility",
+] }
+
+[build-dependencies]
+slint-build = "1"
+
+[dev-dependencies]
+tempfile = "3"
+i-slint-backend-testing = "=1.18.1"

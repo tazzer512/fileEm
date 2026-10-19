@@ -1,0 +1,8 @@
+//! fileEm's core, free of any UI toolkit: everything the app does to the file system.
+//!
+//! Ported from the Java version's `util`, `fs` and `ops` packages; the UI crate (`fileem`) only
+//! calls into this one, so its behavior can be tested without a window.
+
+pub mod fs;
+pub mod ops;
+pub mod util;

@@ -1,0 +1,491 @@
+// fileEm main window: toolbar with address bar, folder tree, details list, status line.
+// All commands and keys go to Rust (see src/app.rs); this file only lays out and draws.
+
+import { LineEdit, ScrollView, ListView, Palette } from "std-widgets.slint";
+
+export struct FileRow {
+    name: string,
+    size: string,
+    kind: string,
+    modified: string,
+    // Category as an int: see icon-path / icon-color below and src/app.rs `icon_of`.
+    icon: int,
+    selected: bool,
+    current: bool,
+    hidden: bool,
+}
+
+export struct TreeRow {
+    name: string,
+    depth: int,
+    // Section titles ("Quick access", "This computer") are not folders.
+    header: bool,
+    expandable: bool,
+    expanded: bool,
+    // Showing the tab's folder (boxed), or one of its parents (bold).
+    current: bool,
+    on-path: bool,
+    icon: int,
+}
+
+// Material Design Icons path data (Apache 2.0), 24×24 viewbox.
+global Icons {
+    out property <string> folder: "M10,4H4C2.89,4 2,4.89 2,6V18A2,2 0 0,0 4,20H20A2,2 0 0,0 22,18V8C22,6.89 21.1,6 20,6H12L10,4Z";
+    out property <string> file: "M13,9V3.5L18.5,9M6,2C4.89,2 4,2.89 4,4V20A2,2 0 0,0 6,22H18A2,2 0 0,0 20,20V8L14,2H6Z";
+    out property <string> file-outline: "M14,2H6A2,2 0 0,0 4,4V20A2,2 0 0,0 6,22H18A2,2 0 0,0 20,20V8L14,2M18,20H6V4H13V9H18V20Z";
+    out property <string> home: "M10,20V14H14V20H19V12H22L12,3L2,12H5V20H10Z";
+    out property <string> drive: "M4,6H20A2,2 0 0,1 22,8V16A2,2 0 0,1 20,18H4A2,2 0 0,1 2,16V8A2,2 0 0,1 4,6M18,11A1,1 0 0,0 17,12A1,1 0 0,0 18,13A1,1 0 0,0 19,12A1,1 0 0,0 18,11Z";
+    out property <string> link: "M3.9,12C3.9,10.29 5.29,8.9 7,8.9H11V7H7A5,5 0 0,0 2,12A5,5 0 0,0 7,17H11V15.1H7C5.29,15.1 3.9,13.71 3.9,12M8,13H16V11H8V13M17,7H13V8.9H17C18.71,8.9 20.1,10.29 20.1,12C20.1,13.71 18.71,15.1 17,15.1H13V17H17A5,5 0 0,0 22,12A5,5 0 0,0 17,7Z";
+    out property <string> chevron-right: "M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z";
+    out property <string> chevron-down: "M7.41,8.58L12,13.17L16.59,8.58L18,10L12,16L6,10L7.41,8.58Z";
+    out property <string> back: "M20,11V13H8L13.5,18.5L12.08,19.92L4.16,12L12.08,4.08L13.5,5.5L8,11H20Z";
+    out property <string> forward: "M4,11V13H16L10.5,18.5L11.92,19.92L19.84,12L11.92,4.08L10.5,5.5L16,11H4Z";
+    out property <string> up: "M13,20H11V8L5.5,13.5L4.08,12.08L12,4.16L19.92,12.08L18.5,13.5L13,8V20Z";
+    out property <string> refresh: "M17.65,6.35C16.2,4.9 14.21,4 12,4A8,8 0 0,0 4,12A8,8 0 0,0 12,20C15.73,20 18.84,17.45 19.73,14H17.65C16.83,16.33 14.61,18 12,18A6,6 0 0,1 6,12A6,6 0 0,1 12,6C13.66,6 15.14,6.69 16.22,7.78L13,11H20V4L17.65,6.35Z";
+    out property <string> eye: "M12,9A3,3 0 0,0 9,12A3,3 0 0,0 12,15A3,3 0 0,0 15,12A3,3 0 0,0 12,9M12,17A5,5 0 0,1 7,12A5,5 0 0,1 12,7A5,5 0 0,1 17,12A5,5 0 0,1 12,17M12,4.5C7,4.5 2.73,7.61 1,12C2.73,16.39 7,19.5 12,19.5C17,19.5 21.27,16.39 23,12C21.27,7.61 17,4.5 12,4.5Z";
+}
+
+// Category icons, numbered like `icon_of` in src/app.rs.
+component FileIcon {
+    in property <int> kind;
+    in property <bool> dimmed;
+    width: 18px;
+    height: 18px;
+    Path {
+        width: 100%;
+        height: 100%;
+        viewbox-width: 24;
+        viewbox-height: 24;
+        opacity: root.dimmed ? 0.55 : 1.0;
+        commands: kind == 0 ? Icons.folder : kind == 1 ? Icons.file-outline : kind == 13 ? Icons.link
+            : kind == 20 ? Icons.home : kind == 21 ? Icons.drive : Icons.file;
+        fill: kind == 0 ? #d9a02b : kind == 2 ? #3fa66a : kind == 3 ? #b356c4 : kind == 4 ? #d4524a
+            : kind == 5 ? #a07a46 : kind == 6 ? #d93a35 : kind == 7 ? #2f6fd1 : kind == 8 ? #1f8f4e
+            : kind == 9 ? #d0632d : kind == 10 ? #3a8fd9 : kind == 12 ? #6a6fd8
+            : kind == 20 ? Palette.accent-background : Palette.foreground.with-alpha(0.65);
+    }
+}
+
+component ToolButton {
+    in property <string> icon;
+    in property <string> tooltip;
+    in property <bool> enabled: true;
+    in property <bool> checked;
+    callback clicked();
+    width: 30px;
+    height: 30px;
+    accessible-role: button;
+    accessible-label: tooltip;
+    accessible-action-default => { if (enabled) { clicked(); } }
+    Rectangle {
+        border-radius: 4px;
+        background: touch.pressed && enabled ? Palette.foreground.with-alpha(0.16)
+            : checked ? Palette.accent-background.with-alpha(0.22)
+            : touch.has-hover && enabled ? Palette.foreground.with-alpha(0.08) : transparent;
+    }
+    Path {
+        width: 18px;
+        height: 18px;
+        viewbox-width: 24;
+        viewbox-height: 24;
+        commands: icon;
+        fill: Palette.foreground;
+        opacity: enabled ? 1.0 : 0.35;
+    }
+    touch := TouchArea {
+        enabled: root.enabled;
+        clicked => { root.clicked(); }
+    }
+}
+
+component HeaderCell {
+    in property <string> title;
+    in property <bool> sorted;
+    in property <bool> ascending;
+    in property <TextHorizontalAlignment> align: left;
+    callback clicked();
+    accessible-role: button;
+    accessible-label: title;
+    accessible-action-default => { clicked(); }
+    Rectangle {
+        background: touch.has-hover ? Palette.foreground.with-alpha(0.06) : transparent;
+    }
+    HorizontalLayout {
+        padding-left: 6px;
+        padding-right: 6px;
+        spacing: 4px;
+        Text {
+            text: title;
+            horizontal-alignment: root.align;
+            vertical-alignment: center;
+            overflow: elide;
+            color: Palette.foreground.with-alpha(0.75);
+        }
+        Text {
+            text: sorted ? (ascending ? "▲" : "▼") : "";
+            font-size: 9px;
+            vertical-alignment: center;
+            color: Palette.foreground.with-alpha(0.6);
+        }
+    }
+    touch := TouchArea {
+        clicked => { root.clicked(); }
+    }
+}
+
+export component AppWindow inherits Window {
+    in property <string> window-title: "fileEm";
+    title: window-title;
+    preferred-width: 1100px;
+    preferred-height: 700px;
+    min-width: 480px;
+    min-height: 320px;
+    background: Palette.background;
+    default-font-size: 13px;
+
+    in-out property <string> address;
+    in property <[FileRow]> files;
+    in property <[TreeRow]> tree;
+    in property <string> status;
+    in property <string> message;
+    in property <int> sort-column;
+    in property <bool> sort-ascending: true;
+    in property <bool> show-hidden;
+    in property <bool> can-back;
+    in property <bool> can-forward;
+    in property <bool> can-up;
+    in-out property <length> tree-width: 240px;
+    out property <length> row-height: 24px;
+
+    callback back();
+    callback forward();
+    callback up();
+    callback refresh();
+    callback toggle-hidden();
+    callback navigate-address(string);
+    callback sort-by(int);
+    // index, ctrl/cmd, shift
+    callback row-pressed(int, bool, bool);
+    callback row-activated(int);
+    callback tree-clicked(int);
+    callback tree-toggled(int);
+    // key text (slint::platform::Key for special keys), ctrl/cmd, alt, shift; true when handled
+    callback key(string, bool, bool, bool) -> bool;
+
+    // Scrolls the file list so `row` is visible.
+    public function ensure-visible(row: int) {
+        if (row < 0) {
+            return;
+        }
+        if (row * row-height < -list.content-y) {
+            list.content-y = -row * row-height;
+        } else if ((row + 1) * row-height > -list.content-y + list.visible-height) {
+            list.content-y = -((row + 1) * row-height - list.visible-height);
+        }
+    }
+
+    // Row the tree should scroll to (3 rows below the top, unless already in view); -1 once done.
+    // Re-applied when the list's heights change: right after the rows change it hasn't measured
+    // them yet, and the scroll would be clamped.
+    in-out property <int> tree-scroll-target: -1;
+
+    public function apply-tree-scroll() {
+        if (tree-scroll-target < 0) {
+            return;
+        }
+        if (tree-scroll-target * 24px < -tree-list.content-y || (tree-scroll-target + 1) * 24px > -tree-list.content-y + tree-list.visible-height) {
+            tree-list.content-y = -max(0px, (tree-scroll-target - 3) * 24px);
+        }
+        if (tree-scroll-target * 24px >= -tree-list.content-y && (tree-scroll-target + 1) * 24px <= -tree-list.content-y + tree-list.visible-height) {
+            tree-scroll-target = -1;
+        }
+    }
+
+    public function scroll-to-top() {
+        list.content-y = 0;
+    }
+
+    public function focus-list() {
+        keys.focus();
+    }
+
+    public function focus-address() {
+        address-field.focus();
+        address-field.select-all();
+    }
+
+    keys := FocusScope {
+        key-pressed(event) => {
+            if (root.key(event.text, event.modifiers.control || event.modifiers.meta, event.modifiers.alt, event.modifiers.shift)) {
+                return EventResult.accept;
+            }
+            return EventResult.reject;
+        }
+
+        VerticalLayout {
+            // ---- toolbar ----
+            Rectangle {
+                height: 42px;
+                background: Palette.alternate-background;
+                HorizontalLayout {
+                    padding: 6px;
+                    spacing: 2px;
+                    ToolButton {
+                        icon: Icons.back;
+                        tooltip: "Back (Alt+Left)";
+                        enabled: root.can-back;
+                        clicked => { root.back(); }
+                    }
+                    ToolButton {
+                        icon: Icons.forward;
+                        tooltip: "Forward (Alt+Right)";
+                        enabled: root.can-forward;
+                        clicked => { root.forward(); }
+                    }
+                    ToolButton {
+                        icon: Icons.up;
+                        tooltip: "Up (Alt+Up, Backspace)";
+                        enabled: root.can-up;
+                        clicked => { root.up(); }
+                    }
+                    ToolButton {
+                        icon: Icons.refresh;
+                        tooltip: "Refresh (Ctrl+R)";
+                        clicked => { root.refresh(); }
+                    }
+                    Rectangle { width: 6px; }
+                    address-field := LineEdit {
+                        text <=> root.address;
+                        accessible-label: "Address";
+                        accepted(text) => {
+                            root.navigate-address(text);
+                        }
+                    }
+                    Rectangle { width: 6px; }
+                    ToolButton {
+                        icon: Icons.eye;
+                        tooltip: "Show hidden files (Ctrl+H)";
+                        checked: root.show-hidden;
+                        clicked => { root.toggle-hidden(); }
+                    }
+                }
+            }
+            Rectangle { height: 1px; background: Palette.border; }
+
+            HorizontalLayout {
+                // ---- folder tree ----
+                VerticalLayout {
+                    width: root.tree-width;
+                    tree-list := ListView {
+                        changed visible-height => { root.apply-tree-scroll(); }
+                        changed viewport-height => { root.apply-tree-scroll(); }
+                        for row[i] in root.tree: Rectangle {
+                            height: 24px;
+                            accessible-role: list-item;
+                            accessible-label: row.name;
+                            Rectangle {
+                                x: 4px;
+                                width: parent.width - 8px;
+                                border-radius: 4px;
+                                background: row.current ? Palette.accent-background.with-alpha(0.18)
+                                    : tree-touch.has-hover && !row.header ? Palette.foreground.with-alpha(0.06) : transparent;
+                                border-width: row.current ? 1px : 0px;
+                                border-color: Palette.accent-background.with-alpha(0.6);
+                            }
+                            tree-touch := TouchArea {
+                                clicked => {
+                                    if (!row.header) {
+                                        root.tree-clicked(i);
+                                    }
+                                }
+                                double-clicked => {
+                                    if (row.expandable) {
+                                        root.tree-toggled(i);
+                                    }
+                                }
+                            }
+                            HorizontalLayout {
+                                padding-left: 6px + row.depth * 14px;
+                                padding-right: 6px;
+                                spacing: 4px;
+                                alignment: start;
+                                Rectangle {
+                                    width: 16px;
+                                    if row.expandable: Path {
+                                        width: 14px;
+                                        height: 14px;
+                                        viewbox-width: 24;
+                                        viewbox-height: 24;
+                                        commands: row.expanded ? Icons.chevron-down : Icons.chevron-right;
+                                        fill: Palette.foreground.with-alpha(0.6);
+                                    }
+                                    TouchArea {
+                                        enabled: row.expandable;
+                                        clicked => { root.tree-toggled(i); }
+                                    }
+                                }
+                                if !row.header: VerticalLayout {
+                                    alignment: center;
+                                    FileIcon { kind: row.icon; }
+                                }
+                                Text {
+                                    text: row.name;
+                                    vertical-alignment: center;
+                                    overflow: elide;
+                                    font-weight: row.header || row.on-path ? 600 : 400;
+                                    color: row.header ? Palette.foreground.with-alpha(0.6) : Palette.foreground;
+                                    font-size: row.header ? 11px : 13px;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // ---- splitter ----
+                Rectangle {
+                    width: 5px;
+                    background: splitter.has-hover || splitter.pressed ? Palette.accent-background.with-alpha(0.3) : transparent;
+                    Rectangle { x: 2px; width: 1px; background: Palette.border; }
+                    splitter := TouchArea {
+                        mouse-cursor: col-resize;
+                        moved => {
+                            root.tree-width = clamp(root.tree-width + self.mouse-x - self.pressed-x, 120px, root.width - 240px);
+                        }
+                    }
+                }
+
+                // ---- details list ----
+                VerticalLayout {
+                    Rectangle {
+                        height: 26px;
+                        HorizontalLayout {
+                            HeaderCell {
+                                title: "Name";
+                                sorted: root.sort-column == 0;
+                                ascending: root.sort-ascending;
+                                clicked => { root.sort-by(0); }
+                            }
+                            HeaderCell {
+                                width: 90px;
+                                title: "Size";
+                                align: right;
+                                sorted: root.sort-column == 1;
+                                ascending: root.sort-ascending;
+                                clicked => { root.sort-by(1); }
+                            }
+                            HeaderCell {
+                                width: 150px;
+                                title: "Type";
+                                sorted: root.sort-column == 2;
+                                ascending: root.sort-ascending;
+                                clicked => { root.sort-by(2); }
+                            }
+                            HeaderCell {
+                                width: 170px;
+                                title: "Date modified";
+                                sorted: root.sort-column == 3;
+                                ascending: root.sort-ascending;
+                                clicked => { root.sort-by(3); }
+                            }
+                        }
+                        Rectangle { y: parent.height - 1px; height: 1px; background: Palette.border; }
+                    }
+                    list := ListView {
+                        for row[i] in root.files: Rectangle {
+                            height: root.row-height;
+                            accessible-role: list-item;
+                            accessible-label: row.name;
+                            accessible-item-selected: row.selected;
+                            background: row.selected ? Palette.selection-background.with-alpha(keys.has-focus ? 1.0 : 0.45)
+                                : row-touch.has-hover ? Palette.foreground.with-alpha(0.05) : transparent;
+                            border-width: row.current && keys.has-focus ? 1px : 0px;
+                            border-color: Palette.accent-background;
+                            row-touch := TouchArea {
+                                pointer-event(event) => {
+                                    if (event.kind == PointerEventKind.down && event.button == PointerEventButton.left) {
+                                        keys.focus();
+                                        root.row-pressed(i, event.modifiers.control || event.modifiers.meta, event.modifiers.shift);
+                                    }
+                                }
+                                double-clicked => { root.row-activated(i); }
+                            }
+                            HorizontalLayout {
+                                property <color> fg: row.selected && keys.has-focus ? Palette.selection-foreground : Palette.foreground;
+                                HorizontalLayout {
+                                    padding-left: 6px;
+                                    spacing: 6px;
+                                    VerticalLayout {
+                                        alignment: center;
+                                        FileIcon { kind: row.icon; dimmed: row.hidden; }
+                                    }
+                                    Text {
+                                        text: row.name;
+                                        vertical-alignment: center;
+                                        overflow: elide;
+                                        color: fg;
+                                    }
+                                }
+                                // same widths and 6px insets as the header cells, so text lines up and never touches
+                                HorizontalLayout {
+                                    width: 90px;
+                                    padding-left: 6px;
+                                    padding-right: 6px;
+                                    Text {
+                                        text: row.size;
+                                        horizontal-alignment: right;
+                                        vertical-alignment: center;
+                                        color: fg.with-alpha(0.8);
+                                    }
+                                }
+                                HorizontalLayout {
+                                    width: 150px;
+                                    padding-left: 6px;
+                                    padding-right: 6px;
+                                    Text {
+                                        text: row.kind;
+                                        vertical-alignment: center;
+                                        overflow: elide;
+                                        color: fg.with-alpha(0.8);
+                                    }
+                                }
+                                HorizontalLayout {
+                                    width: 170px;
+                                    padding-left: 6px;
+                                    padding-right: 6px;
+                                    Text {
+                                        text: row.modified;
+                                        vertical-alignment: center;
+                                        overflow: elide;
+                                        color: fg.with-alpha(0.8);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if root.files.length == 0 && root.message != "": Text {
+                        text: root.message;
+                        horizontal-alignment: center;
+                        color: Palette.foreground.with-alpha(0.6);
+                        height: 40px;
+                    }
+                }
+            }
+
+            // ---- status line ----
+            Rectangle { height: 1px; background: Palette.border; }
+            Rectangle {
+                height: 24px;
+                background: Palette.alternate-background;
+                Text {
+                    x: 8px;
+                    width: parent.width - 16px;
+                    text: root.status;
+                    vertical-alignment: center;
+                    overflow: elide;
+                    color: Palette.foreground.with-alpha(0.75);
+                    font-size: 12px;
+                }
+            }
+        }
+    }
+}

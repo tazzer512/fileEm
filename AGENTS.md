@@ -4,6 +4,12 @@ Guidance for coding agents working on fileEm, a cross-platform (Linux, macOS, Wi
 explorer with an Explorer-style tree + detail list and an optional Commander-style second side.
 User-facing features and shortcuts are in `README.md`.
 
+## Rust port (branch `rust`)
+
+A Rust + Slint port lives next to the Java app in `crates/` (Cargo workspace at the root). Its
+build, test and layout notes and the port status are in `RUST.md`; the test rules below apply to
+it as well (`cargo test --workspace`, `cargo clippy --workspace --all-targets` warning free).
+
 ## Tests are mandatory
 
 The test suite is how this project stays working through changes, refactorings and new features.
