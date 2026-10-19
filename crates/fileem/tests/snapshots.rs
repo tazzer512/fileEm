@@ -1,5 +1,6 @@
 //! Visual checks without a desktop (`cargo test -p fileem --test snapshots -- --ignored`): renders
-//! the main window with a dialog open and the progress window with a conflict question, in the
+//! the main window with a dialog and a right-click menu open, the progress window with a conflict
+//! question and a Properties window, in the
 //! headless backend's software renderer, to `target/snapshots/*.ppm`. Look at them after UI
 //! changes; they are not compared automatically.
 
@@ -77,4 +78,18 @@ fn snapshots() {
     w.window().set_size(slint::LogicalSize::new(520.0, 360.0));
     pump_until("laid out", || true);
     save(w.window(), "progress-conflict");
+    app::ops(&a).running().iter().for_each(|h| h.cancel());
+
+    // a right-click menu on a file, and its Properties window
+    ui.invoke_row_pressed(1, false, false);
+    ui.invoke_row_menu(1);
+    ui.invoke_show_menu(520.0, 120.0);
+    pump_until("laid out", || true);
+    save(ui.window(), "menu-file");
+    app::run_command(&a, fileem::menu::Command::Properties(vec![dir.clone()]));
+    pump_until("properties", || app::properties_windows(&a).first().is_some_and(|w| w.get_lines().iter().any(|l| l.value.contains("files,"))));
+    let p = app::properties_windows(&a).remove(0);
+    p.window().set_size(slint::LogicalSize::new(480.0, 420.0));
+    pump_until("laid out", || true);
+    save(p.window(), "properties-folder");
 }

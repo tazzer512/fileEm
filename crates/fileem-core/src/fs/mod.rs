@@ -3,6 +3,7 @@
 pub mod entry;
 pub mod file_types;
 pub mod listing;
+pub mod measure;
 pub mod places;
 pub mod trash;
 pub mod watcher;

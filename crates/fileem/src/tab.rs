@@ -224,6 +224,25 @@ impl Tab {
         self.current = Some(path);
     }
 
+    /// A right-click: on a row that isn't selected it selects only that row (a selected row keeps
+    /// the selection, so the menu acts on all of it); on empty space (`None`) it clears the
+    /// selection, so the menu acts on the folder.
+    pub fn context_click(&mut self, row: Option<usize>) {
+        match row {
+            Some(r) if r < self.len() => {
+                if !self.is_selected(r) {
+                    self.click(r, false, false);
+                }
+            }
+            _ => self.selected.clear(),
+        }
+    }
+
+    /// Selected entries in row order.
+    pub fn selected_entries(&self) -> Vec<&FileEntry> {
+        self.rows().filter(|e| self.selected.contains(e.path())).collect()
+    }
+
     /// Arrow keys and friends: moves the focus by `delta` rows (clamped). Plain selects only the
     /// new row, Shift extends from the anchor, Ctrl/Cmd only moves the focus.
     pub fn move_focus(&mut self, delta: isize, ctrl: bool, shift: bool) {
@@ -325,6 +344,22 @@ mod tests {
             fs::write(d.join(n), "x".repeat(size)).unwrap();
         }
         tmp
+    }
+
+    #[test]
+    fn right_clicks_select_unselected_rows_and_clear_on_empty_space() {
+        let tmp = folder();
+        let mut tab = Tab::new();
+        tab.show(tmp.path().to_path_buf(), listing(tmp.path()), Nav::Go);
+        tab.click(1, false, false);
+        tab.click(2, true, false);
+        tab.context_click(Some(2));
+        assert_eq!(tab.selected_entries().len(), 2, "a selected row keeps the selection");
+        tab.context_click(Some(3));
+        assert_eq!(tab.selected_paths(), [tmp.path().join("b.txt")], "an unselected row is selected alone");
+        assert_eq!(tab.current_row(), Some(3));
+        tab.context_click(None);
+        assert!(tab.selected_paths().is_empty(), "empty space: the menu is about the folder");
     }
 
     #[test]

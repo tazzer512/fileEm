@@ -29,3 +29,5 @@ slint-build = "1"
 [dev-dependencies]
 tempfile = "3"
 i-slint-backend-testing = { version = "=1.18.1", features = ["renderer-software"] }
+# where the open menu popups sit (the testing backend reports positions inside a popup); same pin
+i-slint-core = "=1.18.1"

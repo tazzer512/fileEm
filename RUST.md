@@ -27,7 +27,7 @@ is still open (it uses the CPU to draw; fine for lists, to be checked on big 4K 
 - `cargo test --workspace`: core tests, UI logic tests and the headless UI test, a few seconds.
 - `cargo clippy --workspace --all-targets`: must stay warning free.
 - Visual checks without a display: `cargo test -p fileem --test snapshots -- --ignored` renders
-  the main window, a dialog and the progress window headless to `target/snapshots/*.ppm`
+  the main window, a dialog, a right-click menu, the progress window and a Properties window headless to `target/snapshots/*.ppm`
   (convert with Pillow to look at them). Extend it when adding windows or dialogs.
 - Visual checks of the real app (Wayland has no desktop screenshots): `FILEEM_SNAPSHOT=out.ppm cargo run -p fileem
   FOLDER` renders the window after the folder loaded, writes it as PPM and quits. Don't type while
@@ -44,19 +44,22 @@ Cargo.toml                 workspace (release: LTO, stripped, panic=abort)
 crates/fileem-core/        no UI: everything that touches the file system
   src/util/                natural_order, formats, fs_util, os, eta       (Java util)
   src/fs/                  entry (FileEntry), file_types, listing, places,
-                           trash, watcher                                 (Java fs)
+                           trash, watcher, measure (folder sizes)         (Java fs)
   src/ops/                 file_operation (+ tests.rs: port of FileOperationTest), names
                            (rename / create, never replacing)
   src/session.rs           session.properties shared with the Java app (Java Session)
 crates/fileem/             the app
-  ui/app.slint             window layout and drawing only
+  ui/app.slint             window layout and drawing only (icons.slint: shared icons)
   src/app.rs               controller: callbacks, keys, models (Java MainWindow)
   src/tab.rs, tree.rs      tab and tree state, toolkit-free and unit-tested
   src/bg.rs                background jobs with results on the UI thread (Java Bg)
   src/progress.rs          progress rows: detail line, estimate, conflict question (toolkit-free)
   src/ops_ui.rs            runs operations with a progress window row (Java OperationUi)
   ui/progress.slint        the progress window
-  src/shell.rs             open with the default program
+  src/menu.rs              right-click menus per request (toolkit-free; Java fileMenuItems/treeMenuItems)
+  src/properties.rs        what the Properties window shows (toolkit-free) + ui/properties.slint
+  src/clipboard.rs         files and text on the OS clipboard (Java FileClipboard)
+  src/shell.rs             open, terminal, show in file manager (Java Shell)
   tests/ui.rs              end-to-end UI test on Slint's headless testing backend
 ```
 

@@ -5,12 +5,15 @@
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use slint::platform::Key;
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 
 use fileem_core::fs::listing::{self, SortKey};
+use fileem_core::fs::measure::{self, Totals};
 use fileem_core::fs::watcher::{self, WatchHandle};
 use fileem_core::fs::{places, Category, FileEntry};
 use fileem_core::fs::trash;
@@ -20,11 +23,13 @@ use fileem_core::util::{formats, fs_util};
 
 use crate::bg::{self, Job};
 use crate::clipboard::{self, FileClipboard};
+use crate::menu::{self, Command, Menu};
 use crate::ops_ui::{OpsUi, Outcome};
+use crate::properties;
 use crate::shell;
 use crate::tab::{Nav, Tab};
 use crate::tree::{NodeKind, Reveal, Tree};
-use crate::{AppWindow, FileRow, TreeRow};
+use crate::{AppWindow, FileRow, MenuRow, PropLine, PropertiesWindow, TreeRow};
 
 pub struct App {
     ui: slint::Weak<AppWindow>,
@@ -56,6 +61,11 @@ pub struct App {
     ops: OpsUi,
     dialog: Dialog,
     clipboard: Box<dyn FileClipboard>,
+    /// The commands of the menu shown last, by `MenuRow.id`.
+    menu: Vec<Command>,
+    /// Open Properties windows by id; the flag stops their folder walk.
+    properties: Vec<(u64, PropertiesWindow, Arc<AtomicBool>)>,
+    next_properties: u64,
 }
 
 pub type Shared = Rc<RefCell<App>>;
@@ -105,6 +115,9 @@ pub fn install(ui: &AppWindow, session: Rc<Session>, start: Option<PathBuf>) -> 
         ops: OpsUi::new(),
         dialog: Dialog::None,
         clipboard: Box::new(clipboard::System::default()),
+        menu: Vec::new(),
+        properties: Vec::new(),
+        next_properties: 0,
     }));
     wire(ui, &app);
     sync_tree(&app);
@@ -199,6 +212,18 @@ fn wire(ui: &AppWindow, app: &Shared) {
     ui.on_dir_changed(move |token| dir_changed(&a, token));
     let a = app.clone();
     ui.on_key(move |text, ctrl, alt, shift| key(&a, &text, ctrl, alt, shift));
+    let a = app.clone();
+    ui.on_row_menu(move |row| row_menu(&a, row));
+    let a = app.clone();
+    ui.on_tree_menu(move |row| tree_menu(&a, row as usize));
+    let a = app.clone();
+    ui.on_keyboard_menu(move || {
+        let row = a.borrow().tab.current_row().filter(|&r| a.borrow().tab.is_selected(r));
+        show_file_menu(&a);
+        row.map_or(-1, |r| r as i32)
+    });
+    let a = app.clone();
+    ui.on_menu_activated(move |id| menu_activated(&a, id));
 }
 
 // ---- navigation ----
@@ -489,6 +514,10 @@ fn toggle_hidden(app: &Shared) {
 /// Asks, then moves the selection to the Trash or deletes it, with a row in the progress window.
 fn delete_selection(app: &Shared, permanent: bool) {
     let paths = app.borrow().tab.selected_paths();
+    delete(app, paths, permanent);
+}
+
+fn delete(app: &Shared, paths: Vec<PathBuf>, permanent: bool) {
     if paths.is_empty() {
         return;
     }
@@ -520,8 +549,15 @@ pub fn run_operation(app: &Shared, kind: Kind, sources: Vec<PathBuf>, target: Op
 
 fn operation_done(app: &Shared, outcome: Outcome) {
     let shown = app.borrow().tab.dir().map(Path::to_path_buf);
-    if shown.as_ref().is_some_and(|d| outcome.affected.contains(d)) {
+    // what Compress / Extract made is selected when it lands in the folder shown
+    let made = outcome.result.clone().filter(|r| outcome.state == State::Succeeded && r.parent() == shown.as_deref());
+    if let Some(item) = made {
+        refresh_selecting(app, item);
+    } else if shown.as_ref().is_some_and(|d| outcome.affected.contains(d)) {
         refresh(app);
+    }
+    for dir in &outcome.affected {
+        reload_tree_node(app, dir);
     }
     let problem = match &outcome.state {
         State::Failed(msg) => Some((msg.clone(), Vec::new())),
@@ -543,15 +579,22 @@ fn operation_done(app: &Shared, outcome: Outcome) {
 /// Ctrl+C / Ctrl+X: the selection goes on the OS clipboard (cut: a paste moves it).
 fn clipboard_put(app: &Shared, cut: bool) {
     let paths = app.borrow().tab.selected_paths();
-    if paths.is_empty() {
-        return;
+    put_files(app, paths, cut);
+}
+
+fn put_files(app: &Shared, paths: Vec<PathBuf>, cut: bool) {
+    if !paths.is_empty() {
+        app.borrow_mut().clipboard.put(&paths, cut);
     }
-    app.borrow_mut().clipboard.put(&paths, cut);
 }
 
 /// Ctrl+V: copies (or, after a cut, moves) the clipboard's files into the shown folder.
 fn paste(app: &Shared) {
     let Some(target) = app.borrow().tab.dir().map(Path::to_path_buf) else { return };
+    paste_into(app, target);
+}
+
+fn paste_into(app: &Shared, target: PathBuf) {
     let Some(files) = app.borrow_mut().clipboard.get() else { return };
     if files.cut {
         // moved files are gone from where the clipboard says they are
@@ -565,26 +608,308 @@ pub fn set_clipboard(app: &Shared, clipboard: Box<dyn FileClipboard>) {
     app.borrow_mut().clipboard = clipboard;
 }
 
+/// The clipboard's text (tests).
+pub fn clipboard_text(app: &Shared) -> Option<String> {
+    app.borrow_mut().clipboard.text()
+}
+
 /// F2: asks for a new name; the old name is shown with the part before the extension selected.
 fn rename_selection(app: &Shared) {
     let sel = app.borrow().tab.selected_paths();
-    let [src] = sel.as_slice() else { return };
-    let name = fs_util::display_name(src);
+    if let [src] = sel.as_slice() {
+        rename(app, src.clone());
+    }
+}
+
+fn rename(app: &Shared, src: PathBuf) {
+    let name = fs_util::display_name(&src);
     let spec = DialogSpec::ask("Rename", "New name:", &name, "Rename");
-    open_dialog(app, Dialog::Rename { src: src.clone() }, spec);
+    open_dialog(app, Dialog::Rename { src }, spec);
 }
 
 /// F7, Ctrl+Shift+N: a new folder in the shown folder, under a free name.
 fn new_folder(app: &Shared) {
     let Some(dir) = app.borrow().tab.dir().map(Path::to_path_buf) else { return };
-    let name = fs_util::display_name(&fs_util::unique_name(&dir.join("New folder"), false));
-    open_dialog(app, Dialog::NewFolder { dir }, DialogSpec::ask("New folder", "Folder name:", &name, "Create"));
+    new_item(app, dir, true);
+}
+
+/// Asks for the name of a new folder or (empty) text file in `dir`, offering a free name.
+fn new_item(app: &Shared, dir: PathBuf, folder: bool) {
+    let (default, title, prompt) =
+        if folder { ("New folder", "New folder", "Folder name:") } else { ("New text file.txt", "New text file", "File name:") };
+    let name = fs_util::display_name(&fs_util::unique_name(&dir.join(default), false));
+    let spec = DialogSpec::ask(title, prompt, &name, "Create");
+    open_dialog(app, Dialog::New { dir, folder }, spec);
 }
 
 /// Re-reads the shown folder and selects `item` in it.
 fn refresh_selecting(app: &Shared, item: PathBuf) {
     app.borrow_mut().select_after = Some(item);
     refresh(app);
+}
+
+// ---- right-click menus ----
+
+fn menu_state(app: &Shared) -> menu::State {
+    let can_paste = app.borrow_mut().clipboard.get().is_some();
+    let a = app.borrow();
+    menu::State { can_paste, trash: trash::is_supported(), sort: a.tab.sort(), show_hidden: a.tab.show_hidden() }
+}
+
+/// A right-click on list row `row` (-1: empty space): selects as Explorer does, then builds the
+/// menu for the selection (or the folder).
+fn row_menu(app: &Shared, row: i32) {
+    app.borrow_mut().tab.context_click(usize::try_from(row).ok());
+    sync_selection(app);
+    show_file_menu(app);
+}
+
+fn show_file_menu(app: &Shared) {
+    let st = menu_state(app);
+    let m = {
+        let a = app.borrow();
+        let items: Vec<menu::Item> = a.tab.selected_entries().into_iter().map(|e| menu::Item { path: e.path(), is_dir: e.is_dir() }).collect();
+        menu::file_menu(&items, a.tab.dir(), &st)
+    };
+    set_menu(app, m);
+}
+
+/// A right-click in the tree: its menu, without navigating. False for rows without one.
+fn tree_menu(app: &Shared, row: usize) -> bool {
+    let node = {
+        let a = app.borrow();
+        a.tree.rows().get(row).map(|&id| a.tree.node(id).clone())
+    };
+    let Some((path, kind)) = node.and_then(|n| n.path.map(|p| (p, n.kind))) else { return false };
+    let st = menu_state(app);
+    set_menu(app, menu::tree_menu(&path, kind, &st));
+    true
+}
+
+/// Hands `m` to app.slint's sections; the commands stay here by id.
+fn set_menu(app: &Shared, m: Menu) {
+    let mut commands = Vec::new();
+    let mut rows = |entries: &[menu::Entry]| -> ModelRc<MenuRow> {
+        let rows: Vec<MenuRow> = entries
+            .iter()
+            .map(|e| {
+                commands.push(e.command.clone());
+                MenuRow {
+                    id: commands.len() as i32 - 1,
+                    title: e.title.as_str().into(),
+                    enabled: e.enabled,
+                    checkable: e.checked.is_some(),
+                    checked: e.checked == Some(true),
+                }
+            })
+            .collect();
+        ModelRc::from(Rc::new(VecModel::from(rows)))
+    };
+    let section = |i: usize| m.sections.get(i).map(Vec::as_slice).unwrap_or_default();
+    debug_assert!(m.sections.len() <= menu::SECTIONS);
+    let Some(ui) = app.borrow().ui.upgrade() else { return };
+    ui.set_menu_s0(rows(section(0)));
+    ui.set_menu_s1(rows(section(1)));
+    ui.set_menu_sort(rows(&m.sort));
+    ui.set_menu_new(rows(&m.new));
+    ui.set_menu_s2(rows(section(2)));
+    ui.set_menu_s3(rows(section(3)));
+    ui.set_menu_s4(rows(section(4)));
+    ui.set_menu_s5(rows(section(5)));
+    app.borrow_mut().menu = commands;
+}
+
+fn menu_activated(app: &Shared, id: i32) {
+    let command = usize::try_from(id).ok().and_then(|i| app.borrow().menu.get(i).cloned());
+    if let Some(c) = command {
+        run_command(app, c);
+    }
+}
+
+/// Runs a menu command (tests call it with the commands of [`menu`]'s menus).
+pub fn run_command(app: &Shared, command: Command) {
+    let parent = |paths: &[PathBuf]| paths.first().and_then(|p| p.parent()).map(Path::to_path_buf);
+    match command {
+        Command::OpenSelection => open_selection(app),
+        Command::OpenFolder(dir) => go(app, dir, Nav::Go),
+        Command::OpenTerminal(dir) => launch(app, "Open in terminal", move || shell::open_terminal(&dir)),
+        Command::Reveal(p) => launch(app, &format!("Show in {}", shell::file_manager_name()), move || shell::reveal(&p)),
+        Command::OpenInFileManager(dir) => launch(app, "Open", move || shell::open(&dir)),
+        Command::Cut(paths) => put_files(app, paths, true),
+        Command::Copy(paths) => put_files(app, paths, false),
+        Command::PasteInto(dir) => paste_into(app, dir),
+        Command::Duplicate(paths) => {
+            // copying onto itself makes "name - Copy"
+            if let Some(dir) = parent(&paths) {
+                run_operation(app, Kind::Copy, paths, Some(dir));
+            }
+        }
+        Command::Compress(paths) => {
+            if let Some(dir) = parent(&paths) {
+                run_operation(app, Kind::Compress, paths, Some(dir));
+            }
+        }
+        Command::Extract(zip) => {
+            if let Some(dir) = zip.parent().map(Path::to_path_buf) {
+                run_operation(app, Kind::Extract, vec![zip], Some(dir));
+            }
+        }
+        Command::Rename(p) => rename(app, p),
+        Command::Trash(paths) => delete(app, paths, false),
+        Command::Delete(paths) => delete(app, paths, true),
+        Command::CopyPath(paths) => {
+            let text = paths.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join("\n");
+            app.borrow_mut().clipboard.put_text(&text);
+        }
+        Command::Properties(paths) => open_properties(app, paths),
+        Command::NewFolder(dir) => new_item(app, dir, true),
+        Command::NewFile(dir) => new_item(app, dir, false),
+        Command::SortBy(key) => {
+            let asc = app.borrow().tab.sort().1;
+            app.borrow_mut().tab.set_sort(key, asc);
+            sync_files(app);
+        }
+        Command::SortAscending(asc) => {
+            let key = app.borrow().tab.sort().0;
+            app.borrow_mut().tab.set_sort(key, asc);
+            sync_files(app);
+        }
+        Command::ToggleHidden => toggle_hidden(app),
+        Command::Refresh => refresh(app),
+    }
+}
+
+/// Starts a program in the background (it may block briefly); a failure is shown in a dialog.
+fn launch(app: &Shared, title: &str, start: impl FnOnce() -> std::io::Result<()> + Send + 'static) {
+    let (done_app, title) = (app.clone(), title.to_string());
+    bg::run(
+        move |_| start().map_err(|e| e.to_string()),
+        move |result: Result<(), String>| {
+            if let Err(msg) = result {
+                open_dialog(&done_app, Dialog::Info, DialogSpec::info(&title, &msg));
+            }
+        },
+    );
+}
+
+/// "Open": one selected folder opens in the tab; files open with their programs.
+fn open_selection(app: &Shared) {
+    let (dirs, files): (Vec<FileEntry>, Vec<FileEntry>) =
+        app.borrow().tab.selected_entries().into_iter().cloned().partition(|e| e.is_dir());
+    if let ([dir], []) = (dirs.as_slice(), files.as_slice()) {
+        return go(app, dir.path().to_path_buf(), Nav::Go);
+    }
+    for f in files {
+        if let Err(e) = shell::open(f.path()) {
+            set_status(app, format!("Cannot open \u{201c}{}\u{201d}: {e}", f.name()));
+        }
+    }
+}
+
+// ---- properties ----
+
+/// Alt+Enter: the selection's properties, or the folder's when nothing is selected.
+fn properties_of_selection(app: &Shared) {
+    let (sel, dir) = {
+        let a = app.borrow();
+        (a.tab.selected_paths(), a.tab.dir().map(Path::to_path_buf))
+    };
+    match (sel.is_empty(), dir) {
+        (false, _) => open_properties(app, sel),
+        (true, Some(d)) => open_properties(app, vec![d]),
+        (true, None) => {}
+    }
+}
+
+/// Opens a Properties window (not modal; several can be open). Reading the items happens in the
+/// background, and so does counting folders, which stops when the window closes.
+fn open_properties(app: &Shared, paths: Vec<PathBuf>) {
+    if paths.is_empty() {
+        return;
+    }
+    let done_app = app.clone();
+    let read = paths.clone();
+    bg::run(move |_| properties::sheet(&read), move |sheet| show_properties(&done_app, paths, sheet));
+}
+
+fn show_properties(app: &Shared, paths: Vec<PathBuf>, sheet: properties::Sheet) {
+    let Ok(w) = PropertiesWindow::new() else { return };
+    w.set_window_title(sheet.title.into());
+    w.set_header(sheet.header.into());
+    w.set_item_icon(sheet.entry.as_ref().map_or(-1, icon_of));
+    let lines: Vec<PropLine> = sheet
+        .lines
+        .into_iter()
+        .map(|l| PropLine { label: l.label.into(), value: l.value.into(), selectable: l.selectable, group_start: l.group_start })
+        .collect();
+    w.set_lines(ModelRc::from(Rc::new(VecModel::from(lines))));
+    let stop = Arc::new(AtomicBool::new(false));
+    let id = {
+        let mut a = app.borrow_mut();
+        a.next_properties += 1;
+        a.next_properties
+    };
+    let close_app = app.clone();
+    w.on_close_clicked(move || close_properties(&close_app, id));
+    let close_app = app.clone();
+    w.window().on_close_requested(move || {
+        close_properties(&close_app, id);
+        slint::CloseRequestResponse::HideWindow
+    });
+    if sheet.walk {
+        let (weak, stop) = (w.as_weak(), stop.clone());
+        std::thread::Builder::new()
+            .name("fileem-properties".into())
+            .spawn(move || {
+                let post = |t: Totals| {
+                    let _ = weak.upgrade_in_event_loop(move |w| set_totals(&w, t));
+                };
+                let total = measure::measure(&paths, &stop, post);
+                post(total);
+            })
+            .expect("spawn the properties walk");
+    }
+    let _ = w.show();
+    app.borrow_mut().properties.push((id, w, stop));
+}
+
+fn set_totals(w: &PropertiesWindow, t: Totals) {
+    let (size, contains) = properties::totals_text(t);
+    let lines = w.get_lines();
+    for i in 0..lines.row_count() {
+        let Some(mut l) = lines.row_data(i) else { continue };
+        let value = match l.label.as_str() {
+            properties::SIZE => &size,
+            properties::CONTAINS => &contains,
+            _ => continue,
+        };
+        l.value = value.as_str().into();
+        lines.set_row_data(i, l);
+    }
+}
+
+fn close_properties(app: &Shared, id: u64) {
+    let closed = {
+        let mut a = app.borrow_mut();
+        a.properties.iter().position(|(i, ..)| *i == id).map(|at| a.properties.remove(at))
+    };
+    if let Some((_, w, stop)) = closed {
+        stop.store(true, Ordering::Relaxed);
+        let _ = w.hide();
+    }
+}
+
+/// The open Properties windows (tests).
+pub fn properties_windows(app: &Shared) -> Vec<PropertiesWindow> {
+    app.borrow().properties.iter().map(|(_, w, _)| w.clone_strong()).collect()
+}
+
+/// Closes the windows that belong to this one (the main window is closing).
+pub fn close_windows(app: &Shared) {
+    let ids: Vec<u64> = app.borrow().properties.iter().map(|(i, ..)| *i).collect();
+    for id in ids {
+        close_properties(app, id);
+    }
 }
 
 // ---- dialogs ----
@@ -595,7 +920,7 @@ pub enum Dialog {
     Info,
     Delete { paths: Vec<PathBuf>, trash: bool },
     Rename { src: PathBuf },
-    NewFolder { dir: PathBuf },
+    New { dir: PathBuf, folder: bool },
     Quit,
 }
 
@@ -688,7 +1013,11 @@ fn dialog_accepted(app: &Shared, text: &str) {
             match names::rename(&src, text) {
                 Ok(target) => {
                     close_dialog(app);
-                    refresh_selecting(app, target);
+                    if app.borrow().tab.dir() == Some(dir.as_path()) {
+                        refresh_selecting(app, target);
+                    }
+                    // a folder renamed from the tree may sit elsewhere
+                    reload_tree_node(app, &dir);
                 }
                 Err(e) => {
                     let name = fs_util::display_name(&src);
@@ -697,18 +1026,24 @@ fn dialog_accepted(app: &Shared, text: &str) {
                 }
             }
         }
-        Dialog::NewFolder { dir } => {
+        Dialog::New { dir, folder } => {
             if let Some(problem) = names::name_problem(&dir, text, None) {
-                app.borrow_mut().dialog = Dialog::NewFolder { dir };
+                app.borrow_mut().dialog = Dialog::New { dir, folder };
                 return dialog_error(app, problem);
             }
-            match names::create_folder(&dir, text) {
+            let made = if folder { names::create_folder(&dir, text) } else { names::create_file(&dir, text) };
+            match made {
                 Ok(created) => {
                     close_dialog(app);
-                    refresh_selecting(app, created);
+                    if app.borrow().tab.dir() == Some(dir.as_path()) {
+                        refresh_selecting(app, created);
+                    }
+                    if folder {
+                        reload_tree_node(app, &dir);
+                    }
                 }
                 Err(e) => {
-                    app.borrow_mut().dialog = Dialog::NewFolder { dir };
+                    app.borrow_mut().dialog = Dialog::New { dir, folder };
                     dialog_error(app, format!("Cannot create \u{201c}{}\u{201d}: {}", text.trim(), reason(&e)));
                 }
             }
@@ -850,7 +1185,9 @@ fn key(app: &Shared, text: &str, ctrl: bool, alt: bool, shift: bool) -> bool {
         move_focus(app, isize::MIN / 2, ctrl, shift);
     } else if is(Key::End) {
         move_focus(app, isize::MAX / 2, ctrl, shift);
-    } else if (is(Key::Return) || c == '\n') && !alt {
+    } else if (is(Key::Return) || c == '\n') && alt {
+        properties_of_selection(app);
+    } else if is(Key::Return) || c == '\n' {
         let row = app.borrow().tab.current_row();
         if let Some(r) = row {
             activate(app, r);

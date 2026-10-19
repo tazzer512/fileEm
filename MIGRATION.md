@@ -8,9 +8,9 @@ rules (tests, integrity, conventions) that apply to both versions.
 executable with a much smaller memory footprint (measured: Java ~360 MB, Rust ~105 MB with
 OpenGL, ~32 MB with the software renderer).
 
-**Status (2026-10-19)**: stages 0 and 1 done on branch `rust`. The Java app in `src/` is
-still the complete, daily-use version; nothing was removed from it. Next: stage 2 (right-click
-menus, properties). Open check: clipboard exchange with the desktop's file manager (stage 1).
+**Status (2026-10-19)**: stages 0, 1 and 2 done on branch `rust`. The Java app in `src/` is
+still the complete, daily-use version; nothing was removed from it. Next: stage 3 (tabs, dual
+pane, breadcrumb address bar, filter, more columns).
 
 ## How to work a stage
 
@@ -85,10 +85,8 @@ are the Java sources, as a size hint.
   with copy/cut, `text/uri-list`, text; Windows CF_HDROP + Preferred DropEffect; macOS file
   URLs) over `clipboard-rs` (X11, Windows, macOS; on Wayland through XWayland, as GNOME 46 has
   no data-control protocol); an in-app fallback without a system clipboard; Ctrl+C/X/V, a
-  pasted cut moves once and clears the clipboard; tests use `clipboard::Memory`. **To verify
-  by hand**: copy/cut in fileEm, paste in the desktop's file manager and back. If GNOME's
-  XWayland bridge drops the formats, write a small Wayland data-device client (sctk) on the
-  app's own connection.) Original notes: OS clipboard with file lists (Linux:
+  pasted cut moves once and clears the clipboard; tests use `clipboard::Memory`. Checked by
+  hand on GNOME (Wayland, via XWayland): copy and paste work both ways with Files.) Original notes: OS clipboard with file lists (Linux:
   `x-special/gnome-copied-files` + `text/uri-list`; Windows: `CF_HDROP` + Preferred DropEffect;
   macOS: file URLs). Check `arboard` for custom formats first; otherwise per-platform code.
   Ctrl+C/X/V.
@@ -102,14 +100,33 @@ are the Java sources, as a size hint.
 - UI tests from `MainWindowUiTest`: clipboard, rename, new folder, delete, progress window
   (pause/cancel, stacked ops, conflict buttons), autosave/session.
 
-### Stage 2: menus and properties
+### Stage 2: menus and properties (done)
 
-- Right-click menus on files, folders, empty space and the tree (`MainWindow.fileMenuItems` /
-  `treeMenuItems`): Slint `ContextMenuArea` + `Menu`. Built per request; tree shortcut items
-  (quick access, bookmarks, volumes) get no cut/rename/delete. Right-click in the tree must not
-  navigate.
-- Properties dialog (`PropertiesDialog` 189): attributes, owner, dates, background folder size.
-- Open with / open terminal here (`Shell` 191; `ShellTest` 4).
+- [x] **Right-click menus** (`menu.rs`, toolkit-free and unit-tested; one `ContextMenuArea` in
+  app.slint with six sections plus Sort by / New submenus, shown from code only). File menu:
+  Open, Open in terminal, Show in file manager, Cut/Copy/Paste (Paste into folder on a folder),
+  Duplicate, Compress to ZIP, Extract here (zips), Rename, Move to Trash, Delete permanently,
+  Copy path, Properties. Empty space: Paste, Show hidden files, Refresh, Sort by, New (Folder,
+  Text file), Open in terminal, Open in file manager, Copy path, Properties. Tree: the same per
+  folder; quick access and drives are shortcuts (no cut, rename, delete, duplicate; drives no
+  copy or zip either); a right-click never navigates. Right-click on an unselected row selects
+  it alone, on a selected one keeps the selection, on empty space clears it. Menu key and
+  Shift+F10 open the menu at the focused row. Compress/Extract select what they made; the tree
+  reloads the folders an operation, rename or new folder touched.
+- [x] **Properties** (`properties.rs` sheet + `ui/properties.slint`; a window per request, not
+  modal): type, location, link target, size, created/modified/accessed, attributes with owner,
+  hidden; folders and several items are counted in the background
+  (`fileem-core::fs::measure`, links not followed, stops when the window closes). Alt+Enter,
+  menus. Closing the main window closes them.
+- [x] **Shell** (`shell.rs`, `ShellTest` ported): terminal per platform (`$TERMINAL`, then
+  known terminals with their folder flag), Show in file manager (FileManager1 D-Bus `ShowItems`
+  with `'` escaped, else open the folder), launches recorded as "open/terminal/reveal <path>"
+  under `FILEEM_NO_LAUNCH`.
+- Not yet (they need later stages): Open in new tab / other side, Copy/Move to other side
+  (stage 3); View submenu (stage 5); Search in folder, bookmarks (stage 7); Eject (stage 7).
+  The tree doesn't outline the right-clicked row (Java's `context-target`): Slint gives no
+  "menu closed" event to remove the outline again.
+- Not ported from Java: "Open with…" never existed there either (the plan's old note).
 
 ### Stage 3: tabs, dual pane, address bar, filter
 
@@ -203,3 +220,14 @@ are the Java sources, as a size hint.
 - `FILEEM_SNAPSHOT` renders the window for visual checks; on Wayland the new window takes
   keyboard focus, so the user's typing reaches it (it once "went up" by itself in a snapshot).
 - The tree must show a hidden folder while it is the current folder or one of its parents.
+- Context menus: `ContextMenuArea` takes models (`for e in model: MenuItem`, `if …: Menu`), and
+  separators at the ends or next to each other are dropped, so fixed sections fed from Rust
+  work. A row's `TouchArea` takes the right press, so the area never sees it: keep it
+  `enabled: false` (it would show a stale menu elsewhere) and call `show()` from the handlers
+  after Rust built the menu. A `ListView` (Flickable) passes non-left presses through, so a
+  `TouchArea` behind it catches right-clicks on empty space.
+- Testing backend: elements inside a popup report positions relative to the popup; add the
+  popup's `ChildWindow` location (`i_slint_core::window::WindowInner::active_popups`, dev-dep
+  pinned like the testing backend) before clicking menu items (`Fixture::pick`).
+- `Window` already has `icon` and similar properties: a component inheriting `Window` can't
+  declare its own (`item-icon`); `GridLayout` rows from a `for` set `col` themselves.

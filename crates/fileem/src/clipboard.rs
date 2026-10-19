@@ -21,23 +21,45 @@ pub trait FileClipboard {
     fn get(&mut self) -> Option<ClipFiles>;
     /// After a cut was pasted (moved): the files are gone from where they were.
     fn clear(&mut self);
+    /// Plain text ("Copy path"); replaces the files.
+    fn put_text(&mut self, text: &str);
+    fn text(&mut self) -> Option<String>;
+}
+
+/// The paths as text, one per line.
+fn paths_text(paths: &[PathBuf]) -> String {
+    paths.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join("\n")
 }
 
 /// A clipboard inside the app only (tests; desktops without a system clipboard).
 #[derive(Default)]
-pub struct Memory(Option<ClipFiles>);
+pub struct Memory {
+    files: Option<ClipFiles>,
+    text: Option<String>,
+}
 
 impl FileClipboard for Memory {
     fn put(&mut self, paths: &[PathBuf], cut: bool) {
-        self.0 = Some(ClipFiles { paths: paths.to_vec(), cut });
+        self.files = Some(ClipFiles { paths: paths.to_vec(), cut });
+        self.text = Some(paths_text(paths));
     }
 
     fn get(&mut self) -> Option<ClipFiles> {
-        self.0.clone()
+        self.files.clone()
     }
 
     fn clear(&mut self) {
-        self.0 = None;
+        self.files = None;
+        self.text = None;
+    }
+
+    fn put_text(&mut self, text: &str) {
+        self.files = None;
+        self.text = Some(text.to_string());
+    }
+
+    fn text(&mut self) -> Option<String> {
+        self.text.clone()
     }
 }
 
@@ -63,8 +85,7 @@ impl FileClipboard for System {
     fn put(&mut self, paths: &[PathBuf], cut: bool) {
         use clipboard_rs::{Clipboard, ClipboardContent};
         self.fallback.put(paths, cut);
-        let text = paths.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join("\n");
-        let mut contents = vec![ClipboardContent::Text(text)];
+        let mut contents = vec![ClipboardContent::Text(paths_text(paths))];
         if cfg!(any(windows, target_os = "macos")) {
             contents.push(ClipboardContent::Files(paths.iter().map(|p| p.display().to_string()).collect()));
             #[cfg(windows)]
@@ -101,6 +122,22 @@ impl FileClipboard for System {
         self.fallback.clear();
         if let Some(ctx) = self.ctx() {
             let _ = ctx.clear();
+        }
+    }
+
+    fn put_text(&mut self, text: &str) {
+        use clipboard_rs::Clipboard;
+        self.fallback.put_text(text);
+        if let Some(ctx) = self.ctx() {
+            let _ = ctx.set_text(text.to_string());
+        }
+    }
+
+    fn text(&mut self) -> Option<String> {
+        use clipboard_rs::Clipboard;
+        match self.ctx() {
+            Some(ctx) => ctx.get_text().ok(),
+            None => self.fallback.text(),
         }
     }
 }
@@ -222,6 +259,9 @@ mod tests {
         assert_eq!(m.get(), None);
         m.put(&[PathBuf::from("/a")], true);
         assert_eq!(m.get(), Some(ClipFiles { paths: vec![PathBuf::from("/a")], cut: true }));
+        assert_eq!(m.text().as_deref(), Some("/a"));
+        m.put_text("/x\n/y");
+        assert_eq!((m.get(), m.text().as_deref()), (None, Some("/x\n/y")), "text replaces the files");
         m.clear();
         assert_eq!(m.get(), None);
     }

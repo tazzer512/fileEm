@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 
 use std::rc::Rc;
 
-use fileem::{app, shell, AppWindow, FileRow, ProgressWindow, TreeRow};
+use fileem::{app, shell, AppWindow, FileRow, ProgressWindow, PropertiesWindow, TreeRow};
 use fileem_core::ops::{Decision, FileOperation, Kind, Resolution};
 use fileem_core::session::Session;
 use i_slint_backend_testing::ElementHandle;
@@ -125,6 +125,64 @@ impl Fixture {
         self.click_at(&self.element(label));
     }
 
+    fn right_click_at(&self, position: LogicalPosition) {
+        let w = self.ui.window();
+        w.dispatch_event(WindowEvent::PointerMoved { position });
+        w.dispatch_event(WindowEvent::PointerPressed { position, button: PointerEventButton::Right });
+        w.dispatch_event(WindowEvent::PointerReleased { position, button: PointerEventButton::Right });
+        pump();
+    }
+
+    fn right_click(&self, e: &ElementHandle) {
+        let (pos, size) = (e.absolute_position(), e.size());
+        self.right_click_at(LogicalPosition::new(pos.x + size.width / 2.0, pos.y + size.height / 2.0));
+    }
+
+    /// A row of the file list (the tree may show the same name).
+    fn list_row(&self, name: &str) -> ElementHandle {
+        let tree_width = self.ui.get_tree_width();
+        ElementHandle::find_by_accessible_label(&self.ui, name)
+            .find(|e| e.accessible_role() == Some(i_slint_backend_testing::AccessibleRole::ListItem) && e.absolute_position().x > tree_width)
+            .unwrap_or_else(|| panic!("no list row {name:?}"))
+    }
+
+    fn tree_row(&self, name: &str) -> ElementHandle {
+        let tree_width = self.ui.get_tree_width();
+        ElementHandle::find_by_accessible_label(&self.ui, name)
+            .find(|e| e.accessible_role() == Some(i_slint_backend_testing::AccessibleRole::ListItem) && e.absolute_position().x < tree_width)
+            .unwrap_or_else(|| panic!("no tree row {name:?}"))
+    }
+
+    /// An item of the open menu, by its full title.
+    fn menu_item(&self, title: &str) -> Option<ElementHandle> {
+        ElementHandle::find_by_accessible_label(&self.ui, title).find(|e| e.size().width > 0.0)
+    }
+
+    /// Clicks a menu item (a submenu opens; an item runs and closes the menu).
+    fn pick(&self, title: &str) {
+        let item = self.menu_item(title).unwrap_or_else(|| panic!("no menu item {title:?}"));
+        // positions inside a popup are relative to it; the newest popup is the innermost menu
+        let offset = {
+            let inner = i_slint_core::window::WindowInner::from_pub(self.ui.window());
+            let popups = inner.active_popups();
+            match popups.last().map(|p| &p.location) {
+                Some(i_slint_core::window::PopupWindowLocation::ChildWindow(at)) => (at.x, at.y),
+                _ => (0.0, 0.0),
+            }
+        };
+        let (pos, size) = (item.absolute_position(), item.size());
+        let position = LogicalPosition::new(offset.0 + pos.x + size.width / 2.0, offset.1 + pos.y + size.height / 2.0);
+        let w = self.ui.window();
+        w.dispatch_event(WindowEvent::PointerMoved { position });
+        w.dispatch_event(WindowEvent::PointerPressed { position, button: PointerEventButton::Left });
+        w.dispatch_event(WindowEvent::PointerReleased { position, button: PointerEventButton::Left });
+        pump();
+    }
+
+    fn property(&self, w: &PropertiesWindow, label: &str) -> String {
+        w.get_lines().iter().find(|l| l.label == label).map(|l| l.value.to_string()).unwrap_or_default()
+    }
+
     fn double_click(&self, label: &str) {
         let e = self.element(label);
         self.click_at(&e);
@@ -188,6 +246,14 @@ fn ui() {
     copy_and_paste_into_a_subfolder();
     cut_and_paste_moves_once();
     pasting_into_the_same_folder_makes_a_copy();
+    right_click_selects_the_row_and_opens_its_menu();
+    right_click_on_a_selected_row_keeps_the_selection();
+    right_click_on_empty_space_offers_the_folder_menu();
+    right_click_in_the_tree_opens_a_menu_without_navigating();
+    alt_enter_and_the_menu_show_properties();
+    new_text_file_from_the_menu();
+    duplicate_compress_and_extract_from_the_menu();
+    paste_into_a_folder_from_its_menu();
 }
 
 fn lists_folders_first_with_status_and_no_hidden_files() {
@@ -243,7 +309,7 @@ fn keyboard_selection_and_enter_opens_files_without_launching() {
     f.key(Key::End);
     f.key(Key::Return);
     settle(&f);
-    assert!(shell::launched().contains(&f.dir.join("notes.txt")), "{:?}", shell::launched());
+    assert!(shell::launched().contains(&format!("open {}", f.dir.join("notes.txt").display())), "{:?}", shell::launched());
     assert_eq!(f.address(), f.dir, "opening a file doesn't navigate");
 }
 
@@ -626,4 +692,129 @@ fn pasting_into_the_same_folder_makes_a_copy() {
     f.chord(&[Key::Control], "c");
     f.chord(&[Key::Control], "v");
     wait_until(&f, "the copy", |f| f.names().contains(&"notes - Copy.txt".to_string()));
+}
+
+// ---- right-click menus and properties ----
+
+fn right_click_selects_the_row_and_opens_its_menu() {
+    let f = open_window();
+    f.click("notes.txt");
+    f.right_click(&f.list_row("a.png"));
+    assert_eq!(f.selected(), ["a.png"], "an unselected row is selected alone");
+    assert!(f.menu_item("Rename  (F2)").is_some(), "the item's menu");
+    assert!(f.menu_item("Sort by").is_none(), "not the folder's menu");
+    f.pick("Copy path");
+    wait_until(&f, "the menu closed", |f| f.menu_item("Copy path").is_none());
+    assert_eq!(app::clipboard_text(&f.app), Some(f.dir.join("a.png").display().to_string()));
+}
+
+fn right_click_on_a_selected_row_keeps_the_selection() {
+    let f = open_window();
+    f.click("notes.txt");
+    f.ui.invoke_row_pressed(3, true, false); // Ctrl+click big.bin
+    f.right_click(&f.list_row("notes.txt"));
+    assert_eq!(f.selected(), ["big.bin", "notes.txt"]);
+    f.pick("Copy");
+    wait_until(&f, "the menu closed", |f| f.menu_item("Copy path").is_none());
+    let text = app::clipboard_text(&f.app).unwrap();
+    assert_eq!(text.lines().count(), 2, "both items were copied: {text}");
+}
+
+fn right_click_on_empty_space_offers_the_folder_menu() {
+    let f = open_window();
+    f.click("notes.txt");
+    let last = f.list_row("notes.txt");
+    let below = LogicalPosition::new(last.absolute_position().x + 50.0, last.absolute_position().y + 150.0);
+    f.right_click_at(below);
+    assert!(f.selected().is_empty(), "the menu is about the folder");
+    assert!(f.menu_item("Show hidden files").is_some() && f.menu_item("Refresh  (Ctrl+R)").is_some());
+    f.pick("Sort by");
+    wait_until(&f, "the sort submenu", |f| f.menu_item("Descending").is_some());
+    f.pick("Descending");
+    wait_until(&f, "sorted descending", |f| f.names() == ["beta", "alpha", "notes.txt", "big.bin", "a.png"]);
+    assert!(!f.ui.get_sort_ascending());
+}
+
+fn right_click_in_the_tree_opens_a_menu_without_navigating() {
+    let f = open_window();
+    let home = fileem_core::util::os::home();
+    f.right_click(&f.tree_row("Home"));
+    settle(&f);
+    assert_eq!(f.address(), f.dir, "a right-click doesn't navigate");
+    assert!(f.menu_item("Open in terminal").is_some());
+    assert!(f.menu_item("Cut").is_none() && f.menu_item("Delete permanently").is_none(), "Home is a shortcut");
+    f.pick("Open in terminal");
+    let wanted = format!("terminal {}", home.display());
+    wait_until(&f, "the terminal request", |_| shell::launched().contains(&wanted));
+    assert_eq!(f.address(), f.dir);
+}
+
+fn alt_enter_and_the_menu_show_properties() {
+    let f = open_window();
+    f.click("notes.txt");
+    f.chord(&[Key::Alt], Key::Return);
+    wait_until(&f, "the properties window", |f| app::properties_windows(&f.app).len() == 1);
+    let w = app::properties_windows(&f.app).remove(0);
+    assert_eq!(w.get_window_title(), "notes.txt Properties");
+    assert_eq!(f.property(&w, "Size:"), "10 bytes");
+    assert_eq!(f.property(&w, "Location:"), f.dir.display().to_string());
+    w.invoke_close_clicked();
+    assert!(app::properties_windows(&f.app).is_empty());
+
+    f.right_click(&f.list_row("alpha"));
+    f.pick("Properties  (Alt+Enter)");
+    wait_until(&f, "the folder counted", |f| {
+        app::properties_windows(&f.app).first().is_some_and(|w| f.property(w, "Contains:") == "1 files, 0 folders")
+    });
+    let w = app::properties_windows(&f.app).remove(0);
+    assert_eq!(f.property(&w, "Size:"), "1 byte");
+    app::close_windows(&f.app);
+    assert!(app::properties_windows(&f.app).is_empty());
+}
+
+fn new_text_file_from_the_menu() {
+    let f = open_window();
+    let last = f.list_row("notes.txt");
+    f.right_click_at(LogicalPosition::new(last.absolute_position().x + 50.0, last.absolute_position().y + 150.0));
+    f.pick("New");
+    wait_until(&f, "the new submenu", |f| f.menu_item("Text file").is_some());
+    f.pick("Text file");
+    wait_until(&f, "the name dialog", dialog_open);
+    assert_eq!(f.ui.get_dialog_text(), "New text file.txt");
+    assert_eq!(f.ui.get_dialog_select_end(), 13, "the name before .txt is selected");
+    f.ui.set_dialog_text("todo.txt".into());
+    f.button("Create").invoke_accessible_default_action();
+    wait_until(&f, "the new file", |f| f.selected() == ["todo.txt"]);
+    assert_eq!(fs::read(f.dir.join("todo.txt")).unwrap(), b"", "an empty file");
+}
+
+fn duplicate_compress_and_extract_from_the_menu() {
+    let f = open_window();
+    f.right_click(&f.list_row("notes.txt"));
+    f.pick("Duplicate");
+    wait_until(&f, "the duplicate", |f| f.names().contains(&"notes - Copy.txt".to_string()));
+    assert_eq!(fs::read_to_string(f.dir.join("notes - Copy.txt")).unwrap(), "1234567890");
+
+    f.click("notes.txt");
+    let big = f.names().iter().position(|n| n == "big.bin").unwrap();
+    f.ui.invoke_row_pressed(big as i32, true, false);
+    f.right_click(&f.list_row("notes.txt"));
+    f.pick("Compress to ZIP");
+    wait_until(&f, "the archive selected", |f| f.selected() == ["Archive.zip"]);
+
+    f.right_click(&f.list_row("Archive.zip"));
+    f.pick("Extract here");
+    wait_until(&f, "the extracted folder selected", |f| f.selected() == ["Archive"]);
+    assert_eq!(fs::read_to_string(f.dir.join("Archive/notes.txt")).unwrap(), "1234567890");
+    assert_eq!(fs::read(f.dir.join("Archive/big.bin")).unwrap().len(), 5000);
+}
+
+fn paste_into_a_folder_from_its_menu() {
+    let f = open_window();
+    f.click("notes.txt");
+    f.chord(&[Key::Control], "c");
+    f.right_click(&f.list_row("beta"));
+    f.pick("Paste into folder");
+    wait_until(&f, "pasted into beta", |f| f.dir.join("beta/notes.txt").exists());
+    assert_eq!(f.address(), f.dir, "the folder stays shown");
 }

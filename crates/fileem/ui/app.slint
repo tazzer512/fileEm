@@ -2,7 +2,9 @@
 // All commands and keys go to Rust (see src/app.rs); this file only lays out and draws.
 
 import { Button, LineEdit, ScrollView, ListView, Palette } from "std-widgets.slint";
+import { Icons, FileIcon } from "icons.slint";
 export { ProgressWindow, OpRow } from "progress.slint";
+export { PropertiesWindow, PropLine } from "properties.slint";
 
 export struct FileRow {
     name: string,
@@ -16,6 +18,15 @@ export struct FileRow {
     hidden: bool,
 }
 
+// One item of a right-click menu (src/menu.rs); `id` is handed back to `menu-activated`.
+export struct MenuRow {
+    id: int,
+    title: string,
+    enabled: bool,
+    checkable: bool,
+    checked: bool,
+}
+
 export struct TreeRow {
     name: string,
     depth: int,
@@ -27,44 +38,6 @@ export struct TreeRow {
     current: bool,
     on-path: bool,
     icon: int,
-}
-
-// Material Design Icons path data (Apache 2.0), 24×24 viewbox.
-global Icons {
-    out property <string> folder: "M10,4H4C2.89,4 2,4.89 2,6V18A2,2 0 0,0 4,20H20A2,2 0 0,0 22,18V8C22,6.89 21.1,6 20,6H12L10,4Z";
-    out property <string> file: "M13,9V3.5L18.5,9M6,2C4.89,2 4,2.89 4,4V20A2,2 0 0,0 6,22H18A2,2 0 0,0 20,20V8L14,2H6Z";
-    out property <string> file-outline: "M14,2H6A2,2 0 0,0 4,4V20A2,2 0 0,0 6,22H18A2,2 0 0,0 20,20V8L14,2M18,20H6V4H13V9H18V20Z";
-    out property <string> home: "M10,20V14H14V20H19V12H22L12,3L2,12H5V20H10Z";
-    out property <string> drive: "M4,6H20A2,2 0 0,1 22,8V16A2,2 0 0,1 20,18H4A2,2 0 0,1 2,16V8A2,2 0 0,1 4,6M18,11A1,1 0 0,0 17,12A1,1 0 0,0 18,13A1,1 0 0,0 19,12A1,1 0 0,0 18,11Z";
-    out property <string> link: "M3.9,12C3.9,10.29 5.29,8.9 7,8.9H11V7H7A5,5 0 0,0 2,12A5,5 0 0,0 7,17H11V15.1H7C5.29,15.1 3.9,13.71 3.9,12M8,13H16V11H8V13M17,7H13V8.9H17C18.71,8.9 20.1,10.29 20.1,12C20.1,13.71 18.71,15.1 17,15.1H13V17H17A5,5 0 0,0 22,12A5,5 0 0,0 17,7Z";
-    out property <string> chevron-right: "M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z";
-    out property <string> chevron-down: "M7.41,8.58L12,13.17L16.59,8.58L18,10L12,16L6,10L7.41,8.58Z";
-    out property <string> back: "M20,11V13H8L13.5,18.5L12.08,19.92L4.16,12L12.08,4.08L13.5,5.5L8,11H20Z";
-    out property <string> forward: "M4,11V13H16L10.5,18.5L11.92,19.92L19.84,12L11.92,4.08L10.5,5.5L16,11H4Z";
-    out property <string> up: "M13,20H11V8L5.5,13.5L4.08,12.08L12,4.16L19.92,12.08L18.5,13.5L13,8V20Z";
-    out property <string> refresh: "M17.65,6.35C16.2,4.9 14.21,4 12,4A8,8 0 0,0 4,12A8,8 0 0,0 12,20C15.73,20 18.84,17.45 19.73,14H17.65C16.83,16.33 14.61,18 12,18A6,6 0 0,1 6,12A6,6 0 0,1 12,6C13.66,6 15.14,6.69 16.22,7.78L13,11H20V4L17.65,6.35Z";
-    out property <string> eye: "M12,9A3,3 0 0,0 9,12A3,3 0 0,0 12,15A3,3 0 0,0 15,12A3,3 0 0,0 12,9M12,17A5,5 0 0,1 7,12A5,5 0 0,1 12,7A5,5 0 0,1 17,12A5,5 0 0,1 12,17M12,4.5C7,4.5 2.73,7.61 1,12C2.73,16.39 7,19.5 12,19.5C17,19.5 21.27,16.39 23,12C21.27,7.61 17,4.5 12,4.5Z";
-}
-
-// Category icons, numbered like `icon_of` in src/app.rs.
-component FileIcon {
-    in property <int> kind;
-    in property <bool> dimmed;
-    width: 18px;
-    height: 18px;
-    Path {
-        width: 100%;
-        height: 100%;
-        viewbox-width: 24;
-        viewbox-height: 24;
-        opacity: root.dimmed ? 0.55 : 1.0;
-        commands: kind == 0 ? Icons.folder : kind == 1 ? Icons.file-outline : kind == 13 ? Icons.link
-            : kind == 20 ? Icons.home : kind == 21 ? Icons.drive : Icons.file;
-        fill: kind == 0 ? #d9a02b : kind == 2 ? #3fa66a : kind == 3 ? #b356c4 : kind == 4 ? #d4524a
-            : kind == 5 ? #a07a46 : kind == 6 ? #d93a35 : kind == 7 ? #2f6fd1 : kind == 8 ? #1f8f4e
-            : kind == 9 ? #d0632d : kind == 10 ? #3a8fd9 : kind == 12 ? #6a6fd8
-            : kind == 20 ? Palette.accent-background : Palette.foreground.with-alpha(0.65);
-    }
 }
 
 component ToolButton {
@@ -173,6 +146,24 @@ export component AppWindow inherits Window {
     // the directory watcher saw changes in the shown folder (token: which watch)
     callback dir-changed(int);
 
+    // ---- right-click menus (built by src/menu.rs on each request) ----
+    // sections are separated by lines; the Sort by and New submenus follow section 1
+    in property <[MenuRow]> menu-s0;
+    in property <[MenuRow]> menu-s1;
+    in property <[MenuRow]> menu-s2;
+    in property <[MenuRow]> menu-s3;
+    in property <[MenuRow]> menu-s4;
+    in property <[MenuRow]> menu-s5;
+    in property <[MenuRow]> menu-sort;
+    in property <[MenuRow]> menu-new;
+    // a right-click on a row (-1: empty space): selects as needed and builds the menu
+    callback row-menu(int);
+    // a right-click in the tree: builds its menu, false when the row has none (headers)
+    callback tree-menu(int) -> bool;
+    // the keyboard's menu key: builds the selection's menu, returns the focused row (or -1)
+    callback keyboard-menu() -> int;
+    callback menu-activated(int);
+
     // ---- dialog (drawn over the window; see src/app.rs `Dialog`) ----
     in property <bool> dialog-open;
     in property <string> dialog-title;
@@ -224,6 +215,11 @@ export component AppWindow inherits Window {
         list.content-y = 0;
     }
 
+    // `x`, `y` in window coordinates
+    public function show-menu(x: length, y: length) {
+        context-menu.show({ x: x, y: y });
+    }
+
     public function focus-list() {
         keys.focus();
     }
@@ -235,6 +231,13 @@ export component AppWindow inherits Window {
 
     keys := FocusScope {
         key-pressed(event) => {
+            if (event.text == Key.Menu || (event.text == Key.F10 && event.modifiers.shift)) {
+                // at the focused row, or the list's top left
+                let row = root.keyboard-menu();
+                root.show-menu(list.absolute-position.x + 40px,
+                    list.absolute-position.y + (row < 0 ? 8px : clamp(row * row-height + list.content-y + row-height, 0, list.visible-height)));
+                return EventResult.accept;
+            }
             if (root.key(event.text, event.modifiers.control || event.modifiers.meta, event.modifiers.alt, event.modifiers.shift)) {
                 return EventResult.accept;
             }
@@ -312,6 +315,14 @@ export component AppWindow inherits Window {
                                 border-color: Palette.accent-background.with-alpha(0.6);
                             }
                             tree-touch := TouchArea {
+                                pointer-event(event) => {
+                                    // right-click: a menu, never a navigation
+                                    if (event.kind == PointerEventKind.down && event.button == PointerEventButton.right) {
+                                        if (root.tree-menu(i)) {
+                                            root.show-menu(self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y);
+                                        }
+                                    }
+                                }
                                 clicked => {
                                     if (!row.header) {
                                         root.tree-clicked(i);
@@ -409,73 +420,90 @@ export component AppWindow inherits Window {
                         }
                         Rectangle { y: parent.height - 1px; height: 1px; background: Palette.border; }
                     }
-                    list := ListView {
-                        for row[i] in root.files: Rectangle {
-                            height: root.row-height;
-                            accessible-role: list-item;
-                            accessible-label: row.name;
-                            accessible-item-selected: row.selected;
-                            background: row.selected ? Palette.selection-background.with-alpha(keys.has-focus ? 1.0 : 0.45)
-                                : row-touch.has-hover ? Palette.foreground.with-alpha(0.05) : transparent;
-                            border-width: row.current && keys.has-focus ? 1px : 0px;
-                            border-color: Palette.accent-background;
-                            row-touch := TouchArea {
-                                pointer-event(event) => {
-                                    if (event.kind == PointerEventKind.down && event.button == PointerEventButton.left) {
-                                        keys.focus();
-                                        root.row-pressed(i, event.modifiers.control || event.modifiers.meta, event.modifiers.shift);
-                                    }
+                    Rectangle {
+                        // right-clicks on empty space pass through the list to here: the folder's menu
+                        TouchArea {
+                            pointer-event(event) => {
+                                if (event.kind == PointerEventKind.down && event.button == PointerEventButton.right) {
+                                    keys.focus();
+                                    root.row-menu(-1);
+                                    root.show-menu(self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y);
                                 }
-                                double-clicked => { root.row-activated(i); }
                             }
-                            HorizontalLayout {
-                                property <color> fg: row.selected && keys.has-focus ? Palette.selection-foreground : Palette.foreground;
-                                HorizontalLayout {
-                                    padding-left: 6px;
-                                    spacing: 6px;
-                                    VerticalLayout {
-                                        alignment: center;
-                                        FileIcon { kind: row.icon; dimmed: row.hidden; }
+                        }
+                        list := ListView {
+                            for row[i] in root.files: Rectangle {
+                                height: root.row-height;
+                                accessible-role: list-item;
+                                accessible-label: row.name;
+                                accessible-item-selected: row.selected;
+                                background: row.selected ? Palette.selection-background.with-alpha(keys.has-focus ? 1.0 : 0.45)
+                                    : row-touch.has-hover ? Palette.foreground.with-alpha(0.05) : transparent;
+                                border-width: row.current && keys.has-focus ? 1px : 0px;
+                                border-color: Palette.accent-background;
+                                row-touch := TouchArea {
+                                    pointer-event(event) => {
+                                        if (event.kind == PointerEventKind.down && event.button == PointerEventButton.left) {
+                                            keys.focus();
+                                            root.row-pressed(i, event.modifiers.control || event.modifiers.meta, event.modifiers.shift);
+                                        }
+                                        if (event.kind == PointerEventKind.down && event.button == PointerEventButton.right) {
+                                            keys.focus();
+                                            root.row-menu(i);
+                                            root.show-menu(self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y);
+                                        }
                                     }
-                                    Text {
-                                        text: row.name;
-                                        vertical-alignment: center;
-                                        overflow: elide;
-                                        color: fg;
-                                    }
-                                }
-                                // same widths and 6px insets as the header cells, so text lines up and never touches
-                                HorizontalLayout {
-                                    width: 90px;
-                                    padding-left: 6px;
-                                    padding-right: 6px;
-                                    Text {
-                                        text: row.size;
-                                        horizontal-alignment: right;
-                                        vertical-alignment: center;
-                                        color: fg.with-alpha(0.8);
-                                    }
+                                    double-clicked => { root.row-activated(i); }
                                 }
                                 HorizontalLayout {
-                                    width: 150px;
-                                    padding-left: 6px;
-                                    padding-right: 6px;
-                                    Text {
-                                        text: row.kind;
-                                        vertical-alignment: center;
-                                        overflow: elide;
-                                        color: fg.with-alpha(0.8);
+                                    property <color> fg: row.selected && keys.has-focus ? Palette.selection-foreground : Palette.foreground;
+                                    HorizontalLayout {
+                                        padding-left: 6px;
+                                        spacing: 6px;
+                                        VerticalLayout {
+                                            alignment: center;
+                                            FileIcon { kind: row.icon; dimmed: row.hidden; }
+                                        }
+                                        Text {
+                                            text: row.name;
+                                            vertical-alignment: center;
+                                            overflow: elide;
+                                            color: fg;
+                                        }
                                     }
-                                }
-                                HorizontalLayout {
-                                    width: 170px;
-                                    padding-left: 6px;
-                                    padding-right: 6px;
-                                    Text {
-                                        text: row.modified;
-                                        vertical-alignment: center;
-                                        overflow: elide;
-                                        color: fg.with-alpha(0.8);
+                                    // same widths and 6px insets as the header cells, so text lines up and never touches
+                                    HorizontalLayout {
+                                        width: 90px;
+                                        padding-left: 6px;
+                                        padding-right: 6px;
+                                        Text {
+                                            text: row.size;
+                                            horizontal-alignment: right;
+                                            vertical-alignment: center;
+                                            color: fg.with-alpha(0.8);
+                                        }
+                                    }
+                                    HorizontalLayout {
+                                        width: 150px;
+                                        padding-left: 6px;
+                                        padding-right: 6px;
+                                        Text {
+                                            text: row.kind;
+                                            vertical-alignment: center;
+                                            overflow: elide;
+                                            color: fg.with-alpha(0.8);
+                                        }
+                                    }
+                                    HorizontalLayout {
+                                        width: 170px;
+                                        padding-left: 6px;
+                                        padding-right: 6px;
+                                        Text {
+                                            text: row.modified;
+                                            vertical-alignment: center;
+                                            overflow: elide;
+                                            color: fg.with-alpha(0.8);
+                                        }
                                     }
                                 }
                             }
@@ -504,6 +532,79 @@ export component AppWindow inherits Window {
                     color: Palette.foreground.with-alpha(0.75);
                     font-size: 12px;
                 }
+            }
+        }
+    }
+
+    // The one right-click menu: shown only from code (show-menu), after Rust filled the sections
+    // for what was clicked; never by itself (it would show a stale menu).
+    context-menu := ContextMenuArea {
+        enabled: false;
+        Menu {
+            for e in root.menu-s0: MenuItem {
+                title: e.title;
+                enabled: e.enabled;
+                checkable: e.checkable;
+                checked: e.checked;
+                activated => { root.menu-activated(e.id); }
+            }
+            MenuSeparator { }
+            for e in root.menu-s1: MenuItem {
+                title: e.title;
+                enabled: e.enabled;
+                checkable: e.checkable;
+                checked: e.checked;
+                activated => { root.menu-activated(e.id); }
+            }
+            if root.menu-sort.length > 0: Menu {
+                title: "Sort by";
+                for e in root.menu-sort: MenuItem {
+                    title: e.title;
+                    enabled: e.enabled;
+                    checkable: e.checkable;
+                    checked: e.checked;
+                    activated => { root.menu-activated(e.id); }
+                }
+            }
+            if root.menu-new.length > 0: Menu {
+                title: "New";
+                for e in root.menu-new: MenuItem {
+                    title: e.title;
+                    enabled: e.enabled;
+                    activated => { root.menu-activated(e.id); }
+                }
+            }
+            MenuSeparator { }
+            for e in root.menu-s2: MenuItem {
+                title: e.title;
+                enabled: e.enabled;
+                checkable: e.checkable;
+                checked: e.checked;
+                activated => { root.menu-activated(e.id); }
+            }
+            MenuSeparator { }
+            for e in root.menu-s3: MenuItem {
+                title: e.title;
+                enabled: e.enabled;
+                checkable: e.checkable;
+                checked: e.checked;
+                activated => { root.menu-activated(e.id); }
+            }
+            MenuSeparator { }
+            for e in root.menu-s4: MenuItem {
+                title: e.title;
+                enabled: e.enabled;
+                checkable: e.checkable;
+                checked: e.checked;
+                activated => { root.menu-activated(e.id); }
+            }
+            MenuSeparator { }
+            for e in root.menu-s5: MenuItem {
+                title: e.title;
+                enabled: e.enabled;
+                checkable: e.checkable;
+                checked: e.checked;
+                activated => { root.menu-activated(e.id); }
             }
         }
     }

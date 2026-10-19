@@ -1193,6 +1193,7 @@ dependencies = [
  "clipboard-rs",
  "fileem-core",
  "i-slint-backend-testing",
+ "i-slint-core",
  "slint",
  "slint-build",
  "tempfile",

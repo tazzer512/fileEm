@@ -1,0 +1,104 @@
+// Properties of one or more items, in a window of its own (not modal). Folder sizes are counted
+// in the background and filled in as they come (see src/properties.rs and src/app.rs).
+
+import { Button, LineEdit, Palette, ScrollView } from "std-widgets.slint";
+import { FileIcon } from "icons.slint";
+
+export struct PropLine {
+    label: string,
+    value: string,
+    // long values (location, link target) can be selected and copied
+    selectable: bool,
+    // a separator above this line
+    group-start: bool,
+}
+
+export component PropertiesWindow inherits Window {
+    in property <string> window-title;
+    in property <string> header;
+    // FileIcon kind; -1 for several items
+    in property <int> item-icon: -1;
+    in property <[PropLine]> lines;
+    title: window-title;
+    min-width: 440px;
+    preferred-width: 480px;
+    background: Palette.background;
+    default-font-size: 13px;
+
+    callback close-clicked();
+
+    FocusScope {
+        key-pressed(event) => {
+            if (event.text == Key.Escape) {
+                root.close-clicked();
+                return EventResult.accept;
+            }
+            return EventResult.reject;
+        }
+        VerticalLayout {
+            padding: 16px;
+            spacing: 8px;
+            HorizontalLayout {
+                spacing: 12px;
+                if root.item-icon >= 0: VerticalLayout {
+                    alignment: center;
+                    FileIcon { kind: root.item-icon; width: 32px; height: 32px; }
+                }
+                LineEdit {
+                    text: root.header;
+                    read-only: true;
+                    font-size: 15px;
+                    accessible-label: "Name";
+                }
+            }
+            Rectangle { height: 1px; background: Palette.border; }
+            GridLayout {
+                spacing-horizontal: 14px;
+                spacing-vertical: 8px;
+                for line[i] in root.lines: Row {
+                    Rectangle {
+                        width: 90px;
+                        min-height: 22px;
+                        // the rule spans both columns
+                        if line.group-start: Rectangle { x: 0; y: -5px; height: 1px; width: root.width - 32px; background: Palette.border; }
+                        Text {
+                            text: line.label;
+                            x: 0;
+                            vertical-alignment: center;
+                            color: Palette.foreground.with-alpha(0.65);
+                        }
+                    }
+                    Rectangle {
+                        min-height: 22px;
+                        if line.selectable: LineEdit {
+                            x: 0;
+                            width: parent.width;
+                            text: line.value;
+                            read-only: true;
+                            accessible-label: line.label;
+                        }
+                        if !line.selectable: Text {
+                            text: line.value;
+                            x: 0;
+                            width: parent.width;
+                            vertical-alignment: center;
+                            wrap: word-wrap;
+                            accessible-role: text;
+                            accessible-label: line.label;
+                            accessible-value: line.value;
+                        }
+                    }
+                }
+            }
+            Rectangle { vertical-stretch: 1; }
+            HorizontalLayout {
+                alignment: end;
+                Button {
+                    text: "Close";
+                    primary: true;
+                    clicked => { root.close-clicked(); }
+                }
+            }
+        }
+    }
+}
