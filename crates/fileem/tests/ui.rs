@@ -164,6 +164,9 @@ fn ui() {
     the_session_restores_hidden_files_sort_and_the_last_folder();
     a_vanished_last_folder_opens_its_nearest_parent();
     saving_the_session_keeps_what_only_the_java_app_uses();
+    changes_made_elsewhere_show_up_and_keep_the_selection();
+    a_new_subfolder_shows_up_in_the_tree();
+    when_the_shown_folder_is_deleted_its_parent_opens();
 }
 
 fn lists_folders_first_with_status_and_no_hidden_files() {
@@ -361,4 +364,35 @@ fn saving_the_session_keeps_what_only_the_java_app_uses() {
         assert_eq!(saved.get(k).as_deref(), Some(v), "{k} left alone");
     }
     assert!(saved.get_f64("window.w", 0.0) > 0.0);
+}
+
+fn changes_made_elsewhere_show_up_and_keep_the_selection() {
+    let f = open_window();
+    f.click("notes.txt");
+    fs::write(f.dir.join("added.txt"), "new").unwrap();
+    fs::remove_file(f.dir.join("a.png")).unwrap();
+    wait_until(&f, "the watcher refreshed", |f| f.names().contains(&"added.txt".to_string()));
+    assert!(!f.names().contains(&"a.png".to_string()));
+    assert_eq!(f.selected(), ["notes.txt"], "the selection survives a refresh");
+    assert_eq!(f.ui.get_status(), "5 items, 1 selected (10 bytes)");
+}
+
+fn a_new_subfolder_shows_up_in_the_tree() {
+    let f = open_window();
+    wait_until(&f, "the tree shows the folder", |f| f.tree().iter().any(|r| r.current));
+    let row = f.tree().iter().position(|r| r.current).unwrap();
+    f.ui.invoke_tree_toggled(row as i32);
+    wait_until(&f, "subfolders", |f| f.tree().iter().any(|r| r.name == "alpha"));
+    fs::create_dir(f.dir.join("gamma")).unwrap();
+    wait_until(&f, "the new folder in the tree", |f| f.tree().iter().any(|r| r.name == "gamma"));
+    wait_until(&f, "and in the list", |f| f.names().contains(&"gamma".to_string()));
+}
+
+fn when_the_shown_folder_is_deleted_its_parent_opens() {
+    let f = open_window();
+    f.double_click("alpha");
+    wait_until(&f, "alpha", |f| f.address() == f.dir.join("alpha"));
+    fs::remove_dir_all(f.dir.join("alpha")).unwrap();
+    wait_until(&f, "the parent", |f| f.address() == f.dir);
+    assert!(!f.names().contains(&"alpha".to_string()));
 }

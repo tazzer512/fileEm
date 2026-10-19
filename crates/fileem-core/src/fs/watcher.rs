@@ -1,0 +1,198 @@
+//! Shared directory watcher (the Java `DirWatcher`): one OS watcher for the whole app, listeners
+//! per folder, bursts of changes debounced per folder. Listeners run on a background thread; the
+//! UI forwards them to its event loop.
+
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::Duration;
+
+use notify::{RecommendedWatcher, RecursiveMode, Watcher};
+
+const DEBOUNCE: Duration = Duration::from_millis(400);
+
+type Listener = Arc<dyn Fn() + Send + Sync>;
+
+#[derive(Default)]
+struct Entry {
+    listeners: Vec<(u64, Listener)>,
+    pending: bool,
+}
+
+struct Shared {
+    watcher: Mutex<RecommendedWatcher>,
+    entries: Arc<Mutex<HashMap<PathBuf, Entry>>>,
+}
+
+static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+
+fn shared() -> Option<&'static Shared> {
+    static SHARED: OnceLock<Option<Shared>> = OnceLock::new();
+    SHARED
+        .get_or_init(|| {
+            let entries: Arc<Mutex<HashMap<PathBuf, Entry>>> = Arc::default();
+            let routed = entries.clone();
+            let watcher = notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
+                if let Ok(event) = event {
+                    for p in &event.paths {
+                        // a change of an item concerns its folder; one of the folder itself, the folder
+                        changed(&routed, p.parent());
+                        changed(&routed, Some(p));
+                    }
+                }
+            })
+            .ok()?;
+            Some(Shared { watcher: Mutex::new(watcher), entries })
+        })
+        .as_ref()
+}
+
+/// Debounces: the first change starts a timer; changes until it fires are folded into one call.
+fn changed(entries: &Arc<Mutex<HashMap<PathBuf, Entry>>>, dir: Option<&Path>) {
+    let Some(dir) = dir else { return };
+    let mut map = entries.lock().unwrap();
+    let Some(entry) = map.get_mut(dir) else { return };
+    if entry.pending {
+        return;
+    }
+    entry.pending = true;
+    let (entries, dir) = (entries.clone(), dir.to_path_buf());
+    std::thread::spawn(move || {
+        std::thread::sleep(DEBOUNCE);
+        let listeners: Vec<Listener> = {
+            let mut map = entries.lock().unwrap();
+            match map.get_mut(&dir) {
+                Some(e) => {
+                    e.pending = false;
+                    e.listeners.iter().map(|(_, l)| l.clone()).collect()
+                }
+                None => Vec::new(),
+            }
+        };
+        for l in listeners {
+            l();
+        }
+    });
+}
+
+/// Stops its listener when dropped.
+pub struct WatchHandle {
+    dir: PathBuf,
+    id: u64,
+}
+
+impl Drop for WatchHandle {
+    fn drop(&mut self) {
+        let Some(s) = shared() else { return };
+        let mut map = s.entries.lock().unwrap();
+        let Some(entry) = map.get_mut(&self.dir) else { return };
+        entry.listeners.retain(|(id, _)| *id != self.id);
+        if entry.listeners.is_empty() {
+            map.remove(&self.dir);
+            drop(map);
+            let _ = s.watcher.lock().unwrap().unwatch(&self.dir);
+        }
+    }
+}
+
+/// Calls `on_change` (on a background thread) whenever the content of `dir` changes, until the
+/// handle is dropped. Registering touches the file system (it can block on a hung mount): call it
+/// off the UI thread. A folder that can't be watched simply never reports.
+pub fn watch(dir: &Path, on_change: impl Fn() + Send + Sync + 'static) -> WatchHandle {
+    let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+    let handle = WatchHandle { dir: dir.to_path_buf(), id };
+    let Some(s) = shared() else { return handle };
+    // registered again on every watch: a folder deleted and created again at the same path needs
+    // a new OS watch, or it would never report again
+    let _ = s.watcher.lock().unwrap().watch(dir, RecursiveMode::NonRecursive);
+    s.entries.lock().unwrap().entry(dir.to_path_buf()).or_default().listeners.push((id, Arc::new(on_change)));
+    handle
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::mpsc;
+
+    const WAIT: Duration = Duration::from_secs(15);
+
+    fn counter() -> (Arc<AtomicUsize>, mpsc::Receiver<()>, impl Fn() + Send + Sync + 'static) {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let (tx, rx) = mpsc::channel();
+        let c = calls.clone();
+        let tx = Mutex::new(tx);
+        (calls, rx, move || {
+            c.fetch_add(1, Ordering::SeqCst);
+            let _ = tx.lock().unwrap().send(());
+        })
+    }
+
+    #[test]
+    fn notifies_on_changes_and_stops_after_the_handle_is_dropped() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (calls, rx, listener) = counter();
+        let handle = watch(tmp.path(), listener);
+        fs::write(tmp.path().join("new.txt"), "x").unwrap();
+        rx.recv_timeout(WAIT).expect("change was reported");
+
+        drop(handle);
+        std::thread::sleep(DEBOUNCE + Duration::from_millis(200));
+        let before = calls.load(Ordering::SeqCst);
+        fs::write(tmp.path().join("after-close.txt"), "x").unwrap();
+        std::thread::sleep(DEBOUNCE * 3);
+        assert_eq!(calls.load(Ordering::SeqCst), before, "no notifications after the handle is gone");
+    }
+
+    #[test]
+    fn a_folder_deleted_and_created_again_is_watched_again() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sub = tmp.path().join("sub");
+        fs::create_dir(&sub).unwrap();
+        let (_, first, listener) = counter();
+        let handle = watch(&sub, listener);
+        fs::write(sub.join("a.txt"), "x").unwrap();
+        first.recv_timeout(WAIT).unwrap();
+        fs::remove_file(sub.join("a.txt")).unwrap();
+        fs::remove_dir(&sub).unwrap();
+        std::thread::sleep(DEBOUNCE + Duration::from_millis(200));
+        fs::create_dir(&sub).unwrap();
+
+        let (_, again, listener) = counter();
+        let _second = watch(&sub, listener);
+        fs::write(sub.join("b.txt"), "x").unwrap();
+        again.recv_timeout(WAIT).expect("changes in the new folder are reported");
+        drop(handle);
+    }
+
+    #[test]
+    fn bursts_of_changes_are_debounced() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (calls, rx, listener) = counter();
+        let _handle = watch(tmp.path(), listener);
+        for i in 0..200 {
+            fs::write(tmp.path().join(format!("f{i}")), "x").unwrap();
+        }
+        rx.recv_timeout(WAIT).unwrap();
+        std::thread::sleep(DEBOUNCE * 3);
+        let n = calls.load(Ordering::SeqCst);
+        assert!(n <= 5, "200 writes caused {n} notifications");
+    }
+
+    #[test]
+    fn changes_in_a_subfolder_do_not_report_for_the_parent() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sub = tmp.path().join("sub");
+        fs::create_dir(&sub).unwrap();
+        std::thread::sleep(DEBOUNCE);
+        let (calls, _rx, listener) = counter();
+        let _handle = watch(tmp.path(), listener);
+        fs::write(sub.join("deep.txt"), "x").unwrap();
+        std::thread::sleep(DEBOUNCE * 3);
+        // the folder's own modification time may change, which some systems report; the file
+        // inside it is not the parent's business
+        assert!(calls.load(Ordering::SeqCst) <= 1);
+    }
+}

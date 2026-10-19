@@ -63,7 +63,11 @@ are the Java sources, as a size hint.
   in `OsUtil.configDir()` (`window.*`, `left.*`, `columns.*`, `sort.*`, `showHidden`, …) so
   both versions share settings during the transition; atomic writes, change-only, background
   save every 2 s, save on close. Core: `session.rs`.
-- **Directory watcher** (`DirWatcher` 125; `DirWatcherTest` 3): `notify` crate; coalesced
+- [x] **Directory watcher** (done: `fs::watcher` on the `notify` crate, debounced per folder,
+  re-watched after delete + create; the app registers off the UI thread, reports reach it via a
+  Slint callback with a token, refreshes are coalesced and keep scroll/focus/selection, a
+  vanished folder opens its nearest parent, changed subfolders reload the tree. Our own
+  operations still refresh explicitly.) Original notes: `notify` crate; coalesced
   refresh throttled to 2× the last listing time (`FileTab.requestRefresh`); skip while a
   navigation loads; refresh after our own operations.
 - **Progress window** (`OperationUi` 161, `ProgressWindow` 382, `Eta` 98; `EtaTest` 6): a
@@ -172,6 +176,8 @@ are the Java sources, as a size hint.
   `with_debug_info(true)` (debug builds only) or element search finds nothing; give the window
   a size or list views create no rows; pump the event loop with a single-shot timer +
   `run_event_loop_until_quit`; clicks via `WindowEvent::Pointer*` at element positions.
+- Background threads reach the UI through `slint::Weak::upgrade_in_event_loop` + a Slint
+  callback (the window handle is `Send`, the controller isn't): see `dir-changed`.
 - `FILEEM_SNAPSHOT` renders the window for visual checks; on Wayland the new window takes
   keyboard focus, so the user's typing reaches it (it once "went up" by itself in a snapshot).
 - The tree must show a hidden folder while it is the current folder or one of its parents.

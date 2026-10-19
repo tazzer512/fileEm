@@ -11,6 +11,7 @@ use slint::platform::Key;
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 
 use fileem_core::fs::listing::{self, SortKey};
+use fileem_core::fs::watcher::{self, WatchHandle};
 use fileem_core::fs::{places, Category, FileEntry};
 use fileem_core::ops::{FileOperation, Kind, State};
 use fileem_core::session::Session;
@@ -36,6 +37,17 @@ pub struct App {
     reveal_token: u64,
     type_ahead: String,
     type_ahead_at: Option<Instant>,
+    /// The watch on the shown folder; dropping it stops watching.
+    watch: Option<(PathBuf, WatchHandle)>,
+    /// Drops watcher reports for a folder no longer shown.
+    watch_token: u64,
+    /// A navigation (not a refresh) is loading: watcher refreshes wait, it lists fresh anyway.
+    navigating: bool,
+    /// A refresh is loading; further requests collapse into one follow-up.
+    refreshing: bool,
+    refresh_pending: bool,
+    /// How long the last listing took: follow-up refreshes wait twice that.
+    last_list: Duration,
 }
 
 pub type Shared = Rc<RefCell<App>>;
@@ -75,6 +87,12 @@ pub fn install(ui: &AppWindow, session: Rc<Session>, start: Option<PathBuf>) -> 
         reveal_token: 0,
         type_ahead: String::new(),
         type_ahead_at: None,
+        watch: None,
+        watch_token: 0,
+        navigating: false,
+        refreshing: false,
+        refresh_pending: false,
+        last_list: Duration::ZERO,
     }));
     wire(ui, &app);
     sync_tree(&app);
@@ -162,6 +180,8 @@ fn wire(ui: &AppWindow, app: &Shared) {
     let a = app.clone();
     ui.on_tree_toggled(move |row| tree_toggled(&a, row as usize));
     let a = app.clone();
+    ui.on_dir_changed(move |token| dir_changed(&a, token));
+    let a = app.clone();
     ui.on_key(move |text, ctrl, alt, shift| key(&a, &text, ctrl, alt, shift));
 }
 
@@ -178,6 +198,16 @@ pub fn go(app: &Shared, dir: PathBuf, nav: Nav) {
 fn go_with(app: &Shared, dir: PathBuf, nav: Nav, nearest: bool) {
     let generation = {
         let mut a = app.borrow_mut();
+        if nav == Nav::Refresh {
+            if a.navigating {
+                return; // the navigation in flight lists its folder fresh anyway: don't drop it
+            }
+            a.refreshing = true;
+        } else {
+            a.navigating = true;
+            // a cancelled refresh never calls back, so it can't clear this itself
+            a.refreshing = false;
+        }
         if let Some(job) = a.load.take() {
             job.cancel();
         }
@@ -192,15 +222,28 @@ fn go_with(app: &Shared, dir: PathBuf, nav: Nav, nearest: bool) {
             if nearest {
                 dir = dir.ancestors().find(|p| p.is_dir()).map(Path::to_path_buf).unwrap_or_else(fileem_core::util::os::home);
             }
-            listing::list(&dir, cancel).map(|entries| (dir, entries))
+            let started = Instant::now();
+            listing::list(&dir, cancel).map(|entries| (dir, entries, started.elapsed()))
         },
-        move |result: std::io::Result<(PathBuf, Vec<FileEntry>)>| {
+        move |result: std::io::Result<(PathBuf, Vec<FileEntry>, Duration)>| {
             if done_app.borrow().generation != generation {
                 return;
             }
-            done_app.borrow_mut().load = None;
+            {
+                let mut a = done_app.borrow_mut();
+                a.load = None;
+                a.navigating = false;
+            }
+            if nav == Nav::Refresh {
+                finish_refresh(&done_app);
+            }
             match result {
-                Ok((dir, entries)) => shown(&done_app, dir, entries, nav),
+                Ok((dir, entries, took)) => {
+                    done_app.borrow_mut().last_list = took;
+                    shown(&done_app, dir, entries, nav);
+                }
+                // the shown folder is gone: its nearest existing parent
+                Err(_) if nav == Nav::Refresh => go_with(&done_app, dir, Nav::Go, true),
                 Err(e) => failed(&done_app, &dir, &e),
             }
         },
@@ -210,8 +253,19 @@ fn go_with(app: &Shared, dir: PathBuf, nav: Nav, nearest: bool) {
 
 fn shown(app: &Shared, dir: PathBuf, entries: Vec<FileEntry>, nav: Nav) {
     let same = app.borrow().tab.dir() == Some(dir.as_path());
+    let folders_before = folder_set(app.borrow().tab.rows());
     app.borrow_mut().tab.show(dir.clone(), entries, nav);
     sync_files(app);
+    if same && nav == Nav::Refresh {
+        // a watcher refresh keeps scroll and focus where the user left them
+        if folder_set(app.borrow().tab.rows()) != folders_before {
+            reload_tree_node(app, &dir);
+        }
+        return;
+    }
+    if !same || app.borrow().watch.is_none() {
+        watch_folder(app, &dir);
+    }
     let Some(ui) = app.borrow().ui.upgrade() else { return };
     ui.set_address(dir.display().to_string().into());
     ui.set_window_title(format!("{} - fileEm", fs_util::display_name(&dir)).into());
@@ -225,6 +279,92 @@ fn shown(app: &Shared, dir: PathBuf, entries: Vec<FileEntry>, nav: Nav) {
     if nav != Nav::Refresh || !same {
         reveal(app, dir);
     }
+}
+
+fn folder_set<'a>(rows: impl Iterator<Item = &'a FileEntry>) -> std::collections::HashSet<PathBuf> {
+    rows.filter(|e| e.is_dir()).map(|e| e.path().to_path_buf()).collect()
+}
+
+// ---- watching ----
+
+/// Watches the shown folder; changes refresh it. Registering touches the file system (it can
+/// hang on a dead mount), so it happens in a background job.
+fn watch_folder(app: &Shared, dir: &Path) {
+    let (token, ui) = {
+        let mut a = app.borrow_mut();
+        a.watch = None;
+        a.watch_token += 1;
+        (a.watch_token, a.ui.clone())
+    };
+    let done_app = app.clone();
+    let path = dir.to_path_buf();
+    bg::run(
+        move |_| {
+            watcher::watch(&path, move || {
+                // from the watcher's thread to the event loop; the window may be gone by then
+                let _ = ui.upgrade_in_event_loop(move |ui| ui.invoke_dir_changed(token as i32));
+            })
+        },
+        move |handle| {
+            let mut a = done_app.borrow_mut();
+            if a.watch_token == token {
+                let dir = a.tab.dir().map(Path::to_path_buf).unwrap_or_default();
+                a.watch = Some((dir, handle));
+            }
+        },
+    );
+}
+
+/// A watcher report: refresh, coalesced (one follow-up at most while a refresh runs).
+fn dir_changed(app: &Shared, token: i32) {
+    if app.borrow().watch_token as i32 != token {
+        return; // a report for a folder no longer shown
+    }
+    request_refresh(app);
+}
+
+fn request_refresh(app: &Shared) {
+    let mut a = app.borrow_mut();
+    if a.refreshing {
+        a.refresh_pending = true;
+        return;
+    }
+    drop(a);
+    refresh(app);
+}
+
+/// After a refresh: a request that came in meanwhile runs after twice the listing time, so a big
+/// folder under heavy writes isn't listed continuously.
+fn finish_refresh(app: &Shared) {
+    let mut a = app.borrow_mut();
+    a.refreshing = false;
+    if a.refresh_pending {
+        a.refresh_pending = false;
+        let delay = (a.last_list * 2).max(Duration::from_millis(250));
+        let again = app.clone();
+        slint::Timer::single_shot(delay, move || request_refresh(&again));
+    }
+}
+
+/// Re-reads the subfolders of every loaded tree node showing `dir` (its set of subfolders changed).
+fn reload_tree_node(app: &Shared, dir: &Path) {
+    let ids = app.borrow().tree.loaded_nodes(dir);
+    if ids.is_empty() {
+        return;
+    }
+    let done_app = app.clone();
+    let path = dir.to_path_buf();
+    bg::run(
+        move |_| listing::subfolders(&path, true),
+        move |children: std::io::Result<Vec<FileEntry>>| {
+            if let Ok(children) = children {
+                for id in ids {
+                    done_app.borrow_mut().tree.set_children(id, children.clone());
+                }
+                sync_tree(&done_app);
+            }
+        },
+    );
 }
 
 fn failed(app: &Shared, dir: &Path, e: &std::io::Error) {

@@ -169,6 +169,8 @@ export component AppWindow inherits Window {
     callback row-activated(int);
     callback tree-clicked(int);
     callback tree-toggled(int);
+    // the directory watcher saw changes in the shown folder (token: which watch)
+    callback dir-changed(int);
     // key text (slint::platform::Key for special keys), ctrl/cmd, alt, shift; true when handled
     callback key(string, bool, bool, bool) -> bool;
 

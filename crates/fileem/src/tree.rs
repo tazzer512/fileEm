@@ -180,6 +180,14 @@ impl Tree {
         self.flatten();
     }
 
+    /// Nodes showing `dir` whose children are loaded (the ones worth reloading on changes). A
+    /// folder can show more than once: Home in Quick access and under its volume.
+    pub fn loaded_nodes(&self, dir: &Path) -> Vec<usize> {
+        (0..self.nodes.len())
+            .filter(|&i| self.nodes[i].path.as_deref() == Some(dir) && self.nodes[i].children.is_some())
+            .collect()
+    }
+
     /// Shows `dir` in the volumes section: expands its parents, loading what isn't loaded yet
     /// (one [`Reveal::Load`] per step), and makes it the current folder. Branches opened only for
     /// this are folded again when the current folder later leaves them.
@@ -365,6 +373,21 @@ mod tests {
         assert!(names(&t).contains(&"  .git".to_string()));
         reveal(&mut t, &tmp.path().join("vol/b"));
         assert!(!names(&t).contains(&"  .git".to_string()), "hidden again once we left it");
+    }
+
+    #[test]
+    fn loaded_nodes_finds_every_loaded_copy_of_a_folder() {
+        let tmp = tempfile::tempdir().unwrap();
+        let v = tmp.path().join("vol");
+        fs::create_dir_all(v.join("home/docs")).unwrap();
+        let quick = [Place { name: "Home".into(), path: v.join("home") }];
+        let volumes = [Place { name: "Vol".into(), path: v.clone() }];
+        let mut t = Tree::new(&quick, &volumes);
+        assert!(t.loaded_nodes(&v.join("home")).is_empty(), "nothing loaded yet");
+        reveal(&mut t, &v.join("home/docs")); // loads Vol and its home
+        let (id, path) = t.toggle(1).unwrap(); // and Quick access' Home
+        t.set_children(id, subfolders(&path, true).unwrap());
+        assert_eq!(t.loaded_nodes(&v.join("home")).len(), 2);
     }
 
     #[test]

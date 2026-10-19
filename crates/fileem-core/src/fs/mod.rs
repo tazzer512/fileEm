@@ -5,6 +5,7 @@ pub mod file_types;
 pub mod listing;
 pub mod places;
 pub mod trash;
+pub mod watcher;
 
 pub use entry::FileEntry;
 pub use file_types::Category;
