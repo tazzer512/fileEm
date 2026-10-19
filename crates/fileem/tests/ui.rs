@@ -7,7 +7,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+use std::rc::Rc;
+
 use fileem::{app, shell, AppWindow, FileRow, TreeRow};
+use fileem_core::session::Session;
 use i_slint_backend_testing::ElementHandle;
 use slint::platform::{Key, PointerEventButton, WindowEvent};
 use slint::{ComponentHandle, LogicalPosition, Model, SharedString};
@@ -16,13 +19,20 @@ struct Fixture {
     _tmp: tempfile::TempDir,
     dir: PathBuf,
     ui: AppWindow,
-    _app: app::Shared,
+    app: app::Shared,
 }
 
 /// A folder with two subfolders, files of different sizes, a hidden file, and a window on it.
 fn open_window() -> Fixture {
+    open_window_with(|_, _| {}, true)
+}
+
+/// Like [`open_window`], with a session (in the temp folder: never the user's) prepared by
+/// `prepare`; `start_there` opens the test folder, else the window starts where the session says.
+fn open_window_with(prepare: impl FnOnce(&Session, &Path), start_there: bool) -> Fixture {
     let tmp = tempfile::tempdir().unwrap();
-    let dir = tmp.path().to_path_buf();
+    let dir = tmp.path().join("files");
+    fs::create_dir(&dir).unwrap();
     fs::create_dir(dir.join("alpha")).unwrap();
     fs::create_dir(dir.join("beta")).unwrap();
     fs::write(dir.join("alpha/inside.txt"), "i").unwrap();
@@ -30,13 +40,17 @@ fn open_window() -> Fixture {
     fs::write(dir.join("big.bin"), vec![0u8; 5000]).unwrap();
     fs::write(dir.join("a.png"), "png").unwrap();
     fs::write(dir.join(".hidden"), "h").unwrap();
+    let session = Rc::new(Session::load(&tmp.path().join("session.properties")));
+    prepare(&session, &dir);
     let ui = AppWindow::new().unwrap();
-    let app = app::install(&ui, dir.clone());
+    let app = app::install(&ui, session, start_there.then(|| dir.clone()));
     // a real size: the list views only create the rows that fit
     ui.window().set_size(slint::LogicalSize::new(1100.0, 700.0));
     ui.show().unwrap();
-    let f = Fixture { _tmp: tmp, dir, ui, _app: app };
-    wait_until(&f, "the folder is listed", |f| f.names().len() == 5);
+    let f = Fixture { _tmp: tmp, dir, ui, app };
+    if start_there {
+        wait_until(&f, "the folder is listed", |f| f.names().len() == 5);
+    }
     f
 }
 
@@ -147,6 +161,9 @@ fn ui() {
     click_ctrl_click_and_shift_click_select();
     the_address_bar_navigates_and_reports_bad_paths();
     the_tree_reveals_the_current_folder_and_navigates_on_click();
+    the_session_restores_hidden_files_sort_and_the_last_folder();
+    a_vanished_last_folder_opens_its_nearest_parent();
+    saving_the_session_keeps_what_only_the_java_app_uses();
 }
 
 fn lists_folders_first_with_status_and_no_hidden_files() {
@@ -279,4 +296,69 @@ fn the_tree_reveals_the_current_folder_and_navigates_on_click() {
     f.ui.invoke_tree_clicked(alpha as i32);
     wait_until(&f, "alpha", |f| f.address() == f.dir.join("alpha"));
     wait_until(&f, "alpha is current in the tree", |f| f.tree().iter().any(|r| r.current && r.name == "alpha"));
+}
+
+fn the_session_restores_hidden_files_sort_and_the_last_folder() {
+    let f = open_window_with(
+        |s, dir| {
+            s.put("showHidden", true);
+            s.put("sort.column", "size");
+            s.put("sort.ascending", false);
+            s.put("left.treeWidth", 300);
+            s.put("left.tabs", 2);
+            s.put("left.selected", 1);
+            s.put("left.tab.0", "/elsewhere");
+            s.put("left.tab.1", dir.display());
+        },
+        false,
+    );
+    wait_until(&f, "the last folder with hidden files", |f| f.names().len() == 6);
+    assert_eq!(f.address(), f.dir, "the selected tab's folder");
+    assert!(f.ui.get_show_hidden());
+    assert_eq!(f.ui.get_sort_column(), 1);
+    assert!(!f.ui.get_sort_ascending());
+    assert_eq!(f.names()[2], "big.bin", "largest file first");
+    assert_eq!(f.ui.get_tree_width(), 300.0);
+}
+
+fn a_vanished_last_folder_opens_its_nearest_parent() {
+    let f = open_window_with(|s, dir| s.put("left.tab.0", dir.join("alpha/was-here/deeper").display()), false);
+    wait_until(&f, "the nearest existing parent", |f| f.address() == f.dir.join("alpha"));
+    assert_eq!(f.names(), ["inside.txt"]);
+}
+
+fn saving_the_session_keeps_what_only_the_java_app_uses() {
+    let f = open_window_with(
+        |s, _| {
+            s.put("left.tabs", 3);
+            s.put("left.selected", 1);
+            s.put("left.tab.0", "/java/tab0");
+            s.put("left.tab.1", "/java/tab1");
+            s.put("left.tab.2", "/java/tab2");
+            s.put("right.tab.0", "/java/right");
+            s.put("columns.size.width", 120);
+            s.put("theme.name", "aurora");
+        },
+        true,
+    );
+    f.double_click("alpha");
+    wait_until(&f, "alpha", |f| f.address() == f.dir.join("alpha"));
+    f.chord(&[Key::Control], "h");
+    app::collect_session(&f.app);
+    app::session(&f.app).save();
+
+    let saved = Session::load(app::session(&f.app).file());
+    assert_eq!(saved.get("left.tab.1").map(PathBuf::from), Some(f.dir.join("alpha")), "the shown tab's folder");
+    assert!(saved.get_bool("showHidden", false));
+    for (k, v) in [
+        ("left.tabs", "3"),
+        ("left.tab.0", "/java/tab0"),
+        ("left.tab.2", "/java/tab2"),
+        ("right.tab.0", "/java/right"),
+        ("columns.size.width", "120"),
+        ("theme.name", "aurora"),
+    ] {
+        assert_eq!(saved.get(k).as_deref(), Some(v), "{k} left alone");
+    }
+    assert!(saved.get_f64("window.w", 0.0) > 0.0);
 }

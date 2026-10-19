@@ -5,4 +5,5 @@
 
 pub mod fs;
 pub mod ops;
+pub mod session;
 pub mod util;

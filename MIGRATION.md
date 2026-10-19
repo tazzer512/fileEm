@@ -54,7 +54,12 @@ are the Java sources, as a size hint.
 
 ### Stage 1: everyday file work
 
-- **Session + autosave** (`Session` 153, `Autosave` 74; `SessionTest` 8): same file and keys
+- [x] **Session + autosave** (done: `fileem-core::session` with a Java-compatible `.properties`
+  reader/writer, checked against real `Properties.load`; restore of hidden, sort, tree width,
+  window size/maximized and the selected tab's folder with nearest-parent fallback; 2 s
+  autosave + save on close. Only keys the Rust app knows are written, so other tabs, columns,
+  theme etc. survive for the Java app. Not ported: the JVM shutdown hook (SIGTERM/logout save);
+  the 2 s autosave covers most of it.) Original notes: (`Session` 153, `Autosave` 74; `SessionTest` 8): same file and keys
   in `OsUtil.configDir()` (`window.*`, `left.*`, `columns.*`, `sort.*`, `showHidden`, …) so
   both versions share settings during the transition; atomic writes, change-only, background
   save every 2 s, save on close. Core: `session.rs`.

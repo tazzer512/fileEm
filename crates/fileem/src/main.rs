@@ -3,20 +3,50 @@
 
 //! fileEm: an Explorer-style file manager (Slint UI over `fileem-core`).
 
+use std::rc::Rc;
+
 use fileem::{app, AppWindow};
+use fileem_core::session::Session;
 use slint::ComponentHandle;
 
 fn main() -> Result<(), slint::PlatformError> {
-    let start = std::env::args_os()
-        .nth(1)
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(fileem_core::util::os::home);
+    let start = std::env::args_os().nth(1).map(std::path::PathBuf::from);
+    let session = Rc::new(Session::load_default());
     let ui = AppWindow::new()?;
-    let _app = app::install(&ui, start);
-    if let Some(out) = std::env::var_os("FILEEM_SNAPSHOT") {
+    let w = session.get_f64("window.w", 1280.0).clamp(480.0, 10_000.0);
+    let h = session.get_f64("window.h", 780.0).clamp(320.0, 10_000.0);
+    ui.window().set_size(slint::LogicalSize::new(w as f32, h as f32));
+    ui.window().set_maximized(session.get_bool("window.maximized", false));
+    let app = app::install(&ui, session.clone(), start);
+
+    let snapshot = std::env::var_os("FILEEM_SNAPSHOT");
+    // a snapshot is a look at the window, not a session: it never writes the settings
+    let _autosave = if let Some(out) = snapshot {
         snapshot_later(&ui, out.into());
-    }
+        None
+    } else {
+        Some(autosave(&ui, &app))
+    };
     ui.run()
+}
+
+/// Keeps the session file up to date while the app runs, so settings survive a crash or a kill,
+/// not only a normal close: every 2 s the state is collected and, if it changed, written in the
+/// background. Closing the window saves right away.
+fn autosave(ui: &AppWindow, app: &app::Shared) -> slint::Timer {
+    let timer = slint::Timer::default();
+    let a = app.clone();
+    timer.start(slint::TimerMode::Repeated, std::time::Duration::from_secs(2), move || {
+        app::collect_session(&a);
+        app::session(&a).save_in_background();
+    });
+    let a = app.clone();
+    ui.window().on_close_requested(move || {
+        app::collect_session(&a);
+        app::session(&a).save();
+        slint::CloseRequestResponse::HideWindow
+    });
+    timer
 }
 
 /// Visual checks (Wayland has no desktop screenshots): `FILEEM_SNAPSHOT=out.ppm fileem DIR` renders

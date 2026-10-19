@@ -13,6 +13,7 @@ use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 use fileem_core::fs::listing::{self, SortKey};
 use fileem_core::fs::{places, Category, FileEntry};
 use fileem_core::ops::{FileOperation, Kind, State};
+use fileem_core::session::Session;
 use fileem_core::util::{formats, fs_util};
 
 use crate::bg::{self, Job};
@@ -23,6 +24,7 @@ use crate::{AppWindow, FileRow, TreeRow};
 
 pub struct App {
     ui: slint::Weak<AppWindow>,
+    session: Rc<Session>,
     tab: Tab,
     tree: Tree,
     files: Rc<VecModel<FileRow>>,
@@ -38,16 +40,34 @@ pub struct App {
 
 pub type Shared = Rc<RefCell<App>>;
 
-/// Creates the controller for `ui`, wires its callbacks and opens `start`.
-pub fn install(ui: &AppWindow, start: PathBuf) -> Shared {
+/// Creates the controller for `ui`, restores the state saved in `session`, wires the callbacks and
+/// opens `start` (default: the folder open last time, else the home folder).
+pub fn install(ui: &AppWindow, session: Rc<Session>, start: Option<PathBuf>) -> Shared {
     let files = Rc::new(VecModel::default());
     let tree_rows = Rc::new(VecModel::default());
     ui.set_files(ModelRc::from(files.clone()));
     ui.set_tree(ModelRc::from(tree_rows.clone()));
+    let mut tab = Tab::new();
+    tab.set_show_hidden(session.get_bool("showHidden", false));
+    let sort = match session.get_or("sort.column", "name").as_str() {
+        "size" => SortKey::Size,
+        "type" => SortKey::Type,
+        "modified" => SortKey::Modified,
+        _ => SortKey::Name,
+    };
+    tab.set_sort(sort, session.get_bool("sort.ascending", true));
+    let mut tree = Tree::new(&places::quick_access(), &places::volumes());
+    tree.set_show_hidden(tab.show_hidden());
+    ui.set_tree_width(session.get_f64(&format!("{SIDE}.treeWidth"), 240.0).clamp(120.0, 800.0) as f32);
+    let saved = session
+        .get(&format!("{SIDE}.tab.{}", session.get_int(&format!("{SIDE}.selected"), 0)))
+        .filter(|p| !p.trim().is_empty())
+        .map(PathBuf::from);
     let app = Rc::new(RefCell::new(App {
         ui: ui.as_weak(),
-        tab: Tab::new(),
-        tree: Tree::new(&places::quick_access(), &places::volumes()),
+        session,
+        tab,
+        tree,
         files,
         tree_rows,
         load: None,
@@ -58,8 +78,61 @@ pub fn install(ui: &AppWindow, start: PathBuf) -> Shared {
     }));
     wire(ui, &app);
     sync_tree(&app);
-    go(&app, start, Nav::Go);
+    sync_files(&app);
+    match (start, saved) {
+        (Some(dir), _) => go(&app, dir, Nav::Go),
+        // the folder from last time may be gone: its nearest existing parent then
+        (None, Some(dir)) => go_with(&app, dir, Nav::Go, true),
+        (None, None) => go(&app, fileem_core::util::os::home(), Nav::Go),
+    }
     app
+}
+
+/// The session side this window stands for. One side until the dual pane is ported; the right
+/// side's keys are left as the Java app wrote them.
+const SIDE: &str = "left";
+
+/// Copies the window's state into the session (autosave, close). Only keys this version knows
+/// are written; the rest (other tabs, columns, theme, …) stays as the Java app left it, so both
+/// versions can share the file during the migration.
+pub fn collect_session(app: &Shared) {
+    let a = app.borrow();
+    let s = &a.session;
+    s.put("showHidden", a.tab.show_hidden());
+    let (key, asc) = a.tab.sort();
+    let column = match key {
+        SortKey::Name => "name",
+        SortKey::Size => "size",
+        SortKey::Type => "type",
+        SortKey::Modified => "modified",
+    };
+    s.put("sort.column", column);
+    s.put("sort.ascending", asc);
+    if let Some(dir) = a.tab.dir() {
+        let selected = s.get_int(&format!("{SIDE}.selected"), 0).max(0);
+        if s.get_int(&format!("{SIDE}.tabs"), 0) <= selected {
+            s.put(&format!("{SIDE}.tabs"), selected + 1);
+        }
+        s.put(&format!("{SIDE}.selected"), selected);
+        s.put(&format!("{SIDE}.tab.{selected}"), dir.display());
+    }
+    if let Some(ui) = a.ui.upgrade() {
+        s.put(&format!("{SIDE}.treeWidth"), ui.get_tree_width().round());
+        let w = ui.window();
+        s.put("window.maximized", w.is_maximized());
+        if !w.is_maximized() && !w.is_minimized() {
+            let size = w.size().to_logical(w.scale_factor());
+            if size.width > 0.0 && size.height > 0.0 {
+                // Java writes doubles; keep the same shape so it reads them back unchanged
+                s.put("window.w", format!("{:.1}", size.width));
+                s.put("window.h", format!("{:.1}", size.height));
+            }
+        }
+    }
+}
+
+pub fn session(app: &Shared) -> Rc<Session> {
+    app.borrow().session.clone()
 }
 
 fn wire(ui: &AppWindow, app: &Shared) {
@@ -97,6 +170,12 @@ fn wire(ui: &AppWindow, app: &Shared) {
 /// Lists `dir` in the background and shows it when done. File system calls stay off the UI
 /// thread, even the check whether `dir` is a folder: on a dead network mount they would hang.
 pub fn go(app: &Shared, dir: PathBuf, nav: Nav) {
+    go_with(app, dir, nav, false);
+}
+
+/// Like [`go`]; with `nearest`, a folder that no longer exists is replaced by its nearest existing
+/// parent (or home), looked up in the background.
+fn go_with(app: &Shared, dir: PathBuf, nav: Nav, nearest: bool) {
     let generation = {
         let mut a = app.borrow_mut();
         if let Some(job) = a.load.take() {
@@ -109,7 +188,10 @@ pub fn go(app: &Shared, dir: PathBuf, nav: Nav) {
     let done_app = app.clone();
     let job = bg::run(
         move |cancel| {
-            let dir = std::path::absolute(&target).unwrap_or(target);
+            let mut dir = std::path::absolute(&target).unwrap_or(target);
+            if nearest {
+                dir = dir.ancestors().find(|p| p.is_dir()).map(Path::to_path_buf).unwrap_or_else(fileem_core::util::os::home);
+            }
             listing::list(&dir, cancel).map(|entries| (dir, entries))
         },
         move |result: std::io::Result<(PathBuf, Vec<FileEntry>)>| {

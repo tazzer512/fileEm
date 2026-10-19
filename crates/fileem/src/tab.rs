@@ -152,6 +152,12 @@ impl Tab {
         (self.sort, self.ascending)
     }
 
+    pub fn set_sort(&mut self, key: SortKey, ascending: bool) {
+        self.sort = key;
+        self.ascending = ascending;
+        self.rebuild();
+    }
+
     /// Sorts by `key`; the same key again flips the direction.
     pub fn sort_by(&mut self, key: SortKey) {
         if self.sort == key {
