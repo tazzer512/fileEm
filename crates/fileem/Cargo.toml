@@ -21,6 +21,8 @@ slint = { version = "1", default-features = false, features = [
     "accessibility",
 ] }
 
+clipboard-rs = { version = "0.3", default-features = false }
+
 [build-dependencies]
 slint-build = "1"
 

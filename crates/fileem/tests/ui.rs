@@ -45,6 +45,8 @@ fn open_window_with(prepare: impl FnOnce(&Session, &Path), start_there: bool) ->
     prepare(&session, &dir);
     let ui = AppWindow::new().unwrap();
     let app = app::install(&ui, session, start_there.then(|| dir.clone()));
+    // never the user's clipboard
+    app::set_clipboard(&app, Box::new(fileem::clipboard::Memory::default()));
     // a real size: the list views only create the rows that fit
     ui.window().set_size(slint::LogicalSize::new(1100.0, 700.0));
     ui.show().unwrap();
@@ -183,6 +185,9 @@ fn ui() {
     a_slow_operation_gets_a_row_that_pauses_and_cancels();
     operation_errors_are_listed_afterwards();
     closing_with_operations_running_asks_first();
+    copy_and_paste_into_a_subfolder();
+    cut_and_paste_moves_once();
+    pasting_into_the_same_folder_makes_a_copy();
 }
 
 fn lists_folders_first_with_status_and_no_hidden_files() {
@@ -583,4 +588,42 @@ fn closing_with_operations_running_asks_first() {
     wait_until(&f, "stopped", |_| h.is_done());
     settle(&f);
     assert!(app::close_requested(&f.app), "nothing running: closes right away");
+}
+
+// ---- clipboard ----
+
+fn copy_and_paste_into_a_subfolder() {
+    let f = open_window();
+    f.click("notes.txt");
+    f.chord(&[Key::Control], "c");
+    f.double_click("alpha");
+    wait_until(&f, "alpha", |f| f.address() == f.dir.join("alpha"));
+    f.chord(&[Key::Control], "v");
+    wait_until(&f, "the pasted copy", |f| f.names() == ["inside.txt", "notes.txt"]);
+    assert_eq!(fs::read_to_string(f.dir.join("alpha/notes.txt")).unwrap(), "1234567890");
+    assert!(f.dir.join("notes.txt").exists(), "a copy keeps the original");
+}
+
+fn cut_and_paste_moves_once() {
+    let f = open_window();
+    f.click("a.png");
+    f.chord(&[Key::Control], "x");
+    assert!(f.dir.join("a.png").exists(), "cutting alone moves nothing");
+    f.double_click("beta");
+    wait_until(&f, "beta", |f| f.address() == f.dir.join("beta"));
+    f.chord(&[Key::Control], "v");
+    wait_until(&f, "the moved file", |f| f.names() == ["a.png"]);
+    assert!(!f.dir.join("a.png").exists());
+    f.chord(&[Key::Control], "v");
+    settle(&f);
+    assert_eq!(f.names(), ["a.png"], "the clipboard is empty after a move");
+    assert!(!dialog_open(&f));
+}
+
+fn pasting_into_the_same_folder_makes_a_copy() {
+    let f = open_window();
+    f.click("notes.txt");
+    f.chord(&[Key::Control], "c");
+    f.chord(&[Key::Control], "v");
+    wait_until(&f, "the copy", |f| f.names().contains(&"notes - Copy.txt".to_string()));
 }

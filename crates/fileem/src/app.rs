@@ -19,6 +19,7 @@ use fileem_core::session::Session;
 use fileem_core::util::{formats, fs_util};
 
 use crate::bg::{self, Job};
+use crate::clipboard::{self, FileClipboard};
 use crate::ops_ui::{OpsUi, Outcome};
 use crate::shell;
 use crate::tab::{Nav, Tab};
@@ -54,6 +55,7 @@ pub struct App {
     select_after: Option<PathBuf>,
     ops: OpsUi,
     dialog: Dialog,
+    clipboard: Box<dyn FileClipboard>,
 }
 
 pub type Shared = Rc<RefCell<App>>;
@@ -102,6 +104,7 @@ pub fn install(ui: &AppWindow, session: Rc<Session>, start: Option<PathBuf>) -> 
         select_after: None,
         ops: OpsUi::new(),
         dialog: Dialog::None,
+        clipboard: Box::new(clipboard::System::default()),
     }));
     wire(ui, &app);
     sync_tree(&app);
@@ -535,6 +538,33 @@ fn operation_done(app: &Shared, outcome: Outcome) {
     }
 }
 
+// ---- clipboard ----
+
+/// Ctrl+C / Ctrl+X: the selection goes on the OS clipboard (cut: a paste moves it).
+fn clipboard_put(app: &Shared, cut: bool) {
+    let paths = app.borrow().tab.selected_paths();
+    if paths.is_empty() {
+        return;
+    }
+    app.borrow_mut().clipboard.put(&paths, cut);
+}
+
+/// Ctrl+V: copies (or, after a cut, moves) the clipboard's files into the shown folder.
+fn paste(app: &Shared) {
+    let Some(target) = app.borrow().tab.dir().map(Path::to_path_buf) else { return };
+    let Some(files) = app.borrow_mut().clipboard.get() else { return };
+    if files.cut {
+        // moved files are gone from where the clipboard says they are
+        app.borrow_mut().clipboard.clear();
+    }
+    run_operation(app, if files.cut { Kind::Move } else { Kind::Copy }, files.paths, Some(target));
+}
+
+/// Replaces the clipboard (tests use [`clipboard::Memory`], never the user's clipboard).
+pub fn set_clipboard(app: &Shared, clipboard: Box<dyn FileClipboard>) {
+    app.borrow_mut().clipboard = clipboard;
+}
+
 /// F2: asks for a new name; the old name is shown with the part before the extension selected.
 fn rename_selection(app: &Shared) {
     let sel = app.borrow().tab.selected_paths();
@@ -828,6 +858,12 @@ fn key(app: &Shared, text: &str, ctrl: bool, alt: bool, shift: bool) -> bool {
     } else if ctrl && c == ' ' {
         app.borrow_mut().tab.toggle_current();
         sync_selection(app);
+    } else if ctrl && !alt && !shift && c.eq_ignore_ascii_case(&'c') {
+        clipboard_put(app, false);
+    } else if ctrl && !alt && !shift && c.eq_ignore_ascii_case(&'x') {
+        clipboard_put(app, true);
+    } else if ctrl && !alt && !shift && c.eq_ignore_ascii_case(&'v') {
+        paste(app);
     } else if ctrl && !alt && c.eq_ignore_ascii_case(&'a') {
         app.borrow_mut().tab.select_all();
         sync_selection(app);

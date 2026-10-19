@@ -5,6 +5,7 @@ slint::include_modules!();
 
 pub mod app;
 pub mod bg;
+pub mod clipboard;
 pub mod ops_ui;
 pub mod progress;
 pub mod shell;
