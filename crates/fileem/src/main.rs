@@ -44,7 +44,12 @@ fn autosave(ui: &AppWindow, app: &app::Shared) -> slint::Timer {
     ui.window().on_close_requested(move || {
         app::collect_session(&a);
         app::session(&a).save();
-        slint::CloseRequestResponse::HideWindow
+        // with operations running it asks first, and quits once they have cleaned up
+        if app::close_requested(&a) {
+            slint::CloseRequestResponse::HideWindow
+        } else {
+            slint::CloseRequestResponse::KeepWindowShown
+        }
     });
     timer
 }

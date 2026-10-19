@@ -26,7 +26,10 @@ is still open (it uses the CPU to draw; fine for lists, to be checked on big 4K 
 - `cargo build --release -p fileem`: the executable is `target/release/fileem`.
 - `cargo test --workspace`: core tests, UI logic tests and the headless UI test, a few seconds.
 - `cargo clippy --workspace --all-targets`: must stay warning free.
-- Visual checks (Wayland has no desktop screenshots): `FILEEM_SNAPSHOT=out.ppm cargo run -p fileem
+- Visual checks without a display: `cargo test -p fileem --test snapshots -- --ignored` renders
+  the main window, a dialog and the progress window headless to `target/snapshots/*.ppm`
+  (convert with Pillow to look at them). Extend it when adding windows or dialogs.
+- Visual checks of the real app (Wayland has no desktop screenshots): `FILEEM_SNAPSHOT=out.ppm cargo run -p fileem
   FOLDER` renders the window after the folder loaded, writes it as PPM and quits. Don't type while
   it runs: the window takes keyboard focus as it opens and your keys reach it.
 
@@ -39,15 +42,20 @@ the real Trash or launches programs (`FILEEM_NO_LAUNCH` records opens in `shell:
 ```
 Cargo.toml                 workspace (release: LTO, stripped, panic=abort)
 crates/fileem-core/        no UI: everything that touches the file system
-  src/util/                natural_order, formats, fs_util, os            (Java util)
+  src/util/                natural_order, formats, fs_util, os, eta       (Java util)
   src/fs/                  entry (FileEntry), file_types, listing, places,
-                           trash                                          (Java fs)
-  src/ops/                 file_operation (+ tests.rs: port of FileOperationTest)
+                           trash, watcher                                 (Java fs)
+  src/ops/                 file_operation (+ tests.rs: port of FileOperationTest), names
+                           (rename / create, never replacing)
+  src/session.rs           session.properties shared with the Java app (Java Session)
 crates/fileem/             the app
   ui/app.slint             window layout and drawing only
   src/app.rs               controller: callbacks, keys, models (Java MainWindow)
   src/tab.rs, tree.rs      tab and tree state, toolkit-free and unit-tested
   src/bg.rs                background jobs with results on the UI thread (Java Bg)
+  src/progress.rs          progress rows: detail line, estimate, conflict question (toolkit-free)
+  src/ops_ui.rs            runs operations with a progress window row (Java OperationUi)
+  ui/progress.slint        the progress window
   src/shell.rs             open with the default program
   tests/ui.rs              end-to-end UI test on Slint's headless testing backend
 ```

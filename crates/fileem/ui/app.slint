@@ -1,7 +1,8 @@
 // fileEm main window: toolbar with address bar, folder tree, details list, status line.
 // All commands and keys go to Rust (see src/app.rs); this file only lays out and draws.
 
-import { LineEdit, ScrollView, ListView, Palette } from "std-widgets.slint";
+import { Button, LineEdit, ScrollView, ListView, Palette } from "std-widgets.slint";
+export { ProgressWindow, OpRow } from "progress.slint";
 
 export struct FileRow {
     name: string,
@@ -171,6 +172,22 @@ export component AppWindow inherits Window {
     callback tree-toggled(int);
     // the directory watcher saw changes in the shown folder (token: which watch)
     callback dir-changed(int);
+
+    // ---- dialog (drawn over the window; see src/app.rs `Dialog`) ----
+    in property <bool> dialog-open;
+    in property <string> dialog-title;
+    in property <string> dialog-message;
+    // a name field (rename, new folder), with the part before the extension selected
+    in property <bool> dialog-input;
+    in-out property <string> dialog-text;
+    in property <int> dialog-select-end;
+    in property <string> dialog-error;
+    // lines of a list (operation errors)
+    in property <[string]> dialog-lines;
+    in property <string> dialog-ok: "OK";
+    in property <bool> dialog-can-cancel: true;
+    callback dialog-accepted(string);
+    callback dialog-cancelled();
     // key text (slint::platform::Key for special keys), ctrl/cmd, alt, shift; true when handled
     callback key(string, bool, bool, bool) -> bool;
 
@@ -486,6 +503,93 @@ export component AppWindow inherits Window {
                     overflow: elide;
                     color: Palette.foreground.with-alpha(0.75);
                     font-size: 12px;
+                }
+            }
+        }
+    }
+
+    if root.dialog-open: Rectangle {
+        background: #00000066;
+        // the window behind is not usable while the dialog is open
+        TouchArea { }
+        FocusScope {
+            init => {
+                if (!root.dialog-input) {
+                    self.focus();
+                }
+            }
+            key-pressed(event) => {
+                if (event.text == Key.Escape && root.dialog-can-cancel) {
+                    root.dialog-cancelled();
+                    return EventResult.accept;
+                }
+                if (event.text == Key.Return && !root.dialog-input) {
+                    root.dialog-accepted(root.dialog-text);
+                    return EventResult.accept;
+                }
+                return EventResult.reject;
+            }
+            card := Rectangle {
+                width: min(480px, root.width - 40px);
+                height: min(card-layout.preferred-height, root.height - 40px);
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                background: Palette.background;
+                border-radius: 8px;
+                border-width: 1px;
+                border-color: Palette.border;
+                drop-shadow-blur: 24px;
+                drop-shadow-color: #00000055;
+                accessible-role: groupbox;
+                accessible-label: root.dialog-title;
+                card-layout := VerticalLayout {
+                    padding: 18px;
+                    spacing: 10px;
+                    Text {
+                        text: root.dialog-title;
+                        font-size: 15px;
+                        font-weight: 600;
+                    }
+                    if root.dialog-message != "": Text {
+                        text: root.dialog-message;
+                        wrap: word-wrap;
+                    }
+                    if root.dialog-input: name-field := LineEdit {
+                        text <=> root.dialog-text;
+                        accessible-label: "Name";
+                        init => {
+                            self.focus();
+                            self.set-selection-offsets(0, root.dialog-select-end);
+                        }
+                        accepted(text) => { root.dialog-accepted(text); }
+                    }
+                    if root.dialog-error != "": Text {
+                        text: root.dialog-error;
+                        wrap: word-wrap;
+                        color: #d93a35;
+                    }
+                    if root.dialog-lines.length > 0: ListView {
+                        height: min(root.dialog-lines.length * 20px, 200px);
+                        for line in root.dialog-lines: Text {
+                            height: 20px;
+                            text: line;
+                            overflow: elide;
+                            vertical-alignment: center;
+                        }
+                    }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        alignment: end;
+                        if root.dialog-can-cancel: Button {
+                            text: "Cancel";
+                            clicked => { root.dialog-cancelled(); }
+                        }
+                        Button {
+                            text: root.dialog-ok;
+                            primary: true;
+                            clicked => { root.dialog-accepted(root.dialog-text); }
+                        }
+                    }
                 }
             }
         }

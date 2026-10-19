@@ -70,7 +70,12 @@ are the Java sources, as a size hint.
   operations still refresh explicitly.) Original notes: `notify` crate; coalesced
   refresh throttled to 2× the last listing time (`FileTab.requestRefresh`); skip while a
   navigation loads; refresh after our own operations.
-- **Progress window** (`OperationUi` 161, `ProgressWindow` 382, `Eta` 98; `EtaTest` 6): a
+- [x] **Progress window** (done: `util::eta` with `EtaTest` ported; `progress.rs` rows
+  (title, detail line, estimate, question) unit-tested; `ops_ui.rs` runs each operation on its
+  own thread, a row after 350 ms in a separate `ProgressWindow` (`ui/progress.slint`),
+  Pause/Resume/Cancel per row, Escape with one row, closing cancels all; conflicts inline (the
+  worker waits on a channel and checks for cancel); errors listed afterwards; closing the main
+  window with operations running asks, cancels and waits for cleanup.) Original notes: a
   second Slint window per main window; one row per running op after 350 ms; Pause/Resume and
   Cancel per row; speed + time left from `Eta`; conflicts asked inline in the row (operation
   thread waits on a channel; never a modal dialog); closing cancels all; app close with running
@@ -79,7 +84,12 @@ are the Java sources, as a size hint.
   `x-special/gnome-copied-files` + `text/uri-list`; Windows: `CF_HDROP` + Preferred DropEffect;
   macOS: file URLs). Check `arboard` for custom formats first; otherwise per-platform code.
   Ctrl+C/X/V.
-- **Dialogs**: F2 rename (validate with `fs_util::validate_name`), F7/Ctrl+Shift+N new folder,
+- [x] **Dialogs** (done: an overlay dialog in the main window (`dialog-*` properties,
+  `app.rs` `Dialog`/`DialogSpec`) for confirm, name entry with validation and error lists;
+  `ops::names` (rename never replaces, case-only renames, create folder/file) with tests;
+  Del/F8 Trash and Shift+Del delete after confirming, F2, F7/Ctrl+Shift+N. Still to do: new
+  text file (menu only in Java), tabs/bookmarks following a renamed folder (stage 3/7).)
+  Original notes: F2 rename (validate with `fs_util::validate_name`), F7/Ctrl+Shift+N new folder,
   Shift+Del with confirmation, error dialog for operation errors.
 - UI tests from `MainWindowUiTest`: clipboard, rename, new folder, delete, progress window
   (pause/cancel, stacked ops, conflict buttons), autosave/session.
@@ -178,6 +188,10 @@ are the Java sources, as a size hint.
   `run_event_loop_until_quit`; clicks via `WindowEvent::Pointer*` at element positions.
 - Background threads reach the UI through `slint::Weak::upgrade_in_event_loop` + a Slint
   callback (the window handle is `Send`, the controller isn't): see `dir-changed`.
+- Element search by accessible label can hit a container with the same label (a dialog card
+  titled "Rename" vs. its "Rename" button): tests find buttons by role (`Fixture::button`).
+- Headless rendering: `TestingBackend` with `renderer_name: Some("software")` makes
+  `take_snapshot` work (see `tests/snapshots.rs`); the default testing backend can't render.
 - `FILEEM_SNAPSHOT` renders the window for visual checks; on Wayland the new window takes
   keyboard focus, so the user's typing reaches it (it once "went up" by itself in a snapshot).
 - The tree must show a hidden folder while it is the current folder or one of its parents.

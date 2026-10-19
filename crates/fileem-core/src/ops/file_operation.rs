@@ -718,8 +718,9 @@ impl Worker {
         if self.last_count_report.is_none_or(|t| now - t > Duration::from_millis(200)) {
             self.last_count_report = Some(now);
             let msg = format!(
-                "Counting… {} items, {}",
+                "Counting… {} {}, {}",
                 formats::count(self.counted_items),
+                if self.counted_items == 1 { "item" } else { "items" },
                 formats::size(Some(self.counted_bytes))
             );
             self.message(&msg);

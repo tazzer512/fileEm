@@ -9,7 +9,8 @@ use std::time::{Duration, Instant};
 
 use std::rc::Rc;
 
-use fileem::{app, shell, AppWindow, FileRow, TreeRow};
+use fileem::{app, shell, AppWindow, FileRow, ProgressWindow, TreeRow};
+use fileem_core::ops::{Decision, FileOperation, Kind, Resolution};
 use fileem_core::session::Session;
 use i_slint_backend_testing::ElementHandle;
 use slint::platform::{Key, PointerEventButton, WindowEvent};
@@ -102,6 +103,13 @@ impl Fixture {
             .unwrap_or_else(|| panic!("no element labelled {label:?}"))
     }
 
+    /// A button by its text (a dialog's title may name the same thing).
+    fn button(&self, label: &str) -> ElementHandle {
+        ElementHandle::find_by_accessible_label(&self.ui, label)
+            .find(|e| e.accessible_role() == Some(i_slint_backend_testing::AccessibleRole::Button))
+            .unwrap_or_else(|| panic!("no button labelled {label:?}"))
+    }
+
     fn click_at(&self, e: &ElementHandle) {
         let (pos, size) = (e.absolute_position(), e.size());
         let position = LogicalPosition::new(pos.x + size.width / 2.0, pos.y + size.height / 2.0);
@@ -167,6 +175,14 @@ fn ui() {
     changes_made_elsewhere_show_up_and_keep_the_selection();
     a_new_subfolder_shows_up_in_the_tree();
     when_the_shown_folder_is_deleted_its_parent_opens();
+    delete_and_f8_ask_first_and_cancel_keeps_the_files();
+    shift_delete_deletes_permanently_after_confirming();
+    f2_renames_and_refuses_taken_names();
+    f7_creates_a_folder_under_a_free_name();
+    a_conflict_is_asked_in_the_progress_row();
+    a_slow_operation_gets_a_row_that_pauses_and_cancels();
+    operation_errors_are_listed_afterwards();
+    closing_with_operations_running_asks_first();
 }
 
 fn lists_folders_first_with_status_and_no_hidden_files() {
@@ -395,4 +411,176 @@ fn when_the_shown_folder_is_deleted_its_parent_opens() {
     fs::remove_dir_all(f.dir.join("alpha")).unwrap();
     wait_until(&f, "the parent", |f| f.address() == f.dir);
     assert!(!f.names().contains(&"alpha".to_string()));
+}
+
+// ---- operations and dialogs ----
+
+fn dialog_open(f: &Fixture) -> bool {
+    f.ui.get_dialog_open()
+}
+
+fn progress(f: &Fixture) -> Option<ProgressWindow> {
+    app::ops(&f.app).window()
+}
+
+fn progress_button(w: &ProgressWindow, label: &str, nth: usize) -> ElementHandle {
+    ElementHandle::find_by_accessible_label(w, label)
+        .filter(|e| e.accessible_role() == Some(i_slint_backend_testing::AccessibleRole::Button))
+        .nth(nth)
+        .unwrap_or_else(|| panic!("no {label:?} button"))
+}
+
+fn no_temp_files(dir: &Path) -> bool {
+    fs::read_dir(dir).unwrap().all(|e| !e.unwrap().file_name().to_string_lossy().starts_with(".fileem-"))
+}
+
+fn delete_and_f8_ask_first_and_cancel_keeps_the_files() {
+    let f = open_window();
+    f.click("notes.txt");
+    for key in [Key::Delete, Key::F8] {
+        f.key(key);
+        assert!(dialog_open(&f));
+        assert_eq!(f.ui.get_dialog_title(), "Move to Trash");
+        assert_eq!(f.ui.get_dialog_message(), "Move \u{201c}notes.txt\u{201d} to the Trash?");
+        f.key(Key::Escape);
+        assert!(!dialog_open(&f), "Escape cancels");
+    }
+    settle(&f);
+    assert!(f.dir.join("notes.txt").exists(), "nothing was trashed");
+}
+
+fn shift_delete_deletes_permanently_after_confirming() {
+    let f = open_window();
+    f.click("big.bin");
+    f.ui.window().dispatch_event(WindowEvent::KeyPressed { text: Key::Control.into() });
+    f.click("notes.txt");
+    f.ui.window().dispatch_event(WindowEvent::KeyReleased { text: Key::Control.into() });
+    f.chord(&[Key::Shift], Key::Delete);
+    assert_eq!(f.ui.get_dialog_title(), "Delete permanently");
+    assert!(f.ui.get_dialog_message().starts_with("Permanently delete 2 items?"));
+    f.key(Key::Return);
+    wait_until(&f, "the files are gone", |f| !f.names().contains(&"notes.txt".to_string()));
+    assert!(!f.dir.join("big.bin").exists() && !f.dir.join("notes.txt").exists());
+    assert!(!dialog_open(&f), "no problems to report");
+}
+
+fn f2_renames_and_refuses_taken_names() {
+    let f = open_window();
+    f.click("a.png");
+    f.key(Key::F2);
+    assert_eq!(f.ui.get_dialog_title(), "Rename");
+    assert_eq!(f.ui.get_dialog_text(), "a.png");
+    assert_eq!(f.ui.get_dialog_select_end(), 1, "the name without its extension is selected");
+
+    f.ui.set_dialog_text("notes.txt".into());
+    f.button("Rename").invoke_accessible_default_action();
+    assert!(dialog_open(&f), "a taken name keeps the dialog open");
+    assert!(f.ui.get_dialog_error().contains("already exists"));
+    assert_eq!(fs::read_to_string(f.dir.join("notes.txt")).unwrap(), "1234567890", "nothing replaced");
+
+    f.ui.set_dialog_text("b.png".into());
+    f.button("Rename").invoke_accessible_default_action();
+    assert!(!dialog_open(&f));
+    wait_until(&f, "the renamed file", |f| f.names().contains(&"b.png".to_string()));
+    assert_eq!(f.selected(), ["b.png"], "the renamed file is selected");
+    assert!(!f.dir.join("a.png").exists());
+}
+
+fn f7_creates_a_folder_under_a_free_name() {
+    let f = open_window();
+    f.key(Key::F7);
+    assert_eq!(f.ui.get_dialog_title(), "New folder");
+    assert_eq!(f.ui.get_dialog_text(), "New folder");
+    f.button("Create").invoke_accessible_default_action();
+    wait_until(&f, "the new folder", |f| f.names().contains(&"New folder".to_string()));
+    assert_eq!(f.selected(), ["New folder"]);
+    assert!(f.dir.join("New folder").is_dir());
+
+    f.chord(&[Key::Control, Key::Shift], "n");
+    assert_eq!(f.ui.get_dialog_text(), "New folder (2)", "a free name is offered");
+    f.ui.set_dialog_text("bad/name".into());
+    f.button("Create").invoke_accessible_default_action();
+    assert!(f.ui.get_dialog_error().contains("/"), "{}", f.ui.get_dialog_error());
+    f.button("Cancel").invoke_accessible_default_action();
+    assert!(!dialog_open(&f));
+}
+
+fn a_conflict_is_asked_in_the_progress_row() {
+    let f = open_window();
+    fs::write(f.dir.join("alpha/notes.txt"), "old").unwrap();
+    app::run_operation(&f.app, Kind::Copy, vec![f.dir.join("notes.txt")], Some(f.dir.join("alpha")));
+    wait_until(&f, "the question", |f| app::ops(&f.app).rows().iter().any(|r| r.asking));
+    let row = &app::ops(&f.app).rows()[0];
+    assert!(row.question.contains("already has a file named"), "{}", row.question);
+    assert!(row.title.starts_with("Copying \u{201c}notes.txt\u{201d} to "));
+    assert!(!dialog_open(&f), "never a modal dialog");
+
+    let w = progress(&f).expect("the progress window is open");
+    progress_button(&w, "Replace", 0).invoke_accessible_default_action();
+    wait_until(&f, "replaced", |f| fs::read_to_string(f.dir.join("alpha/notes.txt")).unwrap() == "1234567890");
+    wait_until(&f, "the window closes with its last row", |f| progress(f).is_none());
+    assert!(no_temp_files(&f.dir.join("alpha")));
+}
+
+/// A copy that stays running: its conflict handler waits until the operation is cancelled.
+fn blocking_copy(f: &Fixture) -> fileem_core::ops::Handle {
+    fs::write(f.dir.join("alpha/notes.txt"), "old").unwrap();
+    let mut op = FileOperation::new(Kind::Copy, vec![f.dir.join("notes.txt")], Some(f.dir.join("alpha")));
+    let h = op.handle();
+    op.on_conflict(move |_, _| {
+        while !h.is_cancelled() {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        Decision::once(Resolution::Cancel)
+    });
+    app::ops(&f.app).start(op, |_| {})
+}
+
+fn a_slow_operation_gets_a_row_that_pauses_and_cancels() {
+    let f = open_window();
+    let h = blocking_copy(&f);
+    assert!(progress(&f).is_none(), "quick operations never show up");
+    wait_until(&f, "a row after 350 ms", |f| progress(f).is_some());
+    let w = progress(&f).unwrap();
+    assert_eq!(w.get_window_title(), app::ops(&f.app).rows()[0].title);
+
+    progress_button(&w, "Pause", 0).invoke_accessible_default_action();
+    assert!(h.is_paused());
+    wait_until(&f, "the row says paused", |f| app::ops(&f.app).rows()[0].detail.starts_with("Paused"));
+    progress_button(&w, "Resume", 0).invoke_accessible_default_action();
+    assert!(!h.is_paused());
+
+    progress_button(&w, "Cancel", 0).invoke_accessible_default_action();
+    assert!(h.is_cancelled());
+    wait_until(&f, "the row leaves", |f| progress(f).is_none());
+    assert_eq!(fs::read_to_string(f.dir.join("alpha/notes.txt")).unwrap(), "old", "the existing file is intact");
+    assert!(no_temp_files(&f.dir.join("alpha")));
+}
+
+fn operation_errors_are_listed_afterwards() {
+    let f = open_window();
+    app::run_operation(&f.app, Kind::Delete, vec![f.dir.join("missing.txt"), f.dir.join("a.png")], None);
+    wait_until(&f, "the problems are listed", dialog_open);
+    assert_eq!(f.ui.get_dialog_message(), "1 item could not be processed.");
+    let lines: Vec<String> = f.ui.get_dialog_lines().iter().map(|l| l.to_string()).collect();
+    assert_eq!(lines.len(), 1);
+    assert!(lines[0].ends_with("missing.txt: Not found"), "{lines:?}");
+    assert!(!f.ui.get_dialog_can_cancel());
+    f.key(Key::Return);
+    assert!(!dialog_open(&f));
+    wait_until(&f, "the other item was deleted", |f| !f.names().contains(&"a.png".to_string()));
+}
+
+fn closing_with_operations_running_asks_first() {
+    let f = open_window();
+    let h = blocking_copy(&f);
+    assert!(!app::close_requested(&f.app), "the window stays open");
+    assert_eq!(f.ui.get_dialog_title(), "Operations running");
+    f.key(Key::Escape);
+    assert!(!dialog_open(&f));
+    assert!(!h.is_cancelled(), "saying no keeps the operation running");
+    h.cancel();
+    wait_until(&f, "stopped", |_| h.is_done());
+    settle(&f);
+    assert!(app::close_requested(&f.app), "nothing running: closes right away");
 }

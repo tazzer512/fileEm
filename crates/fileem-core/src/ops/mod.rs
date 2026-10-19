@@ -1,6 +1,7 @@
 //! File operations (the Java `com.fileem.ops` package).
 
 pub mod file_operation;
+pub mod names;
 
 #[cfg(test)]
 mod tests;

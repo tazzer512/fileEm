@@ -1,0 +1,129 @@
+// One progress window per main window: every running operation stacked, each with its own
+// Pause/Resume and Cancel, and conflict questions asked inline in the operation's row (never a
+// modal dialog: other operations and the main window stay usable). See src/ops_ui.rs.
+
+import { Button, CheckBox, ProgressIndicator, Palette } from "std-widgets.slint";
+
+export struct OpRow {
+    id: int,
+    title: string,
+    message: string,
+    progress: float,
+    detail: string,
+    paused: bool,
+    cancelling: bool,
+    asking: bool,
+    question: string,
+    source: string,
+    existing: string,
+}
+
+export component ProgressWindow inherits Window {
+    in property <string> window-title;
+    in property <[OpRow]> rows;
+    title: window-title;
+    preferred-width: 520px;
+    min-width: 420px;
+    background: Palette.background;
+    default-font-size: 13px;
+
+    callback pause(int);
+    callback cancel(int);
+    // operation id, resolution (0 replace, 1 skip, 2 keep both), apply to all
+    callback answer(int, int, bool);
+
+    FocusScope {
+        key-pressed(event) => {
+            // Escape cancels only when that can't hit the wrong operation
+            if (event.text == Key.Escape && root.rows.length == 1) {
+                root.cancel(root.rows[0].id);
+                return EventResult.accept;
+            }
+            return EventResult.reject;
+        }
+        VerticalLayout {
+            padding: 16px;
+            spacing: 12px;
+            for row[i] in root.rows: VerticalLayout {
+                spacing: 10px;
+                if i > 0: Rectangle { height: 1px; background: Palette.border; }
+                Text {
+                    text: row.title;
+                    font-size: 15px;
+                    font-weight: 600;
+                    overflow: elide;
+                }
+                Text {
+                    text: row.message;
+                    overflow: elide;
+                    color: Palette.foreground.with-alpha(0.65);
+                }
+                ProgressIndicator {
+                    height: 6px;
+                    progress: row.progress;
+                }
+                Text {
+                    text: row.detail;
+                    overflow: elide;
+                }
+                if row.asking: Rectangle {
+                    border-radius: 6px;
+                    background: Palette.alternate-background;
+                    VerticalLayout {
+                        padding: 10px;
+                        spacing: 8px;
+                        Text {
+                            text: row.question;
+                            font-weight: 600;
+                            wrap: word-wrap;
+                        }
+                        GridLayout {
+                            spacing: 8px;
+                            Row {
+                                Text { text: "Source:"; color: Palette.foreground.with-alpha(0.65); }
+                                Text { text: row.source; wrap: word-wrap; }
+                            }
+                            Row {
+                                Text { text: "Existing:"; color: Palette.foreground.with-alpha(0.65); }
+                                Text { text: row.existing; wrap: word-wrap; }
+                            }
+                        }
+                        all := CheckBox { text: "Do this for all remaining conflicts"; }
+                        HorizontalLayout {
+                            spacing: 8px;
+                            alignment: start;
+                            Button {
+                                text: "Replace";
+                                primary: true;
+                                clicked => { root.answer(row.id, 0, all.checked); }
+                            }
+                            Button {
+                                text: "Skip";
+                                clicked => { root.answer(row.id, 1, all.checked); }
+                            }
+                            Button {
+                                text: "Keep both";
+                                clicked => { root.answer(row.id, 2, all.checked); }
+                            }
+                        }
+                    }
+                }
+                HorizontalLayout {
+                    spacing: 8px;
+                    alignment: end;
+                    Button {
+                        text: row.paused ? "Resume" : "Pause";
+                        // an operation waiting for an answer is already stopped
+                        enabled: !row.cancelling && !row.asking;
+                        clicked => { root.pause(row.id); }
+                    }
+                    Button {
+                        text: "Cancel";
+                        enabled: !row.cancelling;
+                        clicked => { root.cancel(row.id); }
+                    }
+                }
+            }
+        }
+    }
+}

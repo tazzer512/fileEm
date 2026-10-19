@@ -13,11 +13,13 @@ use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 use fileem_core::fs::listing::{self, SortKey};
 use fileem_core::fs::watcher::{self, WatchHandle};
 use fileem_core::fs::{places, Category, FileEntry};
-use fileem_core::ops::{FileOperation, Kind, State};
+use fileem_core::fs::trash;
+use fileem_core::ops::{names, Handle, Kind, State};
 use fileem_core::session::Session;
 use fileem_core::util::{formats, fs_util};
 
 use crate::bg::{self, Job};
+use crate::ops_ui::{OpsUi, Outcome};
 use crate::shell;
 use crate::tab::{Nav, Tab};
 use crate::tree::{NodeKind, Reveal, Tree};
@@ -48,6 +50,10 @@ pub struct App {
     refresh_pending: bool,
     /// How long the last listing took: follow-up refreshes wait twice that.
     last_list: Duration,
+    /// Selected once the next refresh is shown (a renamed or created item).
+    select_after: Option<PathBuf>,
+    ops: OpsUi,
+    dialog: Dialog,
 }
 
 pub type Shared = Rc<RefCell<App>>;
@@ -93,6 +99,9 @@ pub fn install(ui: &AppWindow, session: Rc<Session>, start: Option<PathBuf>) -> 
         refreshing: false,
         refresh_pending: false,
         last_list: Duration::ZERO,
+        select_after: None,
+        ops: OpsUi::new(),
+        dialog: Dialog::None,
     }));
     wire(ui, &app);
     sync_tree(&app);
@@ -180,6 +189,10 @@ fn wire(ui: &AppWindow, app: &Shared) {
     let a = app.clone();
     ui.on_tree_toggled(move |row| tree_toggled(&a, row as usize));
     let a = app.clone();
+    ui.on_dialog_accepted(move |text| dialog_accepted(&a, &text));
+    let a = app.clone();
+    ui.on_dialog_cancelled(move || dialog_cancelled(&a));
+    let a = app.clone();
     ui.on_dir_changed(move |token| dir_changed(&a, token));
     let a = app.clone();
     ui.on_key(move |text, ctrl, alt, shift| key(&a, &text, ctrl, alt, shift));
@@ -255,8 +268,16 @@ fn shown(app: &Shared, dir: PathBuf, entries: Vec<FileEntry>, nav: Nav) {
     let same = app.borrow().tab.dir() == Some(dir.as_path());
     let folders_before = folder_set(app.borrow().tab.rows());
     app.borrow_mut().tab.show(dir.clone(), entries, nav);
+    let select = app.borrow_mut().select_after.take();
+    let selected = select.is_some_and(|item| app.borrow_mut().tab.select_path(&item));
     sync_files(app);
     if same && nav == Nav::Refresh {
+        // a renamed or created item is shown; otherwise the scroll stays where the user left it
+        if let (true, Some(row)) = (selected, app.borrow().tab.current_row()) {
+            if let Some(ui) = app.borrow().ui.upgrade() {
+                ui.invoke_ensure_visible(row as i32);
+            }
+        }
         // a watcher refresh keeps scroll and focus where the user left them
         if folder_set(app.borrow().tab.rows()) != folders_before {
             reload_tree_node(app, &dir);
@@ -462,35 +483,251 @@ fn toggle_hidden(app: &Shared) {
 
 // ---- operations ----
 
-/// Moves the selection to the Trash on a worker thread; the folder is re-read when it ends.
-fn trash_selection(app: &Shared) {
+/// Asks, then moves the selection to the Trash or deletes it, with a row in the progress window.
+fn delete_selection(app: &Shared, permanent: bool) {
     let paths = app.borrow().tab.selected_paths();
     if paths.is_empty() {
         return;
     }
-    let n = paths.len();
-    set_status(app, format!("Moving {} {} to the Trash…", n, if n == 1 { "item" } else { "items" }));
+    let trash = !permanent && trash::is_supported();
+    let what = describe(&paths);
+    let (title, question, ok) = if trash {
+        ("Move to Trash", format!("Move {what} to the Trash?"), "Move to Trash")
+    } else {
+        ("Delete permanently", format!("Permanently delete {what}?\n\nThis cannot be undone."), "Delete")
+    };
+    open_dialog(app, Dialog::Delete { paths, trash }, DialogSpec::confirm(title, &question, ok));
+}
+
+/// "“a.txt”" for one item, "3 items" for more.
+fn describe(paths: &[PathBuf]) -> String {
+    match paths {
+        [one] => format!("\u{201c}{}\u{201d}", fs_util::display_name(one)),
+        many => format!("{} items", many.len()),
+    }
+}
+
+/// Starts an operation with a row in the progress window; when it ends, the folders it touched
+/// are refreshed (the watcher is slow on some systems) and its problems are listed.
+pub fn run_operation(app: &Shared, kind: Kind, sources: Vec<PathBuf>, target: Option<PathBuf>) -> Handle {
+    let ops = app.borrow().ops.clone();
     let done_app = app.clone();
-    bg::run(
-        move |_| {
-            let h = FileOperation::new(Kind::Trash, paths, None).run();
-            (h.state(), h.errors())
-        },
-        move |(state, errors): (State, Vec<String>)| {
-            refresh(&done_app);
-            let summary = match (state, errors.first()) {
-                (State::Failed(msg), _) => Some(msg),
-                (_, Some(first)) if errors.len() == 1 => Some(first.clone()),
-                (_, Some(first)) => Some(format!("{first} (and {} more problems)", errors.len() - 1)),
-                _ => None,
-            };
-            if let Some(s) = summary {
-                // after the refresh's own status
-                let a = done_app.clone();
-                slint::Timer::single_shot(Duration::from_millis(300), move || set_status(&a, s));
+    ops.run(kind, sources, target, move |outcome| operation_done(&done_app, outcome))
+}
+
+fn operation_done(app: &Shared, outcome: Outcome) {
+    let shown = app.borrow().tab.dir().map(Path::to_path_buf);
+    if shown.as_ref().is_some_and(|d| outcome.affected.contains(d)) {
+        refresh(app);
+    }
+    let problem = match &outcome.state {
+        State::Failed(msg) => Some((msg.clone(), Vec::new())),
+        _ if !outcome.errors.is_empty() => {
+            let n = outcome.errors.len();
+            let text = if n == 1 { "1 item could not be processed.".to_string() } else { format!("{n} items could not be processed.") };
+            Some((text, outcome.errors.clone()))
+        }
+        _ => None,
+    };
+    if let Some((message, lines)) = problem {
+        let spec = DialogSpec { lines, ..DialogSpec::info(&outcome.title, &message) };
+        open_dialog(app, Dialog::Info, spec);
+    }
+}
+
+/// F2: asks for a new name; the old name is shown with the part before the extension selected.
+fn rename_selection(app: &Shared) {
+    let sel = app.borrow().tab.selected_paths();
+    let [src] = sel.as_slice() else { return };
+    let name = fs_util::display_name(src);
+    let spec = DialogSpec::ask("Rename", "New name:", &name, "Rename");
+    open_dialog(app, Dialog::Rename { src: src.clone() }, spec);
+}
+
+/// F7, Ctrl+Shift+N: a new folder in the shown folder, under a free name.
+fn new_folder(app: &Shared) {
+    let Some(dir) = app.borrow().tab.dir().map(Path::to_path_buf) else { return };
+    let name = fs_util::display_name(&fs_util::unique_name(&dir.join("New folder"), false));
+    open_dialog(app, Dialog::NewFolder { dir }, DialogSpec::ask("New folder", "Folder name:", &name, "Create"));
+}
+
+/// Re-reads the shown folder and selects `item` in it.
+fn refresh_selecting(app: &Shared, item: PathBuf) {
+    app.borrow_mut().select_after = Some(item);
+    refresh(app);
+}
+
+// ---- dialogs ----
+
+/// What the open dialog is for.
+pub enum Dialog {
+    None,
+    Info,
+    Delete { paths: Vec<PathBuf>, trash: bool },
+    Rename { src: PathBuf },
+    NewFolder { dir: PathBuf },
+    Quit,
+}
+
+/// How a dialog looks.
+pub struct DialogSpec {
+    title: String,
+    message: String,
+    input: Option<String>,
+    lines: Vec<String>,
+    ok: String,
+    can_cancel: bool,
+}
+
+impl DialogSpec {
+    fn info(title: &str, message: &str) -> DialogSpec {
+        DialogSpec {
+            title: title.into(),
+            message: message.into(),
+            input: None,
+            lines: Vec::new(),
+            ok: "OK".into(),
+            can_cancel: false,
+        }
+    }
+
+    fn confirm(title: &str, question: &str, ok: &str) -> DialogSpec {
+        DialogSpec { ok: ok.into(), can_cancel: true, ..DialogSpec::info(title, question) }
+    }
+
+    fn ask(title: &str, prompt: &str, initial: &str, ok: &str) -> DialogSpec {
+        DialogSpec { input: Some(initial.into()), ..DialogSpec::confirm(title, prompt, ok) }
+    }
+}
+
+pub fn open_dialog(app: &Shared, dialog: Dialog, spec: DialogSpec) {
+    app.borrow_mut().dialog = dialog;
+    let Some(ui) = app.borrow().ui.upgrade() else { return };
+    ui.set_dialog_title(spec.title.into());
+    ui.set_dialog_message(spec.message.into());
+    ui.set_dialog_input(spec.input.is_some());
+    let text = spec.input.unwrap_or_default();
+    // select the name without its extension, as Explorer does
+    let end = match text.rfind('.') {
+        Some(dot) if dot > 0 => dot,
+        _ => text.len(),
+    };
+    ui.set_dialog_select_end(end as i32);
+    ui.set_dialog_text(text.into());
+    ui.set_dialog_error("".into());
+    ui.set_dialog_lines(ModelRc::from(Rc::new(VecModel::from(
+        spec.lines.into_iter().map(SharedString::from).collect::<Vec<_>>(),
+    ))));
+    ui.set_dialog_ok(spec.ok.into());
+    ui.set_dialog_can_cancel(spec.can_cancel);
+    ui.set_dialog_open(true);
+}
+
+fn close_dialog(app: &Shared) {
+    app.borrow_mut().dialog = Dialog::None;
+    if let Some(ui) = app.borrow().ui.upgrade() {
+        ui.set_dialog_open(false);
+        ui.invoke_focus_list();
+    }
+}
+
+fn dialog_error(app: &Shared, text: String) {
+    if let Some(ui) = app.borrow().ui.upgrade() {
+        ui.set_dialog_error(text.into());
+    }
+}
+
+fn dialog_cancelled(app: &Shared) {
+    close_dialog(app);
+}
+
+fn dialog_accepted(app: &Shared, text: &str) {
+    let dialog = std::mem::replace(&mut app.borrow_mut().dialog, Dialog::None);
+    match dialog {
+        Dialog::None | Dialog::Info => close_dialog(app),
+        Dialog::Delete { paths, trash } => {
+            close_dialog(app);
+            run_operation(app, if trash { Kind::Trash } else { Kind::Delete }, paths, None);
+        }
+        Dialog::Rename { src } => {
+            let dir = src.parent().map(Path::to_path_buf).unwrap_or_default();
+            if let Some(problem) = names::name_problem(&dir, text, Some(&src)) {
+                app.borrow_mut().dialog = Dialog::Rename { src };
+                return dialog_error(app, problem);
             }
-        },
+            match names::rename(&src, text) {
+                Ok(target) => {
+                    close_dialog(app);
+                    refresh_selecting(app, target);
+                }
+                Err(e) => {
+                    let name = fs_util::display_name(&src);
+                    app.borrow_mut().dialog = Dialog::Rename { src };
+                    dialog_error(app, format!("Cannot rename \u{201c}{name}\u{201d}: {}", reason(&e)));
+                }
+            }
+        }
+        Dialog::NewFolder { dir } => {
+            if let Some(problem) = names::name_problem(&dir, text, None) {
+                app.borrow_mut().dialog = Dialog::NewFolder { dir };
+                return dialog_error(app, problem);
+            }
+            match names::create_folder(&dir, text) {
+                Ok(created) => {
+                    close_dialog(app);
+                    refresh_selecting(app, created);
+                }
+                Err(e) => {
+                    app.borrow_mut().dialog = Dialog::NewFolder { dir };
+                    dialog_error(app, format!("Cannot create \u{201c}{}\u{201d}: {}", text.trim(), reason(&e)));
+                }
+            }
+        }
+        Dialog::Quit => {
+            close_dialog(app);
+            quit_after_cancelling(app);
+        }
+    }
+}
+
+fn reason(e: &std::io::Error) -> String {
+    match e.kind() {
+        std::io::ErrorKind::PermissionDenied => "Access denied".into(),
+        std::io::ErrorKind::AlreadyExists => "An item with that name already exists".into(),
+        std::io::ErrorKind::NotFound => "Not found".into(),
+        _ => e.to_string(),
+    }
+}
+
+// ---- closing ----
+
+/// The window's close button: with operations running it asks first. Returns whether the window
+/// may close now.
+pub fn close_requested(app: &Shared) -> bool {
+    let n = app.borrow().ops.running().len();
+    if n == 0 {
+        return true;
+    }
+    let what = if n == 1 { "An operation is".to_string() } else { format!("{n} operations are") };
+    let spec = DialogSpec::confirm(
+        "Operations running",
+        &format!("{what} still running. Cancel and close fileEm?\n\nUnfinished copies are removed; nothing is lost."),
+        "Cancel and close",
     );
+    open_dialog(app, Dialog::Quit, spec);
+    false
+}
+
+/// Cancels every operation, waits (off the UI thread) until their cleanup is done, then quits.
+fn quit_after_cancelling(app: &Shared) {
+    let handles = app.borrow().ops.running();
+    set_status(app, "Stopping operations…".into());
+    std::thread::spawn(move || {
+        OpsUi::cancel_all_and_wait(&handles, Duration::from_secs(10));
+        let _ = slint::invoke_from_event_loop(|| {
+            let _ = slint::quit_event_loop();
+        });
+    });
 }
 
 // ---- tree ----
@@ -602,8 +839,12 @@ fn key(app: &Shared, text: &str, ctrl: bool, alt: bool, shift: bool) -> bool {
         if let Some(ui) = app.borrow().ui.upgrade() {
             ui.invoke_focus_address();
         }
-    } else if !shift && (is(Key::Delete) || is(Key::F8)) {
-        trash_selection(app);
+    } else if is(Key::Delete) || is(Key::F8) {
+        delete_selection(app, shift);
+    } else if is(Key::F2) && !ctrl && !alt {
+        rename_selection(app);
+    } else if is(Key::F7) || (ctrl && shift && c.eq_ignore_ascii_case(&'n')) {
+        new_folder(app);
     } else if !ctrl && !alt && !c.is_control() && !is_special(c) {
         type_ahead(app, c);
     } else {
@@ -752,4 +993,9 @@ fn sync_tree(app: &Shared) {
         })
         .collect();
     a.tree_rows.set_vec(rows);
+}
+
+/// The operations of this window (tests start their own through it).
+pub fn ops(app: &Shared) -> OpsUi {
+    app.borrow().ops.clone()
 }

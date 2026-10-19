@@ -1,0 +1,80 @@
+//! Visual checks without a desktop (`cargo test -p fileem --test snapshots -- --ignored`): renders
+//! the main window with a dialog open and the progress window with a conflict question, in the
+//! headless backend's software renderer, to `target/snapshots/*.ppm`. Look at them after UI
+//! changes; they are not compared automatically.
+
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::rc::Rc;
+use std::time::{Duration, Instant};
+
+use fileem::{app, AppWindow};
+use fileem_core::ops::Kind;
+use fileem_core::session::Session;
+use slint::platform::{Key, WindowEvent};
+use slint::{ComponentHandle, Model};
+
+fn pump_until(what: &str, cond: impl Fn() -> bool) {
+    let start = Instant::now();
+    while !cond() {
+        assert!(start.elapsed() < Duration::from_secs(10), "timed out waiting until {what}");
+        slint::Timer::single_shot(Duration::from_millis(5), || {
+            let _ = slint::quit_event_loop();
+        });
+        slint::run_event_loop_until_quit().unwrap();
+    }
+}
+
+fn save(window: &slint::Window, name: &str) {
+    let buf = window.take_snapshot().expect("snapshot");
+    let mut ppm = format!("P6\n{} {}\n255\n", buf.width(), buf.height()).into_bytes();
+    for px in buf.as_slice() {
+        ppm.extend([px.r, px.g, px.b]);
+    }
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/snapshots");
+    fs::create_dir_all(&dir).unwrap();
+    let out: PathBuf = dir.join(format!("{name}.ppm"));
+    fs::write(&out, ppm).unwrap();
+    eprintln!("wrote {}", out.display());
+}
+
+#[test]
+#[ignore = "writes images for a visual check; run with --ignored"]
+fn snapshots() {
+    std::env::set_var("FILEEM_NO_LAUNCH", "1");
+    // the testing backend with a real rasterizer, so take_snapshot works headless
+    slint::platform::set_platform(Box::new(i_slint_backend_testing::TestingBackend::new(
+        i_slint_backend_testing::TestingBackendOptions {
+            mock_time: false,
+            threading: true,
+            renderer_name: Some("software".into()),
+        },
+    )))
+    .unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("files");
+    fs::create_dir_all(dir.join("alpha")).unwrap();
+    for (n, data) in [("notes.txt", "1234567890"), ("photo.png", "png"), ("archive.zip", "zip")] {
+        fs::write(dir.join(n), data).unwrap();
+    }
+    fs::write(dir.join("alpha/notes.txt"), "old").unwrap();
+
+    let ui = AppWindow::new().unwrap();
+    ui.window().set_size(slint::LogicalSize::new(900.0, 560.0));
+    let a = app::install(&ui, Rc::new(Session::load(&tmp.path().join("s.properties"))), Some(dir.clone()));
+    ui.show().unwrap();
+    pump_until("listed", || ui.get_files().row_count() == 4);
+    save(ui.window(), "main");
+
+    ui.window().dispatch_event(WindowEvent::KeyPressed { text: Key::F7.into() });
+    pump_until("dialog", || ui.get_dialog_open());
+    save(ui.window(), "dialog-new-folder");
+    ui.invoke_dialog_cancelled();
+
+    app::run_operation(&a, Kind::Copy, vec![dir.join("notes.txt")], Some(dir.join("alpha")));
+    pump_until("question", || app::ops(&a).rows().iter().any(|r| r.asking));
+    let w = app::ops(&a).window().unwrap();
+    w.window().set_size(slint::LogicalSize::new(520.0, 360.0));
+    pump_until("laid out", || true);
+    save(w.window(), "progress-conflict");
+}
