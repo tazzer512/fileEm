@@ -1,8 +1,9 @@
 # fileEm in Rust (branch `rust`)
 
 A port of the JavaFX app to Rust with a [Slint](https://slint.dev) UI, for a smaller memory
-footprint and a single native executable. The Java app stays in `src/` as the reference until the
-Rust one has caught up; both build from this tree.
+footprint and a single native executable. The Java app stays in `src/` as the complete version
+and the reference until the Rust one has caught up; both build from this tree. This file is the
+build/test/layout reference; the migration plan and status are in `MIGRATION.md`.
 
 ## Why, in numbers
 
@@ -70,29 +71,4 @@ are found by accessible label (debug builds compile the UI with element info for
 
 ## Port status
 
-Done:
-
-- [x] Core: natural sort, formats, name helpers, file types, `FileEntry` (lazy owner), listing.
-- [x] File operations: copy, move, delete, trash, compress, extract; pause/resume/cancel; every
-      integrity rule of `AGENTS.md`, with the Java tests ported (and mutation-checked).
-- [x] Window: toolbar (back/forward/up/refresh, address bar, hidden toggle), folder tree (Quick
-      access with localized XDG folders, volumes, lazy loading, reveal + boxed current folder +
-      bold path, folds what it opened, scrolls to the folder), splitter, details list (icons, sort
-      by column with folders first), status line.
-- [x] Keys: Enter, Backspace/Alt+Up, Alt+Left/Right, arrows/PgUp/PgDn/Home/End with Shift/Ctrl,
-      Ctrl+Space, Ctrl+A, Ctrl+R, Ctrl+H, Ctrl+L, Del/F8 (Trash), type-ahead.
-
-To do (roughly in order):
-
-- [ ] Session (window, tabs, columns, sort, hidden) and autosave; settings in the same folder.
-- [ ] Directory watcher (`notify` crate) with coalesced refreshes.
-- [ ] Progress window: rows per operation with pause/resume/cancel and inline conflict questions.
-- [ ] Copy/cut/paste with the OS clipboard; F2 rename, F7 new folder, Shift+Del with confirmation.
-- [ ] Right-click menus; properties dialog.
-- [ ] Tabs, dual pane (F9, F5/F6, Tab), breadcrumb address bar, filter (Ctrl+F).
-- [ ] Drag & drop (internal first; to/from other apps needs checking in Slint/winit).
-- [ ] Rubber-band selection; view modes (icons, list, tiles) with thumbnails.
-- [ ] Preview window (text, images, PSD, camera raw, JPEG 2000, Netpbm: port the readers).
-- [ ] Search window; bookmarks; eject; volumes from the mount table (Java `Volumes`).
-- [ ] Themes (Slint styles: fluent, cupertino, material, cosmic; light/dark).
-- [ ] Packaging: `.desktop` install script, icons, Windows/macOS bundles; CI on all three OSes.
+Done, next stages, decisions and lessons learned: see `MIGRATION.md`.

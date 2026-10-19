@@ -6,9 +6,18 @@ User-facing features and shortcuts are in `README.md`.
 
 ## Rust port (branch `rust`)
 
-A Rust + Slint port lives next to the Java app in `crates/` (Cargo workspace at the root). Its
-build, test and layout notes and the port status are in `RUST.md`; the test rules below apply to
-it as well (`cargo test --workspace`, `cargo clippy --workspace --all-targets` warning free).
+A Rust + Slint port is in progress next to the Java app (`crates/`, Cargo workspace at the
+root). The Java app in `src/` stays the complete version until the port is finished; don't
+remove or break it.
+
+- **`MIGRATION.md`** is the migration plan: what is done, the next stages (with the Java sources
+  and tests each one ports), decisions and lessons learned. Read it before continuing the port,
+  follow its "How to work a stage", and update it when a stage (or part of one) lands.
+- **`RUST.md`**: build, run, test and layout reference for the Rust crates.
+- The test rules below apply to the Rust code too: `cargo test --workspace` and
+  `cargo clippy --workspace --all-targets` (warning free) next to `mvn test`, Java tests ported
+  as Rust tests, UI behavior covered in `crates/fileem/tests/ui.rs`.
+- Cargo isn't on the default PATH here: `export PATH=$HOME/.cargo/bin:$PATH`.
 
 ## Tests are mandatory
 
