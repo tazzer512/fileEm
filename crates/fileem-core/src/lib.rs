@@ -3,6 +3,7 @@
 //! Ported from the Java version's `util`, `fs` and `ops` packages; the UI crate (`fileem`) only
 //! calls into this one, so its behavior can be tested without a window.
 
+pub mod bookmarks;
 pub mod fs;
 pub mod images;
 pub mod ops;

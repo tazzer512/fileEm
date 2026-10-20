@@ -25,6 +25,7 @@ use crate::ops_ui::{OpsUi, Outcome};
 use crate::properties;
 use crate::shell;
 use crate::tab::Nav;
+use crate::tree::NodeKind;
 use crate::{MenuRow, PropLine, PropertiesWindow};
 
 // ---- opening ----
@@ -172,7 +173,7 @@ fn transfer(app: &Shared, sources: Vec<PathBuf>, mv: bool) {
         a.sides[1 - a.active].tab().dir().map(|d| d.display().to_string()).unwrap_or_default()
     };
     let verb = if mv { "Move" } else { "Copy" };
-    let spec = DialogSpec { select_all: true, ..DialogSpec::ask(verb, &format!("{verb} {} to:", describe(&sources)), &initial, verb) };
+    let spec = DialogSpec::ask(verb, &format!("{verb} {} to:", describe(&sources)), &initial, verb).select_all();
     open_dialog(app, Dialog::Transfer { sources, mv }, spec);
 }
 
@@ -252,7 +253,15 @@ fn menu_state(app: &Shared) -> menu::State {
     let can_paste = app.borrow_mut().clipboard.get().is_some();
     let a = app.borrow();
     let view = a.side().tabs[a.side().active].view.mode;
-    menu::State { can_paste, trash: trash::is_supported(), sort: a.tab().sort(), view, show_hidden: a.show_hidden, dual: a.dual }
+    menu::State {
+        can_paste,
+        trash: trash::is_supported(),
+        sort: a.tab().sort(),
+        view,
+        show_hidden: a.show_hidden,
+        dual: a.dual,
+        bookmarks: a.bookmarks.items().iter().map(|b| b.path.clone()).collect(),
+    }
 }
 
 /// A right-click on list row `row` (-1: empty space) of the active side: selects as Explorer
@@ -287,9 +296,13 @@ pub fn tree_menu(app: &Shared, side: usize, row: usize) -> bool {
         let t = &a.sides[side].tree;
         t.rows().get(row).map(|&id| t.node(id).clone())
     };
-    let Some((path, kind)) = node.and_then(|n| n.path.map(|p| (p, n.kind))) else { return false };
-    let st = menu_state(app);
-    set_menu(app, menu::tree_menu(&path, kind, &st));
+    let Some(node) = node else { return false };
+    let m = match node.path {
+        Some(path) => menu::tree_menu(&path, node.kind, &menu_state(app)),
+        None if node.kind == NodeKind::BookmarkHeader => menu::bookmarks_header_menu(),
+        None => return false,
+    };
+    set_menu(app, m);
     app.borrow_mut().sides[side].tree_menu_row = row as i32;
     push_view(app, side);
     true
@@ -462,6 +475,13 @@ pub fn run_command(app: &Shared, command: Command) {
         }
         // only in a search window's menu, which runs them itself
         Command::OpenResults | Command::ShowInFolder(_) => {}
+        Command::AddBookmark(dir) => super::bookmarks::add(app, dir),
+        Command::RemoveBookmark(dir) => super::bookmarks::remove(app, &dir),
+        Command::RenameBookmark(dir) => super::bookmarks::ask_rename(app, dir),
+        Command::MoveBookmark(dir, delta) => super::bookmarks::move_by(app, &dir, delta),
+        Command::ManageBookmarks => {
+            super::bookmarks::manage(app);
+        }
     }
 }
 
@@ -563,6 +583,7 @@ pub fn properties_windows(app: &Shared) -> Vec<PropertiesWindow> {
 pub fn close_windows(app: &Shared) {
     super::preview::hide_window(app);
     super::search::close_all(app);
+    super::bookmarks::close(app);
     let ids: Vec<u64> = app.borrow().properties.iter().map(|(i, ..)| *i).collect();
     for id in ids {
         close_properties(app, id);
@@ -577,6 +598,7 @@ pub enum Dialog {
     Info,
     Delete { paths: Vec<PathBuf>, trash: bool },
     Rename { src: PathBuf },
+    RenameBookmark { path: PathBuf },
     New { dir: PathBuf, folder: bool },
     Transfer { sources: Vec<PathBuf>, mv: bool },
     /// After a drop: Move (OK) or Copy (the alternative).
@@ -618,6 +640,11 @@ impl DialogSpec {
 
     pub fn ask(title: &str, prompt: &str, initial: &str, ok: &str) -> DialogSpec {
         DialogSpec { input: Some(initial.into()), ..DialogSpec::confirm(title, prompt, ok) }
+    }
+
+    /// The input starts all selected (a path, a bookmark's name), not just the part before a dot.
+    pub fn select_all(self) -> DialogSpec {
+        DialogSpec { select_all: true, ..self }
     }
 }
 
@@ -667,6 +694,7 @@ macro_rules! dialog_host {
 
 dialog_host!(crate::AppWindow, invoke_focus_list);
 dialog_host!(crate::SearchWindow, invoke_focus_results);
+dialog_host!(crate::BookmarksWindow, invoke_focus_list);
 
 pub fn open_dialog(app: &Shared, dialog: Dialog, spec: DialogSpec) {
     app.borrow_mut().dialog = dialog;
@@ -702,6 +730,10 @@ pub fn dialog_accepted(app: &Shared, text: &str) {
                 dialog_error(app, problem);
             }
         },
+        Dialog::RenameBookmark { path } => {
+            close_dialog(app);
+            super::bookmarks::rename(app, &path, text);
+        }
         Dialog::New { dir, folder } => {
             if let Some(problem) = names::name_problem(&dir, text, None) {
                 app.borrow_mut().dialog = Dialog::New { dir, folder };
@@ -774,6 +806,7 @@ pub(super) fn rename_to(app: &Shared, src: &Path, text: &str) -> Result<PathBuf,
     // a folder renamed from the tree (or a search) may sit elsewhere; tabs inside it follow
     nav::reload_tree_node(app, &dir);
     nav::tabs_follow_rename(app, src, &target);
+    super::bookmarks::relocate(app, src, &target);
     Ok(target)
 }
 

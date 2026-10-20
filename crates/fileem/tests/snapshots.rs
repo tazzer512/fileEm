@@ -1,5 +1,5 @@
 //! Visual checks without a desktop (`cargo test -p fileem --test snapshots -- --ignored`): renders
-//! the main window (also with both sides, and in the grid views), the preview (floating and docked), a search window, a dialog and a right-click menu open, the progress window with a conflict
+//! the main window (also with both sides, and in the grid views), the preview (floating and docked), a search window, bookmarks (tree + Manage window), a dialog and a right-click menu open, the progress window with a conflict
 //! question and a Properties window, in the
 //! headless backend's software renderer, to `target/snapshots/*.ppm`. Look at them after UI
 //! changes; they are not compared automatically.
@@ -139,6 +139,25 @@ fn snapshots() {
     pump_until("laid out", || w.get_dialog_open());
     save(w.window(), "search-rename");
     w.invoke_dialog_cancelled();
+
+    // bookmarks in the tree (one of them on a missing folder) and the Manage window
+    app::run_command(&a, fileem::menu::Command::AddBookmark(dir.clone()));
+    app::run_command(&a, fileem::menu::Command::AddBookmark(dir.join("alpha")));
+    app::run_command(&a, fileem::menu::Command::AddBookmark(dir.join("gone")));
+    pump_until("laid out", || ui.get_bookmarked());
+    let position = slint::LogicalPosition::new(50.0, 300.0);
+    ui.window().dispatch_event(WindowEvent::PointerMoved { position });
+    ui.window().dispatch_event(WindowEvent::PointerScrolled { position, delta_x: 0.0, delta_y: 100_000.0 });
+    pump_until("laid out", || true);
+    save(ui.window(), "bookmarks-tree");
+    let b = app::bookmarks_window(&a).unwrap_or_else(|| {
+        app::run_command(&a, fileem::menu::Command::ManageBookmarks);
+        app::bookmarks_window(&a).unwrap()
+    });
+    b.window().set_size(slint::LogicalSize::new(640.0, 380.0));
+    pump_until("checked", || b.get_rows().iter().any(|r| r.missing));
+    save(b.window(), "bookmarks-manage");
+    b.invoke_close_clicked();
 
     // a right-click menu on a file, and its Properties window
     ui.invoke_row_pressed(0, 1, false, false);

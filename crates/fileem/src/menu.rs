@@ -2,11 +2,12 @@
 //! `MainWindow.fileMenuItems` / `treeMenuItems`). Toolkit-free: app.slint shows the sections, the
 //! controller runs the chosen [`Command`].
 //!
-//! Not yet ported (they need later stages): bookmarks, eject.
+//! Not yet ported (it needs a later stage): eject.
 
 use std::path::{Path, PathBuf};
 
 use fileem_core::fs::listing::SortKey;
+use fileem_core::util::fs_util;
 
 use crate::columns::{ColumnId, Columns};
 use crate::shell;
@@ -60,6 +61,14 @@ pub enum Command {
     OpenResults,
     /// In a search window: the result's folder in the main window's tab, the result selected.
     ShowInFolder(PathBuf),
+    AddBookmark(PathBuf),
+    RemoveBookmark(PathBuf),
+    /// Asks for a bookmark's new name.
+    RenameBookmark(PathBuf),
+    /// A bookmark a place up (-1) or down (1).
+    MoveBookmark(PathBuf, isize),
+    /// Ctrl+Shift+B: the bookmarks dialog.
+    ManageBookmarks,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -140,6 +149,15 @@ pub struct State {
     pub show_hidden: bool,
     /// The second side is shown: copy / move to it.
     pub dual: bool,
+    /// The bookmarked folders, in order.
+    pub bookmarks: Vec<PathBuf>,
+}
+
+impl State {
+    fn bookmark_index(&self, dir: &Path) -> Option<usize> {
+        let d = fs_util::normalize(dir);
+        self.bookmarks.iter().position(|b| *b == d)
+    }
 }
 
 pub fn is_zip(p: &Path) -> bool {
@@ -189,7 +207,10 @@ pub fn file_menu(selection: &[Item], dir: Option<&Path>, st: &State) -> Menu {
         remove.push(item("Move to Trash  (Del)", Command::Trash(sel.clone())));
     }
     remove.push(item("Delete permanently  (Shift+Del)", Command::Delete(sel.clone())));
-    let info = vec![item("Copy path", Command::CopyPath(sel.clone())), item("Properties  (Alt+Enter)", Command::Properties(sel))];
+    let mut info = vec![item("Copy path", Command::CopyPath(sel.clone())), item("Properties  (Alt+Enter)", Command::Properties(sel))];
+    if single_dir {
+        info.insert(0, bookmark_toggle(&p, st));
+    }
     Menu { sections: vec![open, clip, transfer, archive, remove, info], ..Menu::default() }
 }
 
@@ -209,6 +230,7 @@ fn background_menu(dir: Option<&Path>, st: &State) -> Menu {
             item(format!("Open in {}", shell::file_manager_name()), Command::OpenInFileManager(d.to_path_buf())),
         ]);
         menu.sections.push(vec![
+            bookmark_toggle(d, st),
             item("Copy path", Command::CopyPath(vec![d.to_path_buf()])),
             item("Properties  (Alt+Enter)", Command::Properties(vec![d.to_path_buf()])),
         ]);
@@ -284,8 +306,36 @@ pub fn tree_menu(dir: &Path, kind: NodeKind, st: &State) -> Menu {
         }
         change.push(item("Delete permanently", Command::Delete(vec![d.clone()])));
     }
+    let bookmark = match (kind, st.bookmark_index(dir)) {
+        (NodeKind::Bookmark, Some(i)) => vec![
+            item("Rename bookmark…", Command::RenameBookmark(d.clone())),
+            item("Remove bookmark", Command::RemoveBookmark(d.clone())),
+            item("Move up", Command::MoveBookmark(d.clone(), -1)).enabled(i > 0),
+            item("Move down", Command::MoveBookmark(d.clone(), 1)).enabled(i + 1 < st.bookmarks.len()),
+            manage_item(),
+        ],
+        _ => vec![bookmark_toggle(dir, st)],
+    };
     let info = vec![item("Copy path", Command::CopyPath(vec![d.clone()])), item("Properties", Command::Properties(vec![d.clone()]))];
-    Menu { sections: vec![open, clip, change, info], new: new_entries(dir), ..Menu::default() }
+    Menu { sections: vec![open, clip, change, bookmark, info], new: new_entries(dir), ..Menu::default() }
+}
+
+/// The Bookmarks section's title.
+pub fn bookmarks_header_menu() -> Menu {
+    Menu { sections: vec![vec![manage_item()]], ..Menu::default() }
+}
+
+fn manage_item() -> Entry {
+    item("Manage bookmarks…  (Ctrl+Shift+B)", Command::ManageBookmarks)
+}
+
+/// "Add to bookmarks", or "Remove from bookmarks" for a bookmarked folder.
+fn bookmark_toggle(dir: &Path, st: &State) -> Entry {
+    let d = dir.to_path_buf();
+    match st.bookmark_index(dir) {
+        Some(_) => item("Remove from bookmarks", Command::RemoveBookmark(d)),
+        None => item("Add to bookmarks  (Ctrl+D)", Command::AddBookmark(d)),
+    }
 }
 
 fn search_item(dir: &Path) -> Entry {
@@ -345,7 +395,15 @@ mod tests {
     use super::*;
 
     fn state(can_paste: bool) -> State {
-        State { can_paste, trash: true, sort: (SortKey::Name, true), view: ViewMode::Details, show_hidden: false, dual: false }
+        State {
+            can_paste,
+            trash: true,
+            sort: (SortKey::Name, true),
+            view: ViewMode::Details,
+            show_hidden: false,
+            dual: false,
+            bookmarks: Vec::new(),
+        }
     }
 
     fn has(m: &Menu, prefix: &str) -> bool {
@@ -490,5 +548,36 @@ mod tests {
         let m = tab_menu(1, 2, 3);
         assert!(m.find("Close other tabs").unwrap().enabled);
         assert_eq!(m.find("Duplicate tab").unwrap().command, Command::DuplicateTab(1, 2));
+    }
+
+    #[test]
+    fn folders_can_be_bookmarked_and_bookmarks_have_their_own_items() {
+        let dir = Path::new("/w");
+        let sub = dir.join("sub");
+        let add = |m: &Menu| m.find("Add to bookmarks").map(|e| e.command.clone());
+        assert_eq!(add(&file_menu(&[Item { path: &sub, is_dir: true }], Some(dir), &state(false))), Some(Command::AddBookmark(sub.clone())));
+        assert_eq!(add(&file_menu(&[Item { path: &dir.join("a.txt"), is_dir: false }], Some(dir), &state(false))), None, "not a file");
+        assert_eq!(add(&file_menu(&[], Some(dir), &state(false))), Some(Command::AddBookmark(dir.into())), "the folder shown");
+        assert_eq!(add(&tree_menu(&sub, NodeKind::Folder, &state(false))), Some(Command::AddBookmark(sub.clone())));
+
+        let st = State { bookmarks: vec![dir.into(), sub.clone()], ..state(false) };
+        let marked = file_menu(&[Item { path: &sub, is_dir: true }], Some(dir), &st);
+        assert_eq!(marked.find("Remove from bookmarks").unwrap().command, Command::RemoveBookmark(sub.clone()));
+        assert!(!has(&marked, "Add to bookmarks"));
+
+        let last = tree_menu(&sub, NodeKind::Bookmark, &st);
+        for expected in ["Rename bookmark…", "Remove bookmark", "Move up", "Move down", "Manage bookmarks…"] {
+            assert!(has(&last, expected), "{expected} in {:?}", last.titles());
+        }
+        for forbidden in ["Cut", "Rename…", "Move to Trash", "Delete permanently", "Duplicate"] {
+            assert!(!offers(&last, forbidden), "{forbidden} must not be offered for a bookmark");
+        }
+        assert!(last.find("Move up").unwrap().enabled);
+        assert!(!last.find("Move down").unwrap().enabled, "the last one can't go down");
+        assert_eq!(last.find("Move up").unwrap().command, Command::MoveBookmark(sub.clone(), -1));
+        let first = tree_menu(dir, NodeKind::Bookmark, &st);
+        assert!(!first.find("Move up").unwrap().enabled && first.find("Move down").unwrap().enabled);
+        assert!(first.sections.len() <= SECTIONS);
+        assert_eq!(bookmarks_header_menu().titles(), ["Manage bookmarks…  (Ctrl+Shift+B)"]);
     }
 }

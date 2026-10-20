@@ -12,8 +12,18 @@ use fileem_core::util::natural_order;
 pub enum NodeKind {
     Header,
     Quick,
+    /// The Bookmarks section's title, and its folders.
+    BookmarkHeader,
+    Bookmark,
     Volume,
     Folder,
+}
+
+impl NodeKind {
+    /// Section titles: not folders.
+    pub fn is_header(self) -> bool {
+        matches!(self, NodeKind::Header | NodeKind::BookmarkHeader)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -48,6 +58,8 @@ pub struct Tree {
     show_hidden: bool,
     /// Branches `reveal` expanded: folded again once the current folder leaves them.
     auto_expanded: HashSet<usize>,
+    /// The Bookmarks section, made on first use; among `roots` only while it has bookmarks.
+    bookmarks: Option<usize>,
 }
 
 impl Tree {
@@ -59,6 +71,7 @@ impl Tree {
             current: None,
             show_hidden: false,
             auto_expanded: HashSet::new(),
+            bookmarks: None,
         };
         for (title, kind, places) in
             [("Quick access", NodeKind::Quick, quick), ("This computer", NodeKind::Volume, volumes)]
@@ -120,13 +133,13 @@ impl Tree {
             return false;
         };
         let node = &self.nodes[id];
-        node.kind != NodeKind::Header && node.path.as_deref().is_some_and(|p| cur.starts_with(p))
+        !node.kind.is_header() && node.path.as_deref().is_some_and(|p| cur.starts_with(p))
     }
 
     /// Whether the row can be expanded (folders whose children aren't known count as expandable).
     pub fn expandable(&self, id: usize) -> bool {
         let n = &self.nodes[id];
-        n.kind != NodeKind::Header
+        !n.kind.is_header()
             && match &n.children {
                 None => true,
                 Some(c) => c.iter().any(|&k| self.show_hidden || !self.nodes[k].hidden),
@@ -142,7 +155,7 @@ impl Tree {
     /// known yet. A branch the user toggles is theirs: reveal won't fold it away.
     pub fn toggle(&mut self, row: usize) -> Option<(usize, PathBuf)> {
         let id = *self.rows.get(row)?;
-        if self.nodes[id].kind == NodeKind::Header {
+        if self.nodes[id].kind.is_header() {
             return None;
         }
         self.auto_expanded.remove(&id);
@@ -177,6 +190,58 @@ impl Tree {
         }
         children.sort_by(|&a, &b| natural_order::compare(&self.nodes[a].name, &self.nodes[b].name));
         self.nodes[id].children = Some(children);
+        self.flatten();
+    }
+
+    /// Mirrors the bookmark list (names and order) in the Bookmarks section, after Quick access.
+    /// Bookmarks kept by path keep their expansion and loaded folders; the section is hidden
+    /// while there are none.
+    pub fn set_bookmarks(&mut self, bookmarks: &[Place]) {
+        let header = match self.bookmarks {
+            Some(h) => h,
+            None => {
+                let h = self.add(Node {
+                    kind: NodeKind::BookmarkHeader,
+                    name: "Bookmarks".into(),
+                    path: None,
+                    hidden: false,
+                    depth: 0,
+                    children: Some(Vec::new()),
+                    expanded: true,
+                });
+                self.bookmarks = Some(h);
+                h
+            }
+        };
+        let old = self.nodes[header].children.clone().unwrap_or_default();
+        let mut children = Vec::with_capacity(bookmarks.len());
+        for b in bookmarks {
+            let existing = old.iter().copied().find(|&k| self.nodes[k].path.as_deref() == Some(b.path.as_path()));
+            let id = match existing {
+                Some(k) => {
+                    self.nodes[k].name = b.name.clone();
+                    k
+                }
+                None => self.add(Node {
+                    kind: NodeKind::Bookmark,
+                    name: b.name.clone(),
+                    path: Some(b.path.clone()),
+                    hidden: false,
+                    depth: 0,
+                    children: None,
+                    expanded: false,
+                }),
+            };
+            children.push(id);
+        }
+        self.nodes[header].children = Some(children);
+        self.roots.retain(|&r| r != header);
+        if !bookmarks.is_empty() {
+            let after_quick = self.roots.iter().position(|&r| self.nodes[r].children.as_ref().is_some_and(|c| {
+                c.first().is_some_and(|&k| self.nodes[k].kind == NodeKind::Quick)
+            }));
+            self.roots.insert(after_quick.map_or(0, |i| i + 1), header);
+        }
         self.flatten();
     }
 
@@ -395,5 +460,32 @@ mod tests {
         let (_tmp, mut t) = setup();
         assert_eq!(t.reveal(Path::new("/definitely/elsewhere")), Reveal::NotFound);
         assert_eq!(t.current(), None);
+    }
+
+    #[test]
+    fn bookmarks_show_after_quick_access_and_keep_their_state() {
+        let (tmp, mut t) = setup();
+        let a = tmp.path().join("vol/a");
+        t.set_bookmarks(&[]);
+        assert_eq!(names(&t), ["Quick access", "Home", "This computer", "Vol"], "no section without bookmarks");
+
+        t.set_bookmarks(&[Place { name: "A".into(), path: a.clone() }, Place { name: "B".into(), path: tmp.path().join("vol/b") }]);
+        assert_eq!(names(&t), ["Quick access", "Home", "Bookmarks", "A", "B", "This computer", "Vol"]);
+        let header = t.rows()[2];
+        assert!(t.node(header).kind.is_header() && !t.expandable(header));
+        assert_eq!(t.toggle(2), None, "the title doesn't fold");
+        let (id, path) = t.toggle(3).expect("a bookmark loads like a folder");
+        assert_eq!(path, a);
+        t.set_children(id, subfolders(&path, true).unwrap());
+        assert_eq!(names(&t)[3..5], ["A", "  deep"]);
+
+        // renamed and reordered: the same node, still open
+        t.set_bookmarks(&[Place { name: "B".into(), path: tmp.path().join("vol/b") }, Place { name: "Alpha".into(), path: a.clone() }]);
+        assert_eq!(names(&t)[2..6], ["Bookmarks", "B", "Alpha", "  deep"]);
+        assert_eq!(t.rows()[4], id);
+
+        t.set_bookmarks(&[]);
+        assert_eq!(names(&t), ["Quick access", "Home", "This computer", "Vol"], "hidden again when empty");
+        assert_eq!(t.reveal(&a), Reveal::Load(t.rows()[3], tmp.path().join("vol")), "reveal walks the volumes, not bookmarks");
     }
 }

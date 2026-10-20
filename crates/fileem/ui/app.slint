@@ -6,6 +6,7 @@ import { Button, LineEdit, ListView, Palette } from "std-widgets.slint";
 import { FunctionKey, Icons, MenuRow, ToolButton } from "icons.slint";
 export { MenuRow } from "icons.slint";
 export { SearchWindow, SearchRow } from "search.slint";
+export { BookmarksWindow, BookmarkRow } from "bookmarks.slint";
 import { SidePane, SideView, ColumnRow } from "side.slint";
 import { PreviewPane, PreviewView } from "preview.slint";
 import { DialogOverlay } from "dialog.slint";
@@ -39,6 +40,8 @@ export component AppWindow inherits Window {
     in property <bool> can-back;
     in property <bool> can-forward;
     in property <bool> can-up;
+    // the active tab's folder is bookmarked
+    in property <bool> bookmarked;
     // the left side's share of the width in dual mode
     in-out property <float> side-split: 0.5;
 
@@ -48,6 +51,7 @@ export component AppWindow inherits Window {
     callback refresh();
     callback toggle-hidden();
     callback toggle-dual();
+    callback toggle-bookmark();
     // ---- from the sides (first argument: 0 left, 1 right) ----
     callback activate(int);
     callback tree-resized(int, length);
@@ -228,6 +232,12 @@ export component AppWindow inherits Window {
                         icon: Icons.refresh;
                         tooltip: "Refresh (Ctrl+R)";
                         clicked => { root.refresh(); }
+                    }
+                    ToolButton {
+                        icon: root.bookmarked ? Icons.bookmark : Icons.bookmark-outline;
+                        tooltip: root.bookmarked ? "Remove bookmark (Ctrl+D)" : "Bookmark this folder (Ctrl+D)";
+                        checked: root.bookmarked;
+                        clicked => { root.toggle-bookmark(); }
                     }
                     Rectangle { horizontal-stretch: 1; }
                     ToolButton {

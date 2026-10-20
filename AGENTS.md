@@ -43,6 +43,10 @@ remove or break it.
   (results, toolkit-free) and `src/app/search.rs` (the window). Tests drive search windows
   through `app::open_search` / `search_windows` / `search_results` and the window's own
   properties and callbacks; dialogs over a search window use the same `ui/dialog.slint`.
+- Bookmarks are `fileem_core::bookmarks` (saved on every change) and `src/app/bookmarks.rs`
+  (toggle, menus, `Tree::set_bookmarks` in both trees, the Manage window in
+  `ui/bookmarks.slint`). Change them only through `app/bookmarks.rs` so trees, toolbar and the
+  Manage window stay in sync; tests read them with `app::bookmarks` / `bookmarks_window`.
 - The release profile keeps `panic = "unwind"` on purpose (+2 MB): `images::decode` catches a
   decoder's panic on a damaged file, so it costs one thumbnail instead of the app. Don't switch
   back to `abort`.

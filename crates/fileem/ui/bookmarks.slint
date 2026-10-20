@@ -1,0 +1,191 @@
+// Manage bookmarks (Ctrl+Shift+B): every bookmark with its folder, and Open / Rename… / Remove /
+// Move up / Move down. Changes apply at once; Rust keeps the list (src/app/bookmarks.rs).
+
+import { Button, ListView, Palette } from "std-widgets.slint";
+import { FileIcon } from "icons.slint";
+import { DialogOverlay } from "dialog.slint";
+
+export struct BookmarkRow {
+    name: string,
+    path: string,
+    // the folder isn't there (checked in the background)
+    missing: bool,
+    selected: bool,
+}
+
+export component BookmarksWindow inherits Window {
+    title: "Manage bookmarks";
+    preferred-width: 640px;
+    preferred-height: 380px;
+    min-width: 420px;
+    min-height: 240px;
+    background: Palette.background;
+    default-font-size: 13px;
+
+    in property <[BookmarkRow]> rows;
+    // the selected row, -1 for none
+    in property <int> selected: -1;
+    // scroll `ensure-row` into view whenever `ensure-seq` changes
+    in property <int> ensure-row: -1;
+    in property <int> ensure-seq;
+
+    callback row-pressed(int);
+    callback open();
+    callback rename();
+    callback remove();
+    // -1 up, 1 down
+    callback move-by(int);
+    // the selection moved by the keys (-1, 1)
+    callback select-by(int);
+    callback close-clicked();
+
+    // ---- dialog over this window (renaming a bookmark) ----
+    in property <bool> dialog-open;
+    in property <string> dialog-title;
+    in property <string> dialog-message;
+    in property <bool> dialog-input;
+    in-out property <string> dialog-text;
+    in property <int> dialog-select-end;
+    in property <string> dialog-error;
+    in property <[string]> dialog-lines;
+    in property <string> dialog-ok: "OK";
+    in property <bool> dialog-can-cancel: true;
+    in property <string> dialog-alt;
+    callback dialog-accepted(string);
+    callback dialog-cancelled();
+    callback dialog-alternative();
+
+    property <length> row-height: 44px;
+    property <bool> has-selection: root.selected >= 0 && root.selected < root.rows.length;
+
+    public function focus-list() {
+        list-keys.focus();
+    }
+
+    changed ensure-seq => {
+        if (root.ensure-row >= 0) {
+            let top = root.ensure-row * root.row-height;
+            if (top < -bookmark-list.content-y) {
+                bookmark-list.content-y = -top;
+            } else if (top + root.row-height > -bookmark-list.content-y + bookmark-list.visible-height) {
+                bookmark-list.content-y = -(top + root.row-height - bookmark-list.visible-height);
+            }
+        }
+    }
+
+    HorizontalLayout {
+        padding: 10px;
+        spacing: 10px;
+        Rectangle {
+            border-width: 1px;
+            border-color: Palette.border;
+            border-radius: 4px;
+            list-keys := FocusScope {
+                init => { self.focus(); }
+                key-pressed(event) => {
+                    if (event.text == Key.UpArrow && event.modifiers.alt) {
+                        root.move-by(-1);
+                    } else if (event.text == Key.DownArrow && event.modifiers.alt) {
+                        root.move-by(1);
+                    } else if (event.text == Key.UpArrow) {
+                        root.select-by(-1);
+                    } else if (event.text == Key.DownArrow) {
+                        root.select-by(1);
+                    } else if (event.text == Key.Return) {
+                        root.open();
+                    } else if (event.text == Key.Delete) {
+                        root.remove();
+                    } else if (event.text == Key.F2) {
+                        root.rename();
+                    } else if (event.text == Key.Escape) {
+                        root.close-clicked();
+                    } else {
+                        return EventResult.reject;
+                    }
+                    return EventResult.accept;
+                }
+            }
+            if root.rows.length == 0: Text {
+                text: "No bookmarks yet.\nOpen a folder and press Ctrl+D to add one.";
+                color: Palette.foreground.with-alpha(0.55);
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+            bookmark-list := ListView {
+                accessible-role: list;
+                accessible-label: "Bookmarks";
+                for row[i] in root.rows: Rectangle {
+                    height: root.row-height;
+                    accessible-role: list-item;
+                    accessible-label: row.name;
+                    accessible-item-selected: row.selected;
+                    background: row.selected ? Palette.selection-background.with-alpha(list-keys.has-focus ? 1.0 : 0.45)
+                        : touch.has-hover ? Palette.foreground.with-alpha(0.05) : transparent;
+                    touch := TouchArea {
+                        pointer-event(event) => {
+                            if (event.kind == PointerEventKind.down) {
+                                list-keys.focus();
+                                root.row-pressed(i);
+                            }
+                        }
+                        double-clicked => { root.open(); }
+                    }
+                    HorizontalLayout {
+                        property <color> fg: row.selected && list-keys.has-focus ? Palette.selection-foreground : Palette.foreground;
+                        padding-left: 10px;
+                        padding-right: 10px;
+                        spacing: 10px;
+                        VerticalLayout {
+                            alignment: center;
+                            FileIcon { kind: row.missing ? 23 : 22; dimmed: row.missing; }
+                        }
+                        VerticalLayout {
+                            alignment: center;
+                            spacing: 2px;
+                            Text { text: row.name; overflow: elide; color: fg; }
+                            Text {
+                                text: row.missing ? row.path + "  (not found)" : row.path;
+                                overflow: elide;
+                                font-size: 11px;
+                                color: fg.with-alpha(0.65);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        VerticalLayout {
+            width: 130px;
+            spacing: 6px;
+            Button { text: "Open"; enabled: root.has-selection; clicked => { root.open(); } }
+            Button { text: "Rename…"; enabled: root.has-selection; clicked => { root.rename(); } }
+            Button { text: "Remove"; enabled: root.has-selection; clicked => { root.remove(); } }
+            Button { text: "Move up"; enabled: root.has-selection && root.selected > 0; clicked => { root.move-by(-1); } }
+            Button {
+                text: "Move down";
+                enabled: root.has-selection && root.selected < root.rows.length - 1;
+                clicked => { root.move-by(1); }
+            }
+            Rectangle { vertical-stretch: 1; }
+            Button { text: "Close"; clicked => { root.close-clicked(); } }
+        }
+    }
+
+    if root.dialog-open: DialogOverlay {
+        width: root.width;
+        height: root.height;
+        title: root.dialog-title;
+        message: root.dialog-message;
+        input: root.dialog-input;
+        text <=> root.dialog-text;
+        select-end: root.dialog-select-end;
+        error: root.dialog-error;
+        lines: root.dialog-lines;
+        ok: root.dialog-ok;
+        can-cancel: root.dialog-can-cancel;
+        alt: root.dialog-alt;
+        accepted(text) => { root.dialog-accepted(text); }
+        cancelled => { root.dialog-cancelled(); }
+        alternative => { root.dialog-alternative(); }
+    }
+}

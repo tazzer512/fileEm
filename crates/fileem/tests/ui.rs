@@ -325,95 +325,109 @@ fn ui() {
     })))
     .unwrap();
 
-    // each scenario gets a fresh window and folder
-    lists_folders_first_with_status_and_no_hidden_files();
-    double_click_opens_folders_and_backspace_goes_up_selecting_the_child();
-    alt_arrows_go_back_and_forward();
-    keyboard_selection_and_enter_opens_files_without_launching();
-    ctrl_h_and_the_toolbar_toggle_hidden_files();
-    clicking_a_column_header_sorts_and_again_reverses();
-    typing_jumps_to_a_name();
-    click_ctrl_click_and_shift_click_select();
-    the_address_bar_navigates_and_reports_bad_paths();
-    the_tree_reveals_the_current_folder_and_navigates_on_click();
-    the_session_restores_hidden_files_sort_and_the_last_folder();
-    a_vanished_last_folder_opens_its_nearest_parent();
-    saving_the_session_keeps_what_only_the_java_app_uses();
-    changes_made_elsewhere_show_up_and_keep_the_selection();
-    a_new_subfolder_shows_up_in_the_tree();
-    when_the_shown_folder_is_deleted_its_parent_opens();
-    delete_and_f8_ask_first_and_cancel_keeps_the_files();
-    shift_delete_deletes_permanently_after_confirming();
-    f2_renames_and_refuses_taken_names();
-    f7_creates_a_folder_under_a_free_name();
-    a_conflict_is_asked_in_the_progress_row();
-    a_slow_operation_gets_a_row_that_pauses_and_cancels();
-    operation_errors_are_listed_afterwards();
-    closing_with_operations_running_asks_first();
-    a_termination_signal_saves_and_stops_operations();
-    copy_and_paste_into_a_subfolder();
-    cut_and_paste_moves_once();
-    pasting_into_the_same_folder_makes_a_copy();
-    right_click_selects_the_row_and_opens_its_menu();
-    right_click_on_a_selected_row_keeps_the_selection();
-    right_click_on_empty_space_offers_the_folder_menu();
-    right_click_in_the_tree_opens_a_menu_without_navigating();
-    alt_enter_and_the_menu_show_properties();
-    new_text_file_from_the_menu();
-    duplicate_compress_and_extract_from_the_menu();
-    paste_into_a_folder_from_its_menu();
-    ctrl_t_opens_and_ctrl_w_closes_tabs_but_never_the_last();
-    the_tab_bar_switches_adds_and_closes_tabs();
-    tabs_and_columns_are_dragged_into_another_order();
-    f9_opens_the_second_side_and_tab_switches();
-    f5_copies_and_f6_moves_to_the_other_side();
-    copy_and_move_to_the_other_side_need_the_second_side();
-    the_f_key_bar_buttons_do_what_their_keys_do();
-    the_filter_box_narrows_the_list_and_escape_clears_it();
-    ctrl_l_edits_the_address_and_a_file_path_selects_the_file();
-    crumbs_show_names_as_they_are_and_navigate();
-    the_header_menu_shows_more_columns_and_they_sort();
-    the_session_restores_tabs_and_the_second_side();
-    renaming_a_folder_moves_the_tabs_inside_it();
-    both_lists_stay_usable_in_a_narrow_dual_window();
-    dragging_a_file_onto_a_folder_row_asks_then_moves();
-    choosing_copy_after_a_drop_onto_the_tree_keeps_the_original();
-    cancelling_the_drop_question_leaves_everything_alone();
-    drops_into_the_dragged_items_or_where_they_are_are_refused();
-    dragging_to_the_other_side_drops_into_its_folder();
-    a_press_on_a_selection_drags_all_of_it_and_a_click_selects_one();
-    a_tree_folder_can_be_dragged_into_the_list();
-    dragging_from_the_size_column_draws_a_box_that_selects_rows();
-    a_box_from_empty_space_selects_upwards_and_shift_adds();
-    ctrl_box_toggles_and_a_box_below_the_list_scrolls_it();
-    showing_the_second_side_keeps_the_left_scroll_position();
-    // view modes (stage 5)
-    the_view_button_and_menus_switch_views_and_keep_the_selection();
-    the_sort_button_sorts_and_shows_the_direction();
-    ctrl_shift_digits_and_ctrl_wheel_switch_the_view();
-    size_controls_resize_within_limits_and_each_view_keeps_its_size();
-    list_columns_fit_the_widest_name_in_the_real_font();
-    sizes_and_views_survive_the_session_and_new_tabs_inherit_the_view();
-    clicking_in_the_grid_selects_like_explorer_and_double_click_opens();
-    arrow_keys_follow_the_grid_layout();
-    a_box_in_the_grid_selects_the_items_it_touches();
-    a_file_dragged_onto_a_folder_in_the_grid_asks_then_moves();
-    grid_menus_target_the_item_or_the_folder_and_type_ahead_works();
-    images_show_as_thumbnails_in_the_big_icon_views();
-    photoshop_raw_jpeg2000_and_netpbm_files_show_thumbnails();
-    // the preview (stage 6)
-    the_preview_is_switched_on_and_off_with_f3_the_toolbar_or_by_closing_it();
-    an_image_preview_zooms_fits_and_pans();
-    text_files_show_their_text_and_zoom_changes_the_font();
-    quick_selection_changes_only_load_the_last_one();
-    photoshop_raw_jpeg2000_and_netpbm_files_are_previewed();
-    the_preview_docks_into_the_main_window_and_floats_again();
-    the_preview_is_remembered_in_the_session();
-    // search (stage 7)
-    search_from_the_right_click_menu_finds_files_in_all_subfolders();
-    the_last_search_patterns_are_offered_in_every_window_and_remembered();
-    search_results_can_be_renamed_and_deleted_in_place();
-    ctrl_shift_f_searches_the_current_folder_and_hidden_files_follow_the_toggle();
+    // each scenario gets a fresh window and folder; FILEEM_UI_ONLY=<part of a name> runs only
+    // the matching ones while working on them
+    let only = std::env::var("FILEEM_UI_ONLY").ok();
+    macro_rules! scenarios {
+        ($($name:ident;)*) => {
+            $(if only.as_deref().is_none_or(|o| stringify!($name).contains(o)) { $name(); })*
+        };
+    }
+    scenarios! {
+        lists_folders_first_with_status_and_no_hidden_files;
+        double_click_opens_folders_and_backspace_goes_up_selecting_the_child;
+        alt_arrows_go_back_and_forward;
+        keyboard_selection_and_enter_opens_files_without_launching;
+        ctrl_h_and_the_toolbar_toggle_hidden_files;
+        clicking_a_column_header_sorts_and_again_reverses;
+        typing_jumps_to_a_name;
+        click_ctrl_click_and_shift_click_select;
+        the_address_bar_navigates_and_reports_bad_paths;
+        the_tree_reveals_the_current_folder_and_navigates_on_click;
+        the_session_restores_hidden_files_sort_and_the_last_folder;
+        a_vanished_last_folder_opens_its_nearest_parent;
+        saving_the_session_keeps_what_only_the_java_app_uses;
+        changes_made_elsewhere_show_up_and_keep_the_selection;
+        a_new_subfolder_shows_up_in_the_tree;
+        when_the_shown_folder_is_deleted_its_parent_opens;
+        delete_and_f8_ask_first_and_cancel_keeps_the_files;
+        shift_delete_deletes_permanently_after_confirming;
+        f2_renames_and_refuses_taken_names;
+        f7_creates_a_folder_under_a_free_name;
+        a_conflict_is_asked_in_the_progress_row;
+        a_slow_operation_gets_a_row_that_pauses_and_cancels;
+        operation_errors_are_listed_afterwards;
+        closing_with_operations_running_asks_first;
+        a_termination_signal_saves_and_stops_operations;
+        copy_and_paste_into_a_subfolder;
+        cut_and_paste_moves_once;
+        pasting_into_the_same_folder_makes_a_copy;
+        right_click_selects_the_row_and_opens_its_menu;
+        right_click_on_a_selected_row_keeps_the_selection;
+        right_click_on_empty_space_offers_the_folder_menu;
+        right_click_in_the_tree_opens_a_menu_without_navigating;
+        alt_enter_and_the_menu_show_properties;
+        new_text_file_from_the_menu;
+        duplicate_compress_and_extract_from_the_menu;
+        paste_into_a_folder_from_its_menu;
+        ctrl_t_opens_and_ctrl_w_closes_tabs_but_never_the_last;
+        the_tab_bar_switches_adds_and_closes_tabs;
+        tabs_and_columns_are_dragged_into_another_order;
+        f9_opens_the_second_side_and_tab_switches;
+        f5_copies_and_f6_moves_to_the_other_side;
+        copy_and_move_to_the_other_side_need_the_second_side;
+        the_f_key_bar_buttons_do_what_their_keys_do;
+        the_filter_box_narrows_the_list_and_escape_clears_it;
+        ctrl_l_edits_the_address_and_a_file_path_selects_the_file;
+        crumbs_show_names_as_they_are_and_navigate;
+        the_header_menu_shows_more_columns_and_they_sort;
+        the_session_restores_tabs_and_the_second_side;
+        renaming_a_folder_moves_the_tabs_and_bookmarks_inside_it;
+        both_lists_stay_usable_in_a_narrow_dual_window;
+        dragging_a_file_onto_a_folder_row_asks_then_moves;
+        choosing_copy_after_a_drop_onto_the_tree_keeps_the_original;
+        cancelling_the_drop_question_leaves_everything_alone;
+        drops_into_the_dragged_items_or_where_they_are_are_refused;
+        dragging_to_the_other_side_drops_into_its_folder;
+        a_press_on_a_selection_drags_all_of_it_and_a_click_selects_one;
+        a_tree_folder_can_be_dragged_into_the_list;
+        dragging_from_the_size_column_draws_a_box_that_selects_rows;
+        a_box_from_empty_space_selects_upwards_and_shift_adds;
+        ctrl_box_toggles_and_a_box_below_the_list_scrolls_it;
+        showing_the_second_side_keeps_the_left_scroll_position;
+        // view modes (stage 5)
+        the_view_button_and_menus_switch_views_and_keep_the_selection;
+        the_sort_button_sorts_and_shows_the_direction;
+        ctrl_shift_digits_and_ctrl_wheel_switch_the_view;
+        size_controls_resize_within_limits_and_each_view_keeps_its_size;
+        list_columns_fit_the_widest_name_in_the_real_font;
+        sizes_and_views_survive_the_session_and_new_tabs_inherit_the_view;
+        clicking_in_the_grid_selects_like_explorer_and_double_click_opens;
+        arrow_keys_follow_the_grid_layout;
+        a_box_in_the_grid_selects_the_items_it_touches;
+        a_file_dragged_onto_a_folder_in_the_grid_asks_then_moves;
+        grid_menus_target_the_item_or_the_folder_and_type_ahead_works;
+        images_show_as_thumbnails_in_the_big_icon_views;
+        photoshop_raw_jpeg2000_and_netpbm_files_show_thumbnails;
+        // the preview (stage 6)
+        the_preview_is_switched_on_and_off_with_f3_the_toolbar_or_by_closing_it;
+        an_image_preview_zooms_fits_and_pans;
+        text_files_show_their_text_and_zoom_changes_the_font;
+        quick_selection_changes_only_load_the_last_one;
+        photoshop_raw_jpeg2000_and_netpbm_files_are_previewed;
+        the_preview_docks_into_the_main_window_and_floats_again;
+        the_preview_is_remembered_in_the_session;
+        // search (stage 7)
+        search_from_the_right_click_menu_finds_files_in_all_subfolders;
+        the_last_search_patterns_are_offered_in_every_window_and_remembered;
+        search_results_can_be_renamed_and_deleted_in_place;
+        ctrl_shift_f_searches_the_current_folder_and_hidden_files_follow_the_toggle;
+        // bookmarks (stage 7)
+        ctrl_d_and_the_toolbar_toggle_a_bookmark_shown_in_both_trees;
+        folder_menus_add_bookmarks_and_a_bookmark_opens_from_the_tree;
+        the_bookmark_menu_renames_moves_and_removes_and_bookmarks_survive_a_restart;
+        the_manage_window_lists_reorders_renames_removes_and_opens_bookmarks;
+    }
 }
 
 fn lists_folders_first_with_status_and_no_hidden_files() {
@@ -1312,8 +1326,8 @@ fn the_session_restores_tabs_and_the_second_side() {
     assert!(app::is_dual(&again));
 }
 
-fn renaming_a_folder_moves_the_tabs_inside_it() {
-    let f = open_window();
+fn renaming_a_folder_moves_the_tabs_and_bookmarks_inside_it() {
+    let f = open_window_with(with_bookmarks(&[("alpha", "alpha"), ("Custom", "alpha/inner"), ("beta", "beta")]), true);
     fs::create_dir(f.dir.join("alpha/inner")).unwrap();
     f.ui.invoke_address_entered(0, f.dir.join("alpha/inner").display().to_string().into());
     wait_until(&f, "inner", |f| f.address() == f.dir.join("alpha/inner"));
@@ -1322,6 +1336,17 @@ fn renaming_a_folder_moves_the_tabs_inside_it() {
     f.button("Rename").invoke_accessible_default_action();
     wait_until(&f, "the tab followed", |f| f.address() == f.dir.join("renamed/inner"));
     assert!(f.dir.join("renamed/inner").is_dir());
+    assert_eq!(
+        app::bookmarks(&f.app),
+        [
+            ("renamed".to_string(), f.dir.join("renamed")),
+            ("Custom".to_string(), f.dir.join("renamed/inner")),
+            ("beta".to_string(), f.dir.join("beta"))
+        ],
+        "bookmarks follow; a default name takes the new name, a custom one stays"
+    );
+    assert_eq!(tree_bookmarks(&f.ui.get_left()), ["renamed", "Custom", "beta"]);
+    wait_until(&f, "the toolbar knows renamed/inner is bookmarked", |f| f.ui.get_bookmarked());
 }
 
 fn both_lists_stay_usable_in_a_narrow_dual_window() {
@@ -2573,4 +2598,251 @@ fn ctrl_shift_f_searches_the_current_folder_and_hidden_files_follow_the_toggle()
     assert!(!app::search_windows(&f.app).is_empty(), "and leaves the window open");
     sw_key(&w, Key::Escape);
     assert!(app::search_windows(&f.app).is_empty());
+}
+
+// ---- bookmarks ----
+
+/// The names in a tree's Bookmarks section.
+fn tree_bookmarks(view: &SideView) -> Vec<String> {
+    let rows: Vec<TreeRow> = view.tree.iter().collect();
+    let Some(start) = rows.iter().position(|r| r.header && r.name == "Bookmarks") else { return Vec::new() };
+    rows[start + 1..].iter().take_while(|r| !r.header).filter(|r| r.depth == 0).map(|r| r.name.to_string()).collect()
+}
+
+/// Bookmarks written into the session before the window opens (`(name, folder)`).
+fn with_bookmarks(marks: &'static [(&'static str, &'static str)]) -> impl FnOnce(&Session, &Path) {
+    move |s, dir| {
+        s.put("bookmarks.count", marks.len());
+        for (i, (name, path)) in marks.iter().enumerate() {
+            s.put(&format!("bookmarks.{i}.name"), name);
+            s.put(&format!("bookmarks.{i}.path"), dir.join(path).display());
+        }
+    }
+}
+
+/// An entry of the menu shown last (with its enabled state, which the popup doesn't expose).
+fn menu_row(f: &Fixture, title: &str) -> fileem::MenuRow {
+    let ui = &f.ui;
+    [ui.get_menu_s0(), ui.get_menu_s1(), ui.get_menu_s2(), ui.get_menu_s3(), ui.get_menu_s4(), ui.get_menu_s5()]
+        .iter()
+        .flat_map(|m| m.iter().collect::<Vec<_>>())
+        .find(|r| r.title == title)
+        .unwrap_or_else(|| panic!("no menu entry {title:?}"))
+}
+
+fn bookmark_names(f: &Fixture) -> Vec<String> {
+    app::bookmarks(&f.app).into_iter().map(|(n, _)| n).collect()
+}
+
+fn ctrl_d_and_the_toolbar_toggle_a_bookmark_shown_in_both_trees() {
+    let f = open_window();
+    assert!(tree_bookmarks(&f.ui.get_left()).is_empty(), "no section without bookmarks");
+    assert!(!f.tree().iter().any(|r| r.name == "Bookmarks"));
+    assert!(!f.ui.get_bookmarked());
+    f.button("Bookmark this folder (Ctrl+D)");
+
+    f.chord(&[Key::Control], "d");
+    wait_until(&f, "bookmarked", |f| app::bookmarks(&f.app) == [("files".to_string(), f.dir.clone())]);
+    assert_eq!(tree_bookmarks(&f.ui.get_left()), ["files"]);
+    assert_eq!(tree_bookmarks(&f.ui.get_right()), ["files"], "both trees");
+    let rows = f.tree();
+    let header = rows.iter().position(|r| r.name == "Bookmarks").unwrap();
+    assert_eq!(rows[header - 1].depth, 0, "after Quick access' places");
+    assert!(rows[header..].iter().any(|r| r.header && r.name == "This computer"), "before the drives");
+    assert!(f.ui.get_bookmarked());
+
+    // the toolbar button follows the folder shown
+    f.double_click("alpha");
+    wait_until(&f, "alpha", |f| f.address() == f.dir.join("alpha"));
+    assert!(!f.ui.get_bookmarked());
+    f.key(Key::Backspace);
+    wait_until(&f, "back up", |f| f.address() == f.dir && f.ui.get_bookmarked());
+
+    f.button("Remove bookmark (Ctrl+D)").invoke_accessible_default_action();
+    wait_until(&f, "removed", |f| app::bookmarks(&f.app).is_empty());
+    assert!(tree_bookmarks(&f.ui.get_left()).is_empty() && tree_bookmarks(&f.ui.get_right()).is_empty());
+    assert!(!f.tree().iter().any(|r| r.name == "Bookmarks"), "the section is gone");
+    f.button("Bookmark this folder (Ctrl+D)").invoke_accessible_default_action();
+    wait_until(&f, "bookmarked from the toolbar", |f| app::bookmarks(&f.app).len() == 1);
+    f.chord(&[Key::Control], "d");
+    wait_until(&f, "Ctrl+D again removes it", |f| app::bookmarks(&f.app).is_empty());
+}
+
+fn folder_menus_add_bookmarks_and_a_bookmark_opens_from_the_tree() {
+    let f = open_window();
+    f.right_click(&f.list_row("alpha"));
+    assert!(f.menu_item("Remove from bookmarks").is_none());
+    f.pick("Add to bookmarks  (Ctrl+D)");
+    wait_until(&f, "alpha bookmarked", |f| app::bookmarks(&f.app) == [("alpha".to_string(), f.dir.join("alpha"))]);
+    f.right_click(&f.list_row("alpha"));
+    assert!(f.menu_item("Remove from bookmarks").is_some(), "the menu now offers removal");
+    assert!(f.menu_item("Add to bookmarks  (Ctrl+D)").is_none());
+    f.key(Key::Escape);
+    pump();
+    // a file has no bookmark item; empty space bookmarks the folder shown
+    f.right_click(&f.list_row("notes.txt"));
+    assert!(f.menu_item("Add to bookmarks  (Ctrl+D)").is_none() && f.menu_item("Remove from bookmarks").is_none());
+    f.key(Key::Escape);
+    pump();
+    let last = f.list_row("a.png");
+    f.right_click_at(LogicalPosition::new(last.absolute_position().x + 50.0, last.absolute_position().y + 150.0));
+    f.pick("Add to bookmarks  (Ctrl+D)");
+    wait_until(&f, "the folder bookmarked", |f| bookmark_names(f) == ["alpha", "files"]);
+
+    // the tree's bookmark (renamed, so its name is its own) opens in the active tab
+    app::run_command(&f.app, fileem::menu::Command::RenameBookmark(f.dir.join("alpha")));
+    wait_until(&f, "the rename question", dialog_open);
+    assert_eq!(f.ui.get_dialog_title(), "Rename bookmark");
+    assert_eq!(f.ui.get_dialog_text(), "alpha");
+    f.ui.set_dialog_text("  Inbox  ".into());
+    f.button("Rename").invoke_accessible_default_action();
+    wait_until(&f, "renamed", |f| tree_bookmarks(&f.ui.get_left()) == ["Inbox", "files"]);
+    assert!(f.dir.join("alpha").is_dir(), "the folder keeps its name");
+    settle(&f);
+    f.scroll_tree_to_top();
+    f.click_at(&f.tree_row("Inbox"));
+    wait_until(&f, "the bookmark opened", |f| f.address() == f.dir.join("alpha") && f.names() == ["inside.txt"]);
+
+    // a folder in the tree offers it too
+    settle(&f);
+    f.scroll_tree_to_top();
+    f.right_click(&f.tree_row("Inbox"));
+    assert!(f.menu_item("Remove bookmark").is_some());
+    f.key(Key::Escape);
+    pump();
+    f.right_click(&f.tree_row("Home"));
+    assert!(f.menu_item("Add to bookmarks  (Ctrl+D)").is_some(), "{:?}", app::bookmarks(&f.app));
+    f.key(Key::Escape);
+    pump();
+}
+
+fn the_bookmark_menu_renames_moves_and_removes_and_bookmarks_survive_a_restart() {
+    let f = open_window_with(with_bookmarks(&[("Mark A", "alpha"), ("Mark B", "beta")]), true);
+    assert_eq!(tree_bookmarks(&f.ui.get_left()), ["Mark A", "Mark B"], "from the session");
+    settle(&f);
+    f.scroll_tree_to_top();
+
+    f.right_click(&f.tree_row("Mark B"));
+    for forbidden in ["Cut", "Rename…", "Move to Trash", "Delete permanently", "Duplicate", "Add to bookmarks  (Ctrl+D)"] {
+        assert!(f.menu_item(forbidden).is_none(), "{forbidden} must not be offered for a bookmark");
+    }
+    assert!(!menu_row(&f, "Move down").enabled, "the last one can't go down");
+    assert!(menu_row(&f, "Move up").enabled);
+    f.pick("Move up");
+    wait_until(&f, "B first", |f| tree_bookmarks(&f.ui.get_left()) == ["Mark B", "Mark A"]);
+    assert_eq!(tree_bookmarks(&f.ui.get_right()), ["Mark B", "Mark A"]);
+
+    f.right_click(&f.tree_row("Mark A"));
+    f.pick("Rename bookmark…");
+    wait_until(&f, "the rename question", dialog_open);
+    f.ui.set_dialog_text("Alpha's".into());
+    f.button("Rename").invoke_accessible_default_action();
+    wait_until(&f, "renamed", |f| bookmark_names(f) == ["Mark B", "Alpha's"]);
+    f.right_click(&f.tree_row("Mark B"));
+    f.pick("Remove bookmark");
+    wait_until(&f, "removed", |f| tree_bookmarks(&f.ui.get_left()) == ["Alpha's"]);
+    assert!(f.dir.join("beta").is_dir(), "removing a bookmark never touches the folder");
+
+    // the section title offers the Manage window
+    f.right_click(&f.tree_row("Bookmarks"));
+    f.pick("Manage bookmarks…  (Ctrl+Shift+B)");
+    wait_until(&f, "the Manage window", |f| app::bookmarks_window(&f.app).is_some());
+    app::bookmarks_window(&f.app).unwrap().invoke_close_clicked();
+    assert!(app::bookmarks_window(&f.app).is_none());
+
+    // saved at once: a fresh read of the file, as after a crash
+    let session = Rc::new(Session::load(&f._tmp.path().join("session.properties")));
+    let ui = AppWindow::new().unwrap();
+    let again = app::install(&ui, session, None);
+    app::set_clipboard(&again, Box::new(fileem::clipboard::Memory::default()));
+    assert_eq!(app::bookmarks(&again), [("Alpha's".to_string(), f.dir.join("alpha"))]);
+    assert_eq!(tree_bookmarks(&ui.get_left()), ["Alpha's"]);
+}
+
+fn bw_key(w: &fileem::BookmarksWindow, modifiers: &[Key], text: impl Into<SharedString>) {
+    let win = w.window();
+    for m in modifiers {
+        win.dispatch_event(WindowEvent::KeyPressed { text: (*m).into() });
+    }
+    let text = text.into();
+    win.dispatch_event(WindowEvent::KeyPressed { text: text.clone() });
+    win.dispatch_event(WindowEvent::KeyReleased { text });
+    for m in modifiers.iter().rev() {
+        win.dispatch_event(WindowEvent::KeyReleased { text: (*m).into() });
+    }
+    pump();
+}
+
+fn bw_button(w: &fileem::BookmarksWindow, label: &str) -> ElementHandle {
+    ElementHandle::find_by_accessible_label(w, label)
+        .find(|e| e.accessible_role() == Some(i_slint_backend_testing::AccessibleRole::Button))
+        .unwrap_or_else(|| panic!("no button {label:?}"))
+}
+
+fn bw_rows(w: &fileem::BookmarksWindow) -> Vec<fileem::BookmarkRow> {
+    w.get_rows().iter().collect()
+}
+
+fn the_manage_window_lists_reorders_renames_removes_and_opens_bookmarks() {
+    let f = open_window_with(with_bookmarks(&[("m1", "alpha"), ("gone", "not-there"), ("m3", "beta")]), true);
+    f.chord(&[Key::Control, Key::Shift], "b");
+    wait_until(&f, "the Manage window", |f| app::bookmarks_window(&f.app).is_some());
+    let w = app::bookmarks_window(&f.app).unwrap();
+    assert!(w.window().is_visible());
+    let names = |w: &fileem::BookmarksWindow| bw_rows(w).iter().map(|r| r.name.to_string()).collect::<Vec<_>>();
+    assert_eq!(names(&w), ["m1", "gone", "m3"]);
+    assert_eq!(bw_rows(&w)[0].path, f.dir.join("alpha").display().to_string());
+    assert_eq!(w.get_selected(), 0, "the first one is selected");
+    wait_until(&f, "the missing folder is marked", |_| bw_rows(&w)[1].missing);
+    assert!(!bw_rows(&w)[0].missing && !bw_rows(&w)[2].missing);
+    assert_eq!(bw_button(&w, "Move up").accessible_enabled(), Some(false), "nothing above the first");
+
+    bw_button(&w, "Move down").invoke_accessible_default_action();
+    wait_until(&f, "m1 moved down", |f| bookmark_names(f) == ["gone", "m1", "m3"]);
+    assert_eq!(names(&w), ["gone", "m1", "m3"]);
+    assert_eq!(w.get_selected(), 1, "the moved one stays selected");
+    bw_key(&w, &[Key::Alt], Key::DownArrow);
+    wait_until(&f, "Alt+Down moves it again", |f| bookmark_names(f) == ["gone", "m3", "m1"]);
+    assert_eq!(tree_bookmarks(&f.ui.get_left()), ["gone", "m3", "m1"], "the trees follow");
+
+    bw_key(&w, &[], Key::UpArrow);
+    bw_key(&w, &[], Key::UpArrow);
+    assert_eq!(w.get_selected(), 0);
+    bw_button(&w, "Remove").invoke_accessible_default_action();
+    wait_until(&f, "removed", |f| bookmark_names(f) == ["m3", "m1"]);
+    assert_eq!(names(&w), ["m3", "m1"], "the list is live");
+    assert_eq!(w.get_selected(), 0, "the next one is selected");
+
+    // F2 asks over the window itself
+    bw_key(&w, &[], Key::F2);
+    assert!(w.get_dialog_open() && !f.ui.get_dialog_open());
+    assert_eq!(w.get_dialog_text(), "m3");
+    w.set_dialog_text("Third".into());
+    bw_button(&w, "Rename").invoke_accessible_default_action();
+    wait_until(&f, "renamed", |f| bookmark_names(f) == ["Third", "m1"]);
+    assert!(!w.get_dialog_open());
+
+    // changes from the main window show up too
+    f.chord(&[Key::Control], "d");
+    wait_until(&f, "a bookmark added elsewhere", |_| names(&w) == ["Third", "m1", "files"]);
+    bw_key(&w, &[], Key::Delete);
+    wait_until(&f, "Del removes", |f| bookmark_names(f) == ["m1", "files"]);
+
+    // Enter opens the selected one in the active tab and closes the window
+    bw_key(&w, &[], Key::Return);
+    wait_until(&f, "m1 opened", |f| f.address() == f.dir.join("alpha"));
+    assert!(app::bookmarks_window(&f.app).is_none(), "closed");
+    assert!(!w.window().is_visible());
+
+    // empty: a hint instead of rows, and nothing to act on
+    app::run_command(&f.app, fileem::menu::Command::ManageBookmarks);
+    let w = app::bookmarks_window(&f.app).unwrap();
+    bw_key(&w, &[], Key::Delete);
+    bw_key(&w, &[], Key::Delete);
+    wait_until(&f, "all removed", |f| app::bookmarks(&f.app).is_empty());
+    assert_eq!(w.get_rows().row_count(), 0);
+    assert!(ElementHandle::find_by_accessible_label(&w, "No bookmarks yet.\nOpen a folder and press Ctrl+D to add one.").next().is_some(), "the hint");
+    assert_eq!(bw_button(&w, "Open").accessible_enabled(), Some(false));
+    bw_key(&w, &[], Key::Escape);
+    assert!(app::bookmarks_window(&f.app).is_none(), "Escape closes it");
 }

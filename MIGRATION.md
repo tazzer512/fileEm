@@ -11,8 +11,8 @@ OpenGL, ~32 MB with the software renderer).
 **Status (2026-10-21)**: stages 0–6 (5a view modes and thumbnails, 5b image readers, 6 the
 preview) done on branch `rust`, and the leftovers of stages 1–5 fixed except drag & drop with
 other applications (decided: not possible with Slint 1.18). The Java app in `src/` is still the
-complete, daily-use version; nothing was removed from it. Stage 7: search done; next
-bookmarks, then volumes and eject.
+complete, daily-use version; nothing was removed from it. Stage 7: search and bookmarks
+done; next volumes and eject.
 
 ## How to work a stage
 
@@ -99,8 +99,8 @@ are the Java sources, as a size hint.
   `app.rs` `Dialog`/`DialogSpec`) for confirm, name entry with validation and error lists;
   `ops::names` (rename never replaces, case-only renames, create folder/file) with tests;
   Del/F8 Trash and Shift+Del delete after confirming, F2, F7/Ctrl+Shift+N. New text file came
-  with stage 2's menus, tabs following a renamed folder with stage 3; bookmarks following it
-  wait for stage 7.)
+  with stage 2's menus, tabs following a renamed folder with stage 3, bookmarks following it
+  with stage 7.)
   Original notes: F2 rename (validate with `fs_util::validate_name`), F7/Ctrl+Shift+N new folder,
   Shift+Del with confirmation, error dialog for operation errors.
 - UI tests from `MainWindowUiTest`: clipboard, rename, new folder, delete, progress window
@@ -129,7 +129,7 @@ are the Java sources, as a size hint.
   with `'` escaped, else open the folder), launches recorded as "open/terminal/reveal <path>"
   under `FILEEM_NO_LAUNCH`.
 - Later stages added Open in new tab / other side, Copy/Move to other side (stage 3) and the
-  View submenu (stage 5). Not yet: Search in folder, bookmarks and Eject (stage 7).
+  View submenu (stage 5), Search in folder and the bookmark items (stage 7). Not yet: Eject.
   The tree outlines the right-clicked row while its menu is open (Java's `context-target`;
   added after 5b): Slint has no "menu closed" event, but a menu takes the keys while open and
   they come back however it closes, so the tree's right-click gives the window's key handler
@@ -307,8 +307,29 @@ are the Java sources, as a size hint.
 - Differences: opening a folder result can't bring the main window to the front (Slint can't
   activate a window). The history list is our own popup under the field (Slint has no editable
   combo box).
-- `Bookmarks` 158 + `BookmarksDialog` 205 (`BookmarksTest` 7): tree section, Ctrl+D,
-  Ctrl+Shift+B.
+- [x] **Bookmarks** (`fileem_core::bookmarks` with `BookmarksTest` ported (its read-only test is
+  the type system's: `items()` is a slice); `tree.rs` `set_bookmarks`; `src/app/bookmarks.rs`;
+  `ui/bookmarks.slint`): one list per window, saved at once (`bookmarks.count`,
+  `bookmarks.<i>.name/.path`, the Java keys). Both trees show a Bookmarks section after Quick
+  access (hidden while empty; bookmarks are lazy folders kept by path, so renaming or reordering
+  keeps them open; reveal walks only the drives). Ctrl+D and the toolbar button (filled and
+  "Remove bookmark (Ctrl+D)" when the folder shown is bookmarked) toggle the active tab's folder;
+  "Add to bookmarks" / "Remove from bookmarks" in the menus of a folder, empty space and tree
+  folders; a bookmark's menu has Rename bookmark… (asked over the main window), Remove bookmark,
+  Move up / down (disabled at the ends) and Manage bookmarks…, the section title only the
+  latter; a bookmark is a shortcut (no cut, rename, trash, delete, duplicate). Manage bookmarks
+  (Ctrl+Shift+B; one window, asking again shows it): name and folder per row, "(not found)" for
+  missing folders (checked in the background), Open / Rename… / Remove / Move up / Move down /
+  Close, keys Up/Down, Enter, Del, F2, Alt+Up/Down, Escape, double-click opens; live (changes from
+  the main window show up). Renaming or moving a folder (list, tree, search window) takes its
+  bookmarks and those inside it along; a bookmark named after the folder takes the new name.
+- UI tests: Ctrl+D and the toolbar (both trees, section placement, the button following the
+  folder); file / empty space / tree menus, rename from the menu, a click on a bookmark opens it;
+  the bookmark menu (no destructive items, move up/down, rename, remove, the section title's
+  menu) and a restart from the file; the Manage window (missing folders, buttons, keys, rename
+  over the window, live list, Enter opens and closes, empty hint, Escape); a renamed folder takes
+  its bookmarks (default name follows, custom name stays). `FILEEM_UI_ONLY=<part of a name>`
+  runs only the matching UI scenarios while working on them.
 - `Volumes` 461 (`VolumesTest` 6): mount table parsing, polling with per-volume timeouts,
   ejectable detection, eject (udisksctl / gio / umount; Windows, macOS), refused while busy.
 

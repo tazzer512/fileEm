@@ -9,7 +9,9 @@
 //! - `views`: view modes, item sizes, the grid and its thumbnails
 //! - `preview`: the preview of the selected file, docked or in its own window
 //! - `search`: search windows
+//! - `bookmarks`: bookmarks, their tree section and the Manage bookmarks window
 
+mod bookmarks;
 mod commands;
 mod dnd;
 mod keys;
@@ -27,6 +29,7 @@ use std::time::{Duration, Instant};
 
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 
+use fileem_core::bookmarks::Bookmarks;
 use fileem_core::fs::listing::SortKey;
 use fileem_core::fs::places;
 use fileem_core::fs::watcher::WatchHandle;
@@ -190,6 +193,9 @@ pub struct App {
     searches: Vec<search::Search>,
     /// The last searches, shared by every search window.
     history: SearchHistory,
+    /// Shared by both trees.
+    bookmarks: Bookmarks,
+    manage: Option<bookmarks::Manage>,
 }
 
 pub type Shared = Rc<RefCell<App>>;
@@ -289,6 +295,8 @@ pub fn install(ui: &AppWindow, session: Rc<Session>, start: Option<PathBuf>) -> 
         preview: preview::Preview::default(),
         searches: Vec::new(),
         history: SearchHistory::load(&session),
+        bookmarks: Bookmarks::load(&session),
+        manage: None,
         thumbs: Thumbnails::new({
             let ui = ui.as_weak();
             move || {
@@ -340,6 +348,7 @@ pub fn install(ui: &AppWindow, session: Rc<Session>, start: Option<PathBuf>) -> 
         sync_tree(&app, s);
         sync_files(&app, s);
     }
+    bookmarks::sync(&app);
     sync_window(&app);
     preview::restore(&app);
     for (id, dir) in opening {
@@ -419,6 +428,16 @@ pub fn search_results(app: &Shared, index: usize) -> (Vec<PathBuf>, Vec<PathBuf>
     search::results(app, index)
 }
 
+/// The bookmarks (name, folder) in order.
+pub fn bookmarks(app: &Shared) -> Vec<(String, PathBuf)> {
+    app.borrow().bookmarks.items().iter().map(|b| (b.name.clone(), b.path.clone())).collect()
+}
+
+/// The Manage bookmarks window, when open.
+pub fn bookmarks_window(app: &Shared) -> Option<crate::BookmarksWindow> {
+    bookmarks::window(app)
+}
+
 pub fn session(app: &Shared) -> Rc<Session> {
     app.borrow().session.clone()
 }
@@ -484,6 +503,7 @@ fn wire(ui: &AppWindow, app: &Shared) {
     on!(on_refresh, app => | | nav::refresh_active(app));
     on!(on_toggle_hidden, app => | | nav::toggle_hidden(app));
     on!(on_toggle_dual, app => | | nav::toggle_dual(app));
+    on!(on_toggle_bookmark, app => | | bookmarks::toggle(app));
     on!(on_activate, app => |side| nav::set_active_side(app, side as usize));
     on!(on_tree_resized, app => |side, width| {
         app.borrow_mut().sides[side as usize].tree_width = width;
@@ -751,7 +771,7 @@ fn sync_tree(app: &Shared, side: usize) {
             TreeRow {
                 name: n.name.clone().into(),
                 depth: n.depth as i32,
-                header: n.kind == NodeKind::Header,
+                header: n.kind.is_header(),
                 expandable: t.expandable(id),
                 expanded: n.expanded,
                 current: t.current() == Some(id),
@@ -760,6 +780,7 @@ fn sync_tree(app: &Shared, side: usize) {
                 icon: match n.kind {
                     NodeKind::Quick if n.depth == 0 && n.name == "Home" => 20,
                     NodeKind::Volume => 21,
+                    NodeKind::Bookmark if n.depth == 0 => 22,
                     _ => 0,
                 },
             }
@@ -870,6 +891,7 @@ fn sync_window(app: &Shared) {
     ui.set_can_back(tab.back_target().is_some());
     ui.set_can_forward(tab.forward_target().is_some());
     ui.set_can_up(tab.up_target().is_some());
+    ui.set_bookmarked(tab.dir().is_some_and(|d| a.bookmarks.contains(d)));
     let title = tab.dir().map(|d| format!("{} - fileEm", fs_util::display_name(d))).unwrap_or_else(|| "fileEm".into());
     ui.set_window_title(title.into());
 }

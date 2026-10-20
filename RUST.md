@@ -24,10 +24,12 @@ is still open (it uses the CPU to draw; fine for lists, to be checked on big 4K 
   `libfontconfig1-dev` and `pkg-config` to build (not to run).
 - `cargo run -p fileem [FOLDER]`: starts the app (debug build).
 - `cargo build --release -p fileem`: the executable is `target/release/fileem`.
-- `cargo test --workspace`: core tests, UI logic tests and the headless UI test, a few seconds.
+- `cargo test --workspace`: core tests, UI logic tests and the headless UI test (about 80 s).
+  `FILEEM_UI_ONLY=<part of a name> cargo test -p fileem --test ui` runs only the matching UI
+  scenarios while working on them; run them all before committing.
 - `cargo clippy --workspace --all-targets`: must stay warning free.
 - Visual checks without a display: `cargo test -p fileem --test snapshots -- --ignored` renders
-  the main window (also in the grid views), the preview, a search window, a dialog, a right-click menu, the progress window and a Properties window headless to `target/snapshots/*.ppm`
+  the main window (also in the grid views), the preview, a search window, bookmarks (tree + Manage window), a dialog, a right-click menu, the progress window and a Properties window headless to `target/snapshots/*.ppm`
   (convert with Pillow to look at them). Extend it when adding windows or dialogs.
 - Visual checks of the real app (Wayland has no desktop screenshots): `FILEEM_SNAPSHOT=out.ppm cargo run -p fileem
   FOLDER` renders the window after the folder loaded, writes it as PPM and quits. Don't type while
@@ -52,6 +54,7 @@ crates/fileem-core/        no UI: everything that touches the file system
                            (rename / create, never replacing)
   src/session.rs           session.properties shared with the Java app (Java Session)
   src/search_history.rs    the last 15 search patterns (Java SearchHistory)
+  src/bookmarks.rs         ordered, named folder bookmarks, saved on every change (Java Bookmarks)
   src/images/              image decoding for thumbnails/preview: mod (formats, decode, shrink,
                            EXIF orientation), psd, raw, jpeg2000 (hayro-jpeg2000), netpbm;
                            fixtures (test files; also for the UI tests via feature `fixtures`)
@@ -64,7 +67,8 @@ crates/fileem/             the app
   ui/grid.slint            one item of the grid views (draws only)
   ui/preview.slint         the preview pane (docked) and its own window (draws, pans)
   ui/search.slint          a search window: pattern, history list, results, status
-  ui/dialog.slint          the question drawn over a window (main and search windows)
+  ui/bookmarks.slint       the Manage bookmarks window
+  ui/dialog.slint          the question drawn over a window (main, search and bookmarks windows)
   ui/icons.slint           shared icons, the tool button and the F-key bar's buttons
   src/app.rs               controller: state, session, wiring, models (Java MainWindow)
   src/app/nav.rs           listings per tab, watching, trees, tabs, sides (Java ExplorerSide/FileTab)
@@ -77,6 +81,8 @@ crates/fileem/             the app
   src/preview.rs           the preview's zoom and fit, toolkit-free (Java PreviewWindow zoom)
   src/app/search.rs        search windows: the search thread, batches, result commands (Java SearchWindow)
   src/search.rs            a search's results: order, selection, follow renames, status texts
+  src/app/bookmarks.rs     bookmarks: toggling, menus, the trees' section, the Manage window
+                           (Java MainWindow bookmarks, FolderTree.syncBookmarks, BookmarksDialog)
   src/view_mode.rs         the eight views, sizes and steps, session format (Java ViewMode)
   src/grid.rs              grid layout: slots, lanes, hit tests, box hits, key moves, the names
                            List measures for its column width (Java FileGrid)
