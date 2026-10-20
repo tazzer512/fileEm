@@ -1,4 +1,4 @@
-//! The tree's fixed entries: quick access folders (localized XDG user dirs on Linux) and volumes.
+//! The tree's quick access folders (localized XDG user dirs on Linux); drives are `volumes`.
 
 use std::path::{Path, PathBuf};
 
@@ -64,43 +64,6 @@ pub fn parse_user_dirs(text: &str, home: &Path) -> Vec<(String, PathBuf)> {
         .collect()
 }
 
-/// Mounted volumes: the file system root plus drives mounted by the desktop (Linux, macOS) or
-/// the drive letters (Windows).
-pub fn volumes() -> Vec<Place> {
-    #[cfg(windows)]
-    {
-        (b'A'..=b'Z')
-            .map(|c| PathBuf::from(format!("{}:\\", c as char)))
-            .filter(|p| p.exists())
-            .map(|p| Place { name: p.display().to_string(), path: p })
-            .collect()
-    }
-    #[cfg(not(windows))]
-    {
-        let mut out = vec![Place { name: "File System".into(), path: PathBuf::from("/") }];
-        let user = std::env::var("USER").unwrap_or_default();
-        let mut parents = vec![PathBuf::from("/mnt"), PathBuf::from("/Volumes")];
-        if !user.is_empty() {
-            parents.insert(0, Path::new("/media").join(&user));
-            parents.insert(1, Path::new("/run/media").join(&user));
-        }
-        for parent in parents {
-            let Ok(rd) = std::fs::read_dir(&parent) else { continue };
-            let mut found: Vec<Place> = rd
-                .filter_map(Result::ok)
-                .map(|e| e.path())
-                .filter(|p| p.is_dir() && !fs_util::is_hidden(p))
-                // macOS lists the boot volume in /Volumes as a link to "/"
-                .filter(|p| std::fs::canonicalize(p).map(|c| c != Path::new("/")).unwrap_or(true))
-                .map(|p| Place { name: fs_util::display_name(&p), path: p })
-                .collect();
-            found.sort_by(|a, b| crate::util::natural_order::compare(&a.name, &b.name));
-            out.extend(found);
-        }
-        out
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -134,11 +97,5 @@ mod tests {
         ];
         let names: Vec<String> = quick_access_from(home, &user_dirs).into_iter().map(|p| p.name).collect();
         assert_eq!(names, ["Home", "Bureaublad", "Documents"]);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn the_root_is_always_a_volume() {
-        assert_eq!(volumes()[0].path, Path::new("/"));
     }
 }

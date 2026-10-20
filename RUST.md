@@ -29,7 +29,7 @@ is still open (it uses the CPU to draw; fine for lists, to be checked on big 4K 
   scenarios while working on them; run them all before committing.
 - `cargo clippy --workspace --all-targets`: must stay warning free.
 - Visual checks without a display: `cargo test -p fileem --test snapshots -- --ignored` renders
-  the main window (also in the grid views), the preview, a search window, bookmarks (tree + Manage window), a dialog, a right-click menu, the progress window and a Properties window headless to `target/snapshots/*.ppm`
+  the main window (also in the grid views), the preview, a search window, bookmarks (tree + Manage window), drives, a dialog, a right-click menu, the progress window and a Properties window headless to `target/snapshots/*.ppm`
   (convert with Pillow to look at them). Extend it when adding windows or dialogs.
 - Visual checks of the real app (Wayland has no desktop screenshots): `FILEEM_SNAPSHOT=out.ppm cargo run -p fileem
   FOLDER` renders the window after the folder loaded, writes it as PPM and quits. Don't type while
@@ -48,7 +48,8 @@ crates/fileem-core/        no UI: everything that touches the file system
   src/util/                natural_order, formats, fs_util, os, eta       (Java util)
   src/fs/                  entry (FileEntry), file_types, listing, places,
                            trash, watcher, measure (folder sizes),
-                           preview (kinds, text reading), search (name patterns, the walk)
+                           preview (kinds, text reading), search (name patterns, the walk),
+                           volumes (drives, free space, eject)
                                                                           (Java fs)
   src/ops/                 file_operation (+ tests.rs: port of FileOperationTest), names
                            (rename / create, never replacing)
@@ -81,6 +82,8 @@ crates/fileem/             the app
   src/preview.rs           the preview's zoom and fit, toolkit-free (Java PreviewWindow zoom)
   src/app/search.rs        search windows: the search thread, batches, result commands (Java SearchWindow)
   src/search.rs            a search's results: order, selection, follow renames, status texts
+  src/app/volumes.rs       drive polling, the trees' drives, eject (Java Volumes polling,
+                           FolderTree.syncVolumes, MainWindow.eject)
   src/app/bookmarks.rs     bookmarks: toggling, menus, the trees' section, the Manage window
                            (Java MainWindow bookmarks, FolderTree.syncBookmarks, BookmarksDialog)
   src/view_mode.rs         the eight views, sizes and steps, session format (Java ViewMode)

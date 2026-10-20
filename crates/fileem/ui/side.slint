@@ -39,6 +39,11 @@ export struct TreeRow {
     icon: int,
     // a folder that can be dragged (not a section title or a drive)
     draggable: bool,
+    // a drive's free space ("12 GB free of 64 GB", "Ejecting…"), empty for none
+    extra: string,
+    // a drive that can be ejected (an eject button), and one being ejected now
+    ejectable: bool,
+    ejecting: bool,
 }
 
 export struct TabRow {
@@ -243,6 +248,8 @@ export component SidePane {
     callback tree-clicked(int, int);
     callback tree-toggled(int, int);
     callback tree-menu(int, int) -> bool;
+    // the eject button of a drive's row
+    callback tree-eject(int, int);
     // side, ColumnId index
     callback sort-by(int, int);
     callback header-menu(int);
@@ -625,9 +632,41 @@ export component SidePane {
                             text: row.name;
                             vertical-alignment: center;
                             overflow: elide;
+                            // the free space gives way first
+                            min-width: row.extra != "" ? min(self.preferred-width, 110px) : 0px;
                             font-weight: row.header || row.on-path ? 600 : 400;
                             color: row.header ? Palette.foreground.with-alpha(0.6) : Palette.foreground;
                             font-size: row.header ? 11px : 13px;
+                        }
+                        // before the free space, which gets cut off first
+                        if row.ejectable: Rectangle {
+                            width: 20px;
+                            accessible-role: button;
+                            accessible-label: "Eject (safely remove)";
+                            accessible-enabled: !row.ejecting;
+                            accessible-action-default => { if (!row.ejecting) { root.tree-eject(root.side, i); } }
+                            border-radius: 3px;
+                            background: eject-touch.has-hover && !row.ejecting ? Palette.foreground.with-alpha(0.1) : transparent;
+                            Path {
+                                width: 14px;
+                                height: 14px;
+                                viewbox-width: 24;
+                                viewbox-height: 24;
+                                commands: Icons.eject;
+                                fill: Palette.foreground.with-alpha(row.ejecting ? 0.3 : 0.7);
+                            }
+                            eject-touch := TouchArea {
+                                enabled: !row.ejecting;
+                                clicked => { root.tree-eject(root.side, i); }
+                            }
+                        }
+                        if row.extra != "": Text {
+                            min-width: 0px;
+                            text: row.extra;
+                            vertical-alignment: center;
+                            overflow: elide;
+                            font-size: 11px;
+                            color: Palette.foreground.with-alpha(0.55);
                         }
                     }
                 }

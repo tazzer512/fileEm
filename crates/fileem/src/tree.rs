@@ -5,6 +5,7 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use fileem_core::fs::places::Place;
+use fileem_core::fs::volumes;
 use fileem_core::fs::FileEntry;
 use fileem_core::util::natural_order;
 
@@ -36,6 +37,19 @@ pub struct Node {
     /// `None` until loaded.
     pub children: Option<Vec<usize>>,
     pub expanded: bool,
+    /// What a drive shows besides its name (volumes only).
+    pub drive: Option<Drive>,
+}
+
+/// A drive of the "This computer" section.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Drive {
+    pub name: String,
+    pub path: PathBuf,
+    pub kind: volumes::Kind,
+    /// "12 GB free of 64 GB", when known.
+    pub extra: Option<String>,
+    pub ejectable: bool,
 }
 
 /// What the tree needs from the caller to continue revealing a folder.
@@ -60,10 +74,12 @@ pub struct Tree {
     auto_expanded: HashSet<usize>,
     /// The Bookmarks section, made on first use; among `roots` only while it has bookmarks.
     bookmarks: Option<usize>,
+    /// The drives' section ("This computer"), made on first use.
+    volumes: Option<usize>,
 }
 
 impl Tree {
-    pub fn new(quick: &[Place], volumes: &[Place]) -> Tree {
+    pub fn new(quick: &[Place], drives: &[Drive]) -> Tree {
         let mut t = Tree {
             nodes: Vec::new(),
             roots: Vec::new(),
@@ -72,36 +88,35 @@ impl Tree {
             show_hidden: false,
             auto_expanded: HashSet::new(),
             bookmarks: None,
+            volumes: None,
         };
-        for (title, kind, places) in
-            [("Quick access", NodeKind::Quick, quick), ("This computer", NodeKind::Volume, volumes)]
-        {
-            if places.is_empty() {
-                continue;
-            }
+        if !quick.is_empty() {
             let header = t.add(Node {
                 kind: NodeKind::Header,
-                name: title.into(),
+                name: "Quick access".into(),
                 path: None,
                 hidden: false,
                 depth: 0,
                 children: Some(Vec::new()),
                 expanded: true,
+                drive: None,
             });
             t.roots.push(header);
-            for p in places {
+            for p in quick {
                 let id = t.add(Node {
-                    kind,
+                    kind: NodeKind::Quick,
                     name: p.name.clone(),
                     path: Some(p.path.clone()),
                     hidden: false,
                     depth: 0,
                     children: None,
                     expanded: false,
+                    drive: None,
                 });
                 t.nodes[header].children.as_mut().unwrap().push(id);
             }
         }
+        t.set_volumes(drives);
         t.flatten();
         t
     }
@@ -184,6 +199,7 @@ impl Tree {
                     depth,
                     children: None,
                     expanded: false,
+                    drive: None,
                 }),
             };
             children.push(child);
@@ -208,6 +224,7 @@ impl Tree {
                     depth: 0,
                     children: Some(Vec::new()),
                     expanded: true,
+                    drive: None,
                 });
                 self.bookmarks = Some(h);
                 h
@@ -230,6 +247,7 @@ impl Tree {
                     depth: 0,
                     children: None,
                     expanded: false,
+                    drive: None,
                 }),
             };
             children.push(id);
@@ -243,6 +261,75 @@ impl Tree {
             self.roots.insert(after_quick.map_or(0, |i| i + 1), header);
         }
         self.flatten();
+    }
+
+    /// Shows `drives` in the "This computer" section (last). Drives kept by path keep their
+    /// expansion and loaded folders; their name, space and eject state follow the list.
+    pub fn set_volumes(&mut self, drives: &[Drive]) {
+        let header = match self.volumes {
+            Some(h) => h,
+            None => {
+                let h = self.add(Node {
+                    kind: NodeKind::Header,
+                    name: "This computer".into(),
+                    path: None,
+                    hidden: false,
+                    depth: 0,
+                    children: Some(Vec::new()),
+                    expanded: true,
+                    drive: None,
+                });
+                self.volumes = Some(h);
+                self.roots.push(h);
+                h
+            }
+        };
+        let old = self.nodes[header].children.clone().unwrap_or_default();
+        let mut children = Vec::with_capacity(drives.len());
+        for d in drives {
+            let existing = old.iter().copied().find(|&k| self.nodes[k].path.as_deref() == Some(d.path.as_path()));
+            let id = match existing {
+                Some(k) => {
+                    self.nodes[k].name = d.name.clone();
+                    self.nodes[k].drive = Some(d.clone());
+                    k
+                }
+                None => self.add(Node {
+                    kind: NodeKind::Volume,
+                    name: d.name.clone(),
+                    path: Some(d.path.clone()),
+                    hidden: false,
+                    depth: 0,
+                    children: None,
+                    expanded: false,
+                    drive: Some(d.clone()),
+                }),
+            };
+            children.push(id);
+        }
+        // a drive that went away takes the current folder's mark with it
+        if self.current.is_some_and(|c| !self.reachable(c, &children)) {
+            self.set_current(None);
+        }
+        self.nodes[header].children = Some(children);
+        self.flatten();
+    }
+
+    /// Whether `id` is one of `drives` or below one.
+    fn reachable(&self, id: usize, drives: &[usize]) -> bool {
+        let Some(p) = self.nodes[id].path.as_deref() else { return true };
+        if self.nodes[id].kind != NodeKind::Volume && self.nodes[id].kind != NodeKind::Folder {
+            return true;
+        }
+        drives.iter().any(|&d| self.nodes[d].path.as_deref().is_some_and(|dp| p.starts_with(dp)) && self.is_under(id, d))
+    }
+
+    /// Whether node `id` is `ancestor` or inside it.
+    fn is_under(&self, id: usize, ancestor: usize) -> bool {
+        if id == ancestor {
+            return true;
+        }
+        self.nodes[ancestor].children.as_deref().unwrap_or_default().iter().any(|&c| self.is_under(id, c))
     }
 
     /// Nodes showing `dir` whose children are loaded (the ones worth reloading on changes). A
@@ -367,6 +454,10 @@ mod tests {
         }
     }
 
+    fn drive(name: &str, path: &Path) -> Drive {
+        Drive { name: name.into(), path: path.to_path_buf(), kind: volumes::Kind::Local, extra: None, ejectable: false }
+    }
+
     fn setup() -> (tempfile::TempDir, Tree) {
         let tmp = tempfile::tempdir().unwrap();
         let v = tmp.path().join("vol");
@@ -374,7 +465,7 @@ mod tests {
         fs::create_dir_all(v.join("b")).unwrap();
         fs::create_dir_all(v.join(".git")).unwrap();
         let quick = [Place { name: "Home".into(), path: tmp.path().to_path_buf() }];
-        let volumes = [Place { name: "Vol".into(), path: v }];
+        let volumes = [drive("Vol", &v)];
         (tmp, Tree::new(&quick, &volumes))
     }
 
@@ -446,7 +537,7 @@ mod tests {
         let v = tmp.path().join("vol");
         fs::create_dir_all(v.join("home/docs")).unwrap();
         let quick = [Place { name: "Home".into(), path: v.join("home") }];
-        let volumes = [Place { name: "Vol".into(), path: v.clone() }];
+        let volumes = [drive("Vol", &v)];
         let mut t = Tree::new(&quick, &volumes);
         assert!(t.loaded_nodes(&v.join("home")).is_empty(), "nothing loaded yet");
         reveal(&mut t, &v.join("home/docs")); // loads Vol and its home
@@ -487,5 +578,31 @@ mod tests {
         t.set_bookmarks(&[]);
         assert_eq!(names(&t), ["Quick access", "Home", "This computer", "Vol"], "hidden again when empty");
         assert_eq!(t.reveal(&a), Reveal::Load(t.rows()[3], tmp.path().join("vol")), "reveal walks the volumes, not bookmarks");
+    }
+
+    #[test]
+    fn drives_come_and_go_and_keep_what_was_opened() {
+        let (tmp, mut t) = setup();
+        let v = tmp.path().join("vol");
+        let stick = tmp.path().join("stick");
+        fs::create_dir_all(stick.join("photos")).unwrap();
+        reveal(&mut t, &v.join("a/deep"));
+        let deep = t.current().unwrap();
+
+        let mut plugged = drive("STICK", &stick);
+        plugged.ejectable = true;
+        plugged.extra = Some("1 GB free of 2 GB".into());
+        t.set_volumes(&[drive("Vol", &v), plugged.clone()]);
+        assert_eq!(names(&t)[2..], ["This computer", "Vol", "  a", "    deep", "  b", "STICK"], "Vol stays open");
+        assert_eq!(t.current(), Some(deep));
+        let stick_row = t.rows()[7];
+        assert_eq!(t.node(stick_row).drive.as_ref().unwrap().extra.as_deref(), Some("1 GB free of 2 GB"));
+
+        // what is shown on the stick loses its mark when the stick goes
+        let Reveal::Done(_) = reveal(&mut t, &stick.join("photos")) else { panic!("revealed on the stick") };
+        t.set_volumes(&[drive("Vol", &v)]);
+        assert_eq!(t.current(), None);
+        assert_eq!(names(&t)[2..], ["This computer", "Vol", "  a", "  b"]);
+        assert!(t.reveal(&stick.join("photos")) == Reveal::NotFound, "no drive for it any more");
     }
 }

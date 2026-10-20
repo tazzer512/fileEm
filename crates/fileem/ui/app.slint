@@ -62,6 +62,7 @@ export component AppWindow inherits Window {
     callback tree-clicked(int, int);
     callback tree-toggled(int, int);
     callback tree-menu(int, int) -> bool;
+    callback tree-eject(int, int);
     callback sort-by(int, int);
     callback header-menu(int);
     callback column-resized(int, length);
@@ -90,6 +91,8 @@ export component AppWindow inherits Window {
     callback grid-range(int, int, int);
     // the thumbnail threads decoded something (src/thumbs.rs)
     callback thumbs-ready();
+    // the drive poller has a new list
+    callback volumes-changed();
     // ---- drag & drop inside the window (see SidePane) ----
     in property <data-transfer> drag-data;
     in property <image> drag-image;
@@ -319,6 +322,7 @@ export component AppWindow inherits Window {
                         empty-pressed(i) => { root.empty-pressed(i); }
                         tree-clicked(i, r) => { root.tree-clicked(i, r); }
                         tree-toggled(i, r) => { root.tree-toggled(i, r); }
+                        tree-eject(i, r) => { root.tree-eject(i, r); }
                         tree-menu(i, r) => { return root.tree-menu(i, r); }
                         sort-by(i, c) => { root.sort-by(i, c); }
                         header-menu(i) => { root.header-menu(i); }

@@ -1,5 +1,5 @@
 //! Visual checks without a desktop (`cargo test -p fileem --test snapshots -- --ignored`): renders
-//! the main window (also with both sides, and in the grid views), the preview (floating and docked), a search window, bookmarks (tree + Manage window), a dialog and a right-click menu open, the progress window with a conflict
+//! the main window (also with both sides, and in the grid views), the preview (floating and docked), a search window, bookmarks (tree + Manage window), drives, a dialog and a right-click menu open, the progress window with a conflict
 //! question and a Properties window, in the
 //! headless backend's software renderer, to `target/snapshots/*.ppm`. Look at them after UI
 //! changes; they are not compared automatically.
@@ -158,6 +158,23 @@ fn snapshots() {
     pump_until("checked", || b.get_rows().iter().any(|r| r.missing));
     save(b.window(), "bookmarks-manage");
     b.invoke_close_clicked();
+
+    // drives: a stick (eject button, free space), a network share and the root
+    {
+        use fileem_core::fs::volumes::{Kind as VKind, Volume};
+        let mut stick = Volume::new(dir.join("alpha"), "STICK", VKind::Removable);
+        stick.space = Some((3 << 30, 16 << 30));
+        let mut share = Volume::new(tmp.path().join("share"), "share", VKind::Network);
+        share.space = Some((700 << 30, 2000 << 30));
+        let mut root = Volume::new("/", "File System", VKind::System);
+        root.space = Some((50 << 30, 500 << 30));
+        app::show_volumes(&a, vec![stick, share, root]);
+    }
+    pump_until("laid out", || true);
+    let position = slint::LogicalPosition::new(50.0, 300.0);
+    ui.window().dispatch_event(WindowEvent::PointerScrolled { position, delta_x: 0.0, delta_y: 100_000.0 });
+    pump_until("laid out", || true);
+    save(ui.window(), "drives-tree");
 
     // a right-click menu on a file, and its Properties window
     ui.invoke_row_pressed(0, 1, false, false);

@@ -427,6 +427,12 @@ fn ui() {
         folder_menus_add_bookmarks_and_a_bookmark_opens_from_the_tree;
         the_bookmark_menu_renames_moves_and_removes_and_bookmarks_survive_a_restart;
         the_manage_window_lists_reorders_renames_removes_and_opens_bookmarks;
+        // drives and eject (stage 7)
+        drives_show_their_space_and_only_plugged_in_ones_offer_eject;
+        eject_moves_tabs_off_the_drive_first_then_ejects_and_confirms;
+        eject_is_refused_while_an_operation_uses_the_drive;
+        eject_removes_the_whole_drive_and_moves_tabs_off_every_partition;
+        a_failed_eject_shows_the_reason_and_can_be_retried;
     }
 }
 
@@ -2620,14 +2626,22 @@ fn with_bookmarks(marks: &'static [(&'static str, &'static str)]) -> impl FnOnce
     }
 }
 
-/// An entry of the menu shown last (with its enabled state, which the popup doesn't expose).
-fn menu_row(f: &Fixture, title: &str) -> fileem::MenuRow {
+/// The entries of the menu shown last (with their enabled state, which the popup doesn't expose).
+fn menu_rows(f: &Fixture) -> Vec<fileem::MenuRow> {
     let ui = &f.ui;
     [ui.get_menu_s0(), ui.get_menu_s1(), ui.get_menu_s2(), ui.get_menu_s3(), ui.get_menu_s4(), ui.get_menu_s5()]
         .iter()
         .flat_map(|m| m.iter().collect::<Vec<_>>())
-        .find(|r| r.title == title)
-        .unwrap_or_else(|| panic!("no menu entry {title:?}"))
+        .collect()
+}
+
+fn menu_row(f: &Fixture, title: &str) -> fileem::MenuRow {
+    menu_rows(f).into_iter().find(|r| r.title == title).unwrap_or_else(|| panic!("no menu entry {title:?}"))
+}
+
+/// Exactly this entry ("Copy", not "Copy path").
+fn menu_has(f: &Fixture, title: &str) -> bool {
+    menu_rows(f).iter().any(|r| r.title == title)
 }
 
 fn bookmark_names(f: &Fixture) -> Vec<String> {
@@ -2845,4 +2859,193 @@ fn the_manage_window_lists_reorders_renames_removes_and_opens_bookmarks() {
     assert_eq!(bw_button(&w, "Open").accessible_enabled(), Some(false));
     bw_key(&w, &[], Key::Escape);
     assert!(app::bookmarks_window(&f.app).is_none(), "Escape closes it");
+}
+
+// ---- drives and eject ----
+
+/// A test's stand-in for the system's eject: never ejects anything, records what it was asked.
+struct FakeEjector {
+    /// The other partitions `drive` reports (besides the asked root).
+    partitions: Vec<PathBuf>,
+    /// Each eject's roots, sent when it starts.
+    started: std::sync::Mutex<std::sync::mpsc::Sender<Vec<PathBuf>>>,
+    /// Each eject waits for an answer here.
+    answer: std::sync::Mutex<std::sync::mpsc::Receiver<Result<(), String>>>,
+}
+
+impl app::Ejector for FakeEjector {
+    fn drive(&self, root: &Path) -> Vec<PathBuf> {
+        let mut v = vec![root.to_path_buf()];
+        v.extend(self.partitions.iter().cloned());
+        v
+    }
+
+    fn eject(&self, roots: &[PathBuf]) -> Result<(), String> {
+        let _ = self.started.lock().unwrap().send(roots.to_vec());
+        self.answer.lock().unwrap().recv_timeout(Duration::from_secs(20)).unwrap_or(Err("no answer".into()))
+    }
+}
+
+/// Puts in a fake ejector; returns where its ejects start and where to answer them.
+fn fake_ejector(
+    f: &Fixture,
+    partitions: Vec<PathBuf>,
+) -> (std::sync::mpsc::Receiver<Vec<PathBuf>>, std::sync::mpsc::Sender<Result<(), String>>) {
+    let (started_tx, started) = std::sync::mpsc::channel();
+    let (answer, answer_rx) = std::sync::mpsc::channel();
+    app::set_ejector(
+        &f.app,
+        std::sync::Arc::new(FakeEjector {
+            partitions,
+            started: std::sync::Mutex::new(started_tx),
+            answer: std::sync::Mutex::new(answer_rx),
+        }),
+    );
+    (started, answer)
+}
+
+/// Shows a removable drive "STICK" at `root`, then the real root (so the rest still shows, below
+/// the stick: its row stays in view).
+fn fake_drive(f: &Fixture, root: &Path) {
+    use fileem_core::fs::volumes::{Kind as VKind, Volume};
+    let mut stick = Volume::new(root, "STICK", VKind::Removable);
+    stick.space = Some((1 << 30, 4 << 30));
+    let mut disk = Volume::new("/", "File System", VKind::System);
+    disk.space = Some((5 << 30, 100 << 30));
+    app::show_volumes(&f.app, vec![stick, disk]);
+}
+
+/// Waits for the next eject to start; fails after 10 s.
+fn eject_started(f: &Fixture, started: &std::sync::mpsc::Receiver<Vec<PathBuf>>) -> Vec<PathBuf> {
+    let start = Instant::now();
+    loop {
+        if let Ok(roots) = started.try_recv() {
+            return roots;
+        }
+        assert!(start.elapsed() < Duration::from_secs(10), "timed out waiting for the eject");
+        pump();
+        let _ = f;
+    }
+}
+
+fn drives_show_their_space_and_only_plugged_in_ones_offer_eject() {
+    let f = open_window();
+    let stick = f.dir.join("alpha");
+    fake_drive(&f, &stick);
+    let rows = f.tree();
+    let row = |name: &str| rows.iter().find(|r| r.name == name && r.depth == 0 && !r.header).unwrap().clone();
+    let (s, root) = (row("STICK"), row("File System"));
+    assert!(s.ejectable && !root.ejectable);
+    assert_eq!(s.extra, "1.00 GB free of 4.00 GB");
+    assert_eq!(root.extra, "5.00 GB free of 100 GB");
+    assert_eq!(s.icon, 24, "a plugged-in drive's icon");
+    let after = rows.iter().position(|r| r.name == "This computer").unwrap();
+    assert_eq!(rows[after + 1].name, "STICK", "in the order given");
+
+    settle(&f);
+    f.scroll_tree_to_top();
+    f.right_click(&f.tree_row("STICK"));
+    assert!(f.menu_item("Eject").is_some(), "a stick can be ejected");
+    assert!(!menu_has(&f, "Cut") && !menu_has(&f, "Copy"), "a drive is a shortcut");
+    f.key(Key::Escape);
+    pump();
+    f.right_click(&f.tree_row("File System"));
+    assert!(f.menu_item("Eject").is_none(), "the system drive can't");
+    f.key(Key::Escape);
+    pump();
+    // the drive's row has an eject button
+    let button = ElementHandle::find_by_accessible_label(&f.ui, "Eject (safely remove)").collect::<Vec<_>>();
+    assert_eq!(button.len(), 1, "one button, on the stick's row");
+    assert!((button[0].absolute_position().y - f.tree_row("STICK").absolute_position().y).abs() < 24.0);
+}
+
+fn eject_moves_tabs_off_the_drive_first_then_ejects_and_confirms() {
+    let f = open_window();
+    let drive = f._tmp.path().join("stick2");
+    fs::create_dir_all(drive.join("photos")).unwrap();
+    fake_drive(&f, &drive);
+    f.ui.invoke_address_entered(0, drive.join("photos").display().to_string().into());
+    wait_until(&f, "on the stick", |f| f.address() == drive.join("photos"));
+    let (started, answer) = fake_ejector(&f, Vec::new());
+
+    // the row's eject button
+    settle(&f);
+    f.scroll_tree_to_top();
+    ElementHandle::find_by_accessible_label(&f.ui, "Eject (safely remove)").next().unwrap().invoke_accessible_default_action();
+    assert!(app::is_ejecting(&f.app, &drive));
+    assert_eq!(eject_started(&f, &started), std::slice::from_ref(&drive));
+    assert_eq!(f.address(), fileem_core::util::os::home(), "the tab left the drive before ejecting");
+    let stick = f.tree().into_iter().find(|r| r.name == "STICK").unwrap();
+    assert!(stick.ejecting && stick.extra == "Ejecting…");
+    f.right_click(&f.tree_row("STICK"));
+    assert!(!menu_row(&f, "Eject").enabled, "no second eject meanwhile");
+    f.key(Key::Escape);
+    pump();
+
+    answer.send(Ok(())).unwrap();
+    wait_until(&f, "the safe to remove notice", |f| dialog_open(f) && f.ui.get_dialog_message().contains("can now be safely removed"));
+    assert_eq!(f.ui.get_dialog_message(), "\u{201c}STICK\u{201d} can now be safely removed.");
+    assert!(!app::is_ejecting(&f.app, &drive));
+    f.key(Key::Return);
+    assert!(drive.join("photos").is_dir(), "a fake eject: nothing touched");
+}
+
+fn eject_is_refused_while_an_operation_uses_the_drive() {
+    let f = open_window();
+    let h = blocking_copy(&f);
+    let drive = f.dir.join("alpha"); // the copy's target
+    fake_drive(&f, &drive);
+    let (started, _answer) = fake_ejector(&f, Vec::new());
+    app::run_command(&f.app, fileem::menu::Command::Eject(drive.clone(), "STICK".into()));
+    wait_until(&f, "the refusal", |f| dialog_open(f) && f.ui.get_dialog_message().contains("in use by a running file operation"));
+    assert!(started.try_recv().is_err(), "nothing was ejected");
+    assert!(!app::is_ejecting(&f.app, &drive));
+    f.key(Key::Return);
+    h.cancel();
+    wait_until(&f, "the copy stopped", |f| app::ops(&f.app).running().is_empty());
+}
+
+fn eject_removes_the_whole_drive_and_moves_tabs_off_every_partition() {
+    let f = open_window();
+    let photos = f._tmp.path().join("photos");
+    let storage = f._tmp.path().join("storage");
+    fs::create_dir_all(&photos).unwrap();
+    fs::create_dir_all(storage.join("sub")).unwrap();
+    fake_drive(&f, &photos);
+    // a tab on the other partition of the same drive, in the second side
+    f.key(Key::F9);
+    wait_until(&f, "the second side", |f| app::active_side(&f.app) == 1 || app::is_dual(&f.app));
+    let right = app::tabs(&f.app, 1).0;
+    assert_eq!(right.len(), 1);
+    app::run_command(&f.app, fileem::menu::Command::OpenInOtherSide(storage.join("sub")));
+    wait_until(&f, "the other partition shown", |f| app::tabs(&f.app, 1).0.contains(&Some(storage.join("sub"))));
+    let (started, answer) = fake_ejector(&f, vec![storage.clone()]);
+    app::run_command(&f.app, fileem::menu::Command::Eject(photos.clone(), "photos".into()));
+    assert_eq!(eject_started(&f, &started), [photos.clone(), storage.clone()]);
+    let dirs = app::tabs(&f.app, 1).0;
+    assert!(dirs.iter().all(|d| !d.as_ref().is_some_and(|d| d.starts_with(&storage))), "the tab left the other partition first: {dirs:?}");
+    answer.send(Ok(())).unwrap();
+    wait_until(&f, "the notice", dialog_open);
+    assert_eq!(f.ui.get_dialog_message(), "The drive with \u{201c}photos\u{201d} and \u{201c}storage\u{201d} can now be safely removed.");
+    f.key(Key::Return);
+}
+
+fn a_failed_eject_shows_the_reason_and_can_be_retried() {
+    let f = open_window();
+    let drive = f._tmp.path().join("stick3");
+    fs::create_dir_all(&drive).unwrap();
+    fake_drive(&f, &drive);
+    let (started, answer) = fake_ejector(&f, Vec::new());
+    app::run_command(&f.app, fileem::menu::Command::Eject(drive.clone(), "STICK".into()));
+    eject_started(&f, &started);
+    answer.send(Err("The drive is in use.".into())).unwrap();
+    wait_until(&f, "the reason", |f| dialog_open(f) && f.ui.get_dialog_message().contains("The drive is in use."));
+    assert_eq!(f.ui.get_dialog_message(), "Cannot eject \u{201c}STICK\u{201d}:\nThe drive is in use.");
+    assert!(!app::is_ejecting(&f.app, &drive), "can be tried again");
+    f.key(Key::Return);
+    app::run_command(&f.app, fileem::menu::Command::Eject(drive.clone(), "STICK".into()));
+    eject_started(&f, &started);
+    answer.send(Ok(())).unwrap();
+    wait_until(&f, "ejected the second time", |f| dialog_open(f) && f.ui.get_dialog_message().contains("safely removed"));
+    f.key(Key::Return);
 }

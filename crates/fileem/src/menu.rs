@@ -1,8 +1,6 @@
 //! Right-click menus, built per request from what was clicked (the Java
 //! `MainWindow.fileMenuItems` / `treeMenuItems`). Toolkit-free: app.slint shows the sections, the
 //! controller runs the chosen [`Command`].
-//!
-//! Not yet ported (it needs a later stage): eject.
 
 use std::path::{Path, PathBuf};
 
@@ -69,6 +67,8 @@ pub enum Command {
     MoveBookmark(PathBuf, isize),
     /// Ctrl+Shift+B: the bookmarks dialog.
     ManageBookmarks,
+    /// Safely removes a drive (its root and its label).
+    Eject(PathBuf, String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -270,9 +270,17 @@ fn new_entries(dir: &Path) -> Vec<Entry> {
     vec![item("Folder  (F7)", Command::NewFolder(dir.to_path_buf())), item("Text file", Command::NewFile(dir.to_path_buf()))]
 }
 
-/// A folder or drive in the tree. Quick access folders and drives are shortcuts: no cut, rename,
-/// delete or duplicate (drives can't be copied or zipped either).
-pub fn tree_menu(dir: &Path, kind: NodeKind, st: &State) -> Menu {
+/// A drive of the tree that can be ejected: its label, and whether an eject may start now (not
+/// while one runs).
+pub struct Eject<'a> {
+    pub label: &'a str,
+    pub enabled: bool,
+}
+
+/// A folder or drive in the tree. Quick access folders, bookmarks and drives are shortcuts: no
+/// cut, rename, delete or duplicate (drives can't be copied or zipped either). Drives people plug
+/// in can be ejected.
+pub fn tree_menu(dir: &Path, kind: NodeKind, eject: Option<Eject>, st: &State) -> Menu {
     let d = dir.to_path_buf();
     let plain = kind == NodeKind::Folder;
     let volume = kind == NodeKind::Volume;
@@ -316,7 +324,10 @@ pub fn tree_menu(dir: &Path, kind: NodeKind, st: &State) -> Menu {
         ],
         _ => vec![bookmark_toggle(dir, st)],
     };
-    let info = vec![item("Copy path", Command::CopyPath(vec![d.clone()])), item("Properties", Command::Properties(vec![d.clone()]))];
+    let mut info = vec![item("Copy path", Command::CopyPath(vec![d.clone()])), item("Properties", Command::Properties(vec![d.clone()]))];
+    if let Some(e) = eject.filter(|_| kind == NodeKind::Volume) {
+        info.push(item("Eject", Command::Eject(d.clone(), e.label.to_string())).enabled(e.enabled));
+    }
     Menu { sections: vec![open, clip, change, bookmark, info], new: new_entries(dir), ..Menu::default() }
 }
 
@@ -453,7 +464,7 @@ mod tests {
         let p = Path::new("/w/a");
         let st = State { trash: false, ..state(false) };
         assert!(!has(&file_menu(&[Item { path: p, is_dir: false }], None, &st), "Move to Trash"));
-        assert!(!has(&tree_menu(p, NodeKind::Folder, &st), "Move to Trash"));
+        assert!(!has(&tree_menu(p, NodeKind::Folder, None, &st), "Move to Trash"));
     }
 
     #[test]
@@ -494,17 +505,17 @@ mod tests {
     #[test]
     fn tree_menus_protect_shortcuts_and_volumes() {
         let dir = Path::new("/w/plain");
-        let folder = tree_menu(dir, NodeKind::Folder, &state(true));
+        let folder = tree_menu(dir, NodeKind::Folder, None, &state(true));
         for expected in ["Open", "Open in terminal", "Cut", "Copy", "Paste into folder", "Folder", "Text file", "Duplicate", "Compress to ZIP", "Rename…", "Delete permanently", "Properties"] {
             assert!(has(&folder, expected), "{expected} in {:?}", folder.titles());
         }
         assert!(has(&folder, "Open in new tab") && has(&folder, "Open in other side"));
-        let quick = tree_menu(dir, NodeKind::Quick, &state(true));
+        let quick = tree_menu(dir, NodeKind::Quick, None, &state(true));
         assert!(has(&quick, "Copy") && has(&quick, "Paste into folder"));
         for forbidden in ["Cut", "Rename…", "Move to Trash", "Delete permanently", "Duplicate"] {
             assert!(!offers(&quick, forbidden), "{forbidden} must not be offered for quick access");
         }
-        let volume = tree_menu(dir, NodeKind::Volume, &state(false));
+        let volume = tree_menu(dir, NodeKind::Volume, None, &state(false));
         for forbidden in ["Cut", "Copy", "Rename…", "Delete permanently", "Compress to ZIP"] {
             assert!(!offers(&volume, forbidden), "{forbidden} must not be offered for a drive");
         }
@@ -529,7 +540,7 @@ mod tests {
         assert_eq!(file_menu(&[Item { path: &sub, is_dir: true }], Some(dir), &state(false)).find("Search in folder").unwrap().command, search);
         assert!(!has(&file_menu(&[Item { path: &dir.join("a.txt"), is_dir: false }], Some(dir), &state(false)), "Search in folder"), "not on a file");
         assert_eq!(file_menu(&[], Some(dir), &state(false)).find("Search in folder").unwrap().command, Command::Search(dir.into()));
-        assert_eq!(tree_menu(&sub, NodeKind::Volume, &state(false)).find("Search in folder").unwrap().command, search);
+        assert_eq!(tree_menu(&sub, NodeKind::Volume, None, &state(false)).find("Search in folder").unwrap().command, search);
 
         let a = dir.join("a.txt");
         let one = search_menu(std::slice::from_ref(&a), true);
@@ -558,14 +569,14 @@ mod tests {
         assert_eq!(add(&file_menu(&[Item { path: &sub, is_dir: true }], Some(dir), &state(false))), Some(Command::AddBookmark(sub.clone())));
         assert_eq!(add(&file_menu(&[Item { path: &dir.join("a.txt"), is_dir: false }], Some(dir), &state(false))), None, "not a file");
         assert_eq!(add(&file_menu(&[], Some(dir), &state(false))), Some(Command::AddBookmark(dir.into())), "the folder shown");
-        assert_eq!(add(&tree_menu(&sub, NodeKind::Folder, &state(false))), Some(Command::AddBookmark(sub.clone())));
+        assert_eq!(add(&tree_menu(&sub, NodeKind::Folder, None, &state(false))), Some(Command::AddBookmark(sub.clone())));
 
         let st = State { bookmarks: vec![dir.into(), sub.clone()], ..state(false) };
         let marked = file_menu(&[Item { path: &sub, is_dir: true }], Some(dir), &st);
         assert_eq!(marked.find("Remove from bookmarks").unwrap().command, Command::RemoveBookmark(sub.clone()));
         assert!(!has(&marked, "Add to bookmarks"));
 
-        let last = tree_menu(&sub, NodeKind::Bookmark, &st);
+        let last = tree_menu(&sub, NodeKind::Bookmark, None, &st);
         for expected in ["Rename bookmark…", "Remove bookmark", "Move up", "Move down", "Manage bookmarks…"] {
             assert!(has(&last, expected), "{expected} in {:?}", last.titles());
         }
@@ -575,9 +586,22 @@ mod tests {
         assert!(last.find("Move up").unwrap().enabled);
         assert!(!last.find("Move down").unwrap().enabled, "the last one can't go down");
         assert_eq!(last.find("Move up").unwrap().command, Command::MoveBookmark(sub.clone(), -1));
-        let first = tree_menu(dir, NodeKind::Bookmark, &st);
+        let first = tree_menu(dir, NodeKind::Bookmark, None, &st);
         assert!(!first.find("Move up").unwrap().enabled && first.find("Move down").unwrap().enabled);
         assert!(first.sections.len() <= SECTIONS);
         assert_eq!(bookmarks_header_menu().titles(), ["Manage bookmarks…  (Ctrl+Shift+B)"]);
+    }
+
+    #[test]
+    fn only_drives_people_plug_in_offer_eject() {
+        let root = Path::new("/media/me/STICK");
+        let eject = |enabled| Some(Eject { label: "STICK", enabled });
+        let m = tree_menu(root, NodeKind::Volume, eject(true), &state(false));
+        let e = m.find("Eject").unwrap();
+        assert_eq!(e.command, Command::Eject(root.into(), "STICK".into()));
+        assert!(e.enabled);
+        assert!(!tree_menu(root, NodeKind::Volume, eject(false), &state(false)).find("Eject").unwrap().enabled, "not twice at once");
+        assert!(!has(&tree_menu(root, NodeKind::Volume, None, &state(false)), "Eject"), "an internal disk");
+        assert!(!has(&tree_menu(root, NodeKind::Folder, eject(true), &state(false)), "Eject"), "a folder on it");
     }
 }

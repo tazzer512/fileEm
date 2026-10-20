@@ -8,6 +8,7 @@ pub mod places;
 pub mod preview;
 pub mod search;
 pub mod trash;
+pub mod volumes;
 pub mod watcher;
 
 pub use entry::FileEntry;

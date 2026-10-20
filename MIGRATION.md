@@ -11,8 +11,8 @@ OpenGL, ~32 MB with the software renderer).
 **Status (2026-10-21)**: stages 0–6 (5a view modes and thumbnails, 5b image readers, 6 the
 preview) done on branch `rust`, and the leftovers of stages 1–5 fixed except drag & drop with
 other applications (decided: not possible with Slint 1.18). The Java app in `src/` is still the
-complete, daily-use version; nothing was removed from it. Stage 7: search and bookmarks
-done; next volumes and eject.
+complete, daily-use version; nothing was removed from it. Stage 7 (search, bookmarks,
+drives and eject) done; next stage 8, themes and the About box.
 
 ## How to work a stage
 
@@ -129,7 +129,7 @@ are the Java sources, as a size hint.
   with `'` escaped, else open the folder), launches recorded as "open/terminal/reveal <path>"
   under `FILEEM_NO_LAUNCH`.
 - Later stages added Open in new tab / other side, Copy/Move to other side (stage 3) and the
-  View submenu (stage 5), Search in folder and the bookmark items (stage 7). Not yet: Eject.
+  View submenu (stage 5), Search in folder, the bookmark items and Eject (stage 7).
   The tree outlines the right-clicked row while its menu is open (Java's `context-target`;
   added after 5b): Slint has no "menu closed" event, but a menu takes the keys while open and
   they come back however it closes, so the tree's right-click gives the window's key handler
@@ -283,7 +283,7 @@ are the Java sources, as a size hint.
   (Slint can't activate a window); instead the preview window passes keys on. Docked, the pan
   buttons take a second row (Java wraps by width; from the width here is a binding loop).
 
-### Stage 7: search, bookmarks, volumes, eject
+### Stage 7: search, bookmarks, volumes, eject (done)
 
 - [x] **Search** (`fileem_core::fs::search` with `FileSearchTest` ported, `search_history` with
   `SearchHistoryTest` ported; `src/search.rs` results, `src/app/search.rs`, `ui/search.slint`):
@@ -330,8 +330,31 @@ are the Java sources, as a size hint.
   over the window, live list, Enter opens and closes, empty hint, Escape); a renamed folder takes
   its bookmarks (default name follows, custom name stays). `FILEEM_UI_ONLY=<part of a name>`
   runs only the matching UI scenarios while working on them.
-- `Volumes` 461 (`VolumesTest` 6): mount table parsing, polling with per-volume timeouts,
-  ejectable detection, eject (udisksctl / gio / umount; Windows, macOS), refused while busy.
+- [x] **Drives and eject** (`fileem_core::fs::volumes` with `VolumesTest` ported plus a mount
+  table test; `tree.rs` `set_volumes`; `src/app/volumes.rs`): Linux lists the root, block
+  devices and network shares from `/proc/self/mounts` (system mounts, loop and zram devices
+  left out; `/media`, `/run/media`, `/mnt` and pluggable buses are removable; ejectable: on a
+  USB/MMC bus or mounted by the desktop, not internal disks under `/mnt`), macOS `/Volumes`,
+  Windows the drive letters (`GetDriveTypeW`). Free space per drive with a 1.5 s timeout; a hung
+  mount keeps one stuck lookup, reused by later polls. A thread polls every 5 s (and right after
+  an eject) and hands over only changed lists; the window starts with the mount table alone (no
+  space yet). The tree shows "free of" text and, for ejectable drives, an eject button before it
+  (the free space is cut off first) and an Eject menu item. Ejecting removes the whole drive
+  (`same_drive`: its other mounted partitions via sysfs), is refused while a running operation
+  uses it, moves tabs on it home and waits until they left (up to 5 s), then runs the eject in
+  the background (Linux: `udisksctl unmount` each partition + `power-off`, a failed power-off
+  still counts; else `gio mount --eject`; else `umount`. macOS `diskutil eject`, Windows the
+  Explorer verb then waits for the drive to go); "Ejecting…" meanwhile, no second eject; the
+  result or the reason in a dialog. `places::volumes` is gone.
+- UI tests: space texts, icons, order, only plugged-in drives offer Eject (menu, row button);
+  eject from the row button (tabs leave first, no second eject meanwhile, the notice); refused
+  while an operation uses the drive; the whole drive (a tab in the other side on the other
+  partition leaves, "The drive with “photos” and “storage”"); a failure shows the reason and
+  can be retried. Tests swap the real eject (`app::set_ejector`) and show their own drives
+  (`app::show_volumes`, which stops the polling); nothing is ever ejected for real.
+- Differences: the Windows drive labels are "Local Disk (C:)" / "Drive (E:)" without the
+  volume name (Java asks the file store; that needs `GetVolumeInformationW`), and the Windows
+  and macOS code paths are untested (no such machine here; the Java ones are untested too).
 
 ### Stage 8: themes and about
 

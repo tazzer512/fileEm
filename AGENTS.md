@@ -47,6 +47,10 @@ remove or break it.
   (toggle, menus, `Tree::set_bookmarks` in both trees, the Manage window in
   `ui/bookmarks.slint`). Change them only through `app/bookmarks.rs` so trees, toolbar and the
   Manage window stay in sync; tests read them with `app::bookmarks` / `bookmarks_window`.
+- Drives are `fileem_core::fs::volumes` (listing, space with timeouts, eject commands) and
+  `src/app/volumes.rs` (5 s polling thread, the trees' drives, the eject flow). UI tests never
+  eject for real: they put in a fake with `app::set_ejector` and show their own drives with
+  `app::show_volumes` (which stops the polling).
 - The release profile keeps `panic = "unwind"` on purpose (+2 MB): `images::decode` catches a
   decoder's panic on a damaged file, so it costs one thumbnail instead of the app. Don't switch
   back to `abort`.

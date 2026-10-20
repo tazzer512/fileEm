@@ -10,6 +10,7 @@
 //! - `preview`: the preview of the selected file, docked or in its own window
 //! - `search`: search windows
 //! - `bookmarks`: bookmarks, their tree section and the Manage bookmarks window
+//! - `volumes`: the drives (polling) and ejecting them
 
 mod bookmarks;
 mod commands;
@@ -19,8 +20,10 @@ mod nav;
 mod preview;
 mod search;
 mod views;
+mod volumes;
 
 use std::cell::RefCell;
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::atomic::AtomicBool;
@@ -31,6 +34,7 @@ use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 
 use fileem_core::bookmarks::Bookmarks;
 use fileem_core::fs::listing::SortKey;
+use fileem_core::fs::volumes::Volume;
 use fileem_core::fs::places;
 use fileem_core::fs::watcher::WatchHandle;
 use fileem_core::fs::{Category, FileEntry};
@@ -50,6 +54,7 @@ use crate::tree::{NodeKind, Tree};
 use crate::view_mode::{ViewMode, ViewState};
 use crate::{AppWindow, ColumnRow, CrumbRow, FileRow, PropertiesWindow, SideView, TabRow, TreeRow};
 
+pub use volumes::{Ejector, SystemEjector};
 pub use commands::{
     clipboard_text, close_requested, close_windows, open_dialog, properties_windows, run_command, run_operation,
     set_clipboard, Dialog, DialogSpec,
@@ -123,9 +128,9 @@ pub struct Side {
 }
 
 impl Side {
-    fn new() -> Side {
+    fn new(quick: &[places::Place], drives: &[crate::tree::Drive]) -> Side {
         Side {
-            tree: Tree::new(&places::quick_access(), &places::volumes()),
+            tree: Tree::new(quick, drives),
             tabs: Vec::new(),
             active: 0,
             reveal_token: 0,
@@ -196,6 +201,12 @@ pub struct App {
     /// Shared by both trees.
     bookmarks: Bookmarks,
     manage: Option<bookmarks::Manage>,
+    /// The drives as last listed, and the ones being ejected.
+    volumes: Vec<Volume>,
+    ejecting: HashSet<PathBuf>,
+    ejector: Arc<dyn Ejector>,
+    /// Lists the drives every few seconds; `None` once a test shows its own.
+    poller: Option<volumes::Poller>,
 }
 
 pub type Shared = Rc<RefCell<App>>;
@@ -274,12 +285,15 @@ pub fn install(ui: &AppWindow, session: Rc<Session>, start: Option<PathBuf>) -> 
         SortKey::from_id(&session.get_or("sort.column", "name")).unwrap_or(SortKey::Name),
         session.get_bool("sort.ascending", true),
     );
+    // the mount table only: the free space comes with the first poll
+    let drives_now = fileem_core::fs::volumes::mounts();
+    let (quick, drive_rows) = (places::quick_access(), volumes::drives(&drives_now, &HashSet::new()));
     let app = Rc::new(RefCell::new(App {
         ui: ui.as_weak(),
         columns: Columns::restore(&session),
         dual: session.get_bool("dual", false),
         session: session.clone(),
-        sides: [Side::new(), Side::new()],
+        sides: [Side::new(&quick, &drive_rows), Side::new(&quick, &drive_rows)],
         active: 0,
         show_hidden,
         next_id: 0,
@@ -297,6 +311,10 @@ pub fn install(ui: &AppWindow, session: Rc<Session>, start: Option<PathBuf>) -> 
         history: SearchHistory::load(&session),
         bookmarks: Bookmarks::load(&session),
         manage: None,
+        volumes: drives_now.clone(),
+        ejecting: HashSet::new(),
+        ejector: Arc::new(SystemEjector),
+        poller: None,
         thumbs: Thumbnails::new({
             let ui = ui.as_weak();
             move || {
@@ -349,6 +367,7 @@ pub fn install(ui: &AppWindow, session: Rc<Session>, start: Option<PathBuf>) -> 
         sync_files(&app, s);
     }
     bookmarks::sync(&app);
+    volumes::start(&app, drives_now);
     sync_window(&app);
     preview::restore(&app);
     for (id, dir) in opening {
@@ -436,6 +455,21 @@ pub fn bookmarks(app: &Shared) -> Vec<(String, PathBuf)> {
 /// The Manage bookmarks window, when open.
 pub fn bookmarks_window(app: &Shared) -> Option<crate::BookmarksWindow> {
     bookmarks::window(app)
+}
+
+/// Shows these drives instead of the system's and stops following the system's (tests).
+pub fn show_volumes(app: &Shared, list: Vec<Volume>) {
+    volumes::show(app, list);
+}
+
+/// Replaces the real eject (tests: never eject for real).
+pub fn set_ejector(app: &Shared, ejector: Arc<dyn Ejector>) {
+    app.borrow_mut().ejector = ejector;
+}
+
+/// Whether the drive at `root` is being ejected.
+pub fn is_ejecting(app: &Shared, root: &Path) -> bool {
+    volumes::is_ejecting(app, root)
 }
 
 pub fn session(app: &Shared) -> Rc<Session> {
@@ -633,6 +667,18 @@ fn wire(ui: &AppWindow, app: &Shared) {
         views::grid_range(app, side as usize, first.max(0) as usize, count.max(0) as usize);
     });
     on!(on_thumbs_ready, app => | | views::thumbs_ready(app));
+    on!(on_volumes_changed, app => | | volumes::changed(app));
+    on!(on_tree_eject, app => |side, row| {
+        nav::set_active_side(app, side as usize);
+        let drive = {
+            let a = app.borrow();
+            let t = &a.sides[side as usize].tree;
+            t.rows().get(row as usize).and_then(|&id| t.node(id).drive.clone()).filter(|d| d.ejectable)
+        };
+        if let Some(d) = drive {
+            volumes::eject(app, d.path, d.name);
+        }
+    });
 }
 
 // ---- models ----
@@ -777,9 +823,16 @@ fn sync_tree(app: &Shared, side: usize) {
                 current: t.current() == Some(id),
                 on_path: t.on_path(id),
                 draggable: n.path.is_some() && matches!(n.kind, NodeKind::Folder | NodeKind::Quick),
+                extra: n.drive.as_ref().and_then(|d| d.extra.clone()).unwrap_or_default().into(),
+                ejectable: n.drive.as_ref().is_some_and(|d| d.ejectable),
+                ejecting: n.path.as_ref().is_some_and(|p| a.ejecting.contains(p)),
                 icon: match n.kind {
                     NodeKind::Quick if n.depth == 0 && n.name == "Home" => 20,
-                    NodeKind::Volume => 21,
+                    NodeKind::Volume => match n.drive.as_ref().map(|d| d.kind) {
+                        Some(fileem_core::fs::volumes::Kind::Removable) => 24,
+                        Some(fileem_core::fs::volumes::Kind::Network) => 25,
+                        _ => 21,
+                    },
                     NodeKind::Bookmark if n.depth == 0 => 22,
                     _ => 0,
                 },

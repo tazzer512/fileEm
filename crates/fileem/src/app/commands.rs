@@ -297,8 +297,10 @@ pub fn tree_menu(app: &Shared, side: usize, row: usize) -> bool {
         t.rows().get(row).map(|&id| t.node(id).clone())
     };
     let Some(node) = node else { return false };
-    let m = match node.path {
-        Some(path) => menu::tree_menu(&path, node.kind, &menu_state(app)),
+    let ejecting = node.path.as_deref().is_some_and(|p| super::volumes::is_ejecting(app, p));
+    let eject = node.drive.as_ref().filter(|d| d.ejectable).map(|d| menu::Eject { label: &d.name, enabled: !ejecting });
+    let m = match &node.path {
+        Some(path) => menu::tree_menu(path, node.kind, eject, &menu_state(app)),
         None if node.kind == NodeKind::BookmarkHeader => menu::bookmarks_header_menu(),
         None => return false,
     };
@@ -482,6 +484,7 @@ pub fn run_command(app: &Shared, command: Command) {
         Command::ManageBookmarks => {
             super::bookmarks::manage(app);
         }
+        Command::Eject(root, label) => super::volumes::eject(app, root, label),
     }
 }
 
@@ -584,6 +587,7 @@ pub fn close_windows(app: &Shared) {
     super::preview::hide_window(app);
     super::search::close_all(app);
     super::bookmarks::close(app);
+    app.borrow_mut().poller = None;
     let ids: Vec<u64> = app.borrow().properties.iter().map(|(i, ..)| *i).collect();
     for id in ids {
         close_properties(app, id);
