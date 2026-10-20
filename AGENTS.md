@@ -26,12 +26,20 @@ remove or break it.
 - Always say plainly what the Rust app still lacks compared to the Java app (the open stages in
   `MIGRATION.md`); "stage done" never means "feature-complete".
 - The Rust controller keeps all state (`crates/fileem/src/app.rs` + `app/`: `nav`, `commands`,
-  `keys`, `dnd`, `views`); `.slint` files only
-  lay out and draw. Image decoding (thumbnails, later the preview) is `fileem_core::images`
-  (common formats, PSD, camera raw, JPEG 2000 via `hayro-jpeg2000`, Netpbm); its test files
-  are in `images::fixtures` (feature `fixtures` for the UI tests). Toolkit-free logic (`tab.rs`, `tree.rs`, `menu.rs`, `columns.rs`,
-  `address.rs`, `properties.rs`, `view_mode.rs`, `grid.rs`, `thumbs.rs`) gets unit tests; UI behavior gets a scenario in
-  `crates/fileem/tests/ui.rs`. Visual checks: `cargo test -p fileem --test snapshots -- --ignored`.
+  `keys`, `dnd`, `views`); `.slint` files only lay out and draw. Toolkit-free logic (`tab.rs`,
+  `tree.rs`, `menu.rs`, `columns.rs`, `address.rs`, `properties.rs`, `view_mode.rs`, `grid.rs`,
+  `thumbs.rs`) gets unit tests; UI behavior gets a scenario in `crates/fileem/tests/ui.rs`.
+  Visual checks: `cargo test -p fileem --test snapshots -- --ignored`.
+- Image decoding (thumbnails, and the preview from stage 6 on) is `fileem_core::images`: one
+  `decode(path, max_side)` for common formats (`image` crate, EXIF orientation applied), PSD,
+  camera raw, JPEG 2000 (`hayro-jpeg2000`) and Netpbm; never enlarged, `Ok(None)` for what it
+  can't show. Test files are built by `images::fixtures` (feature `fixtures`, enabled for the
+  UI tests) plus the OpenJPEG files in `crates/fileem-core/testdata/jpeg2000`.
+- The release profile keeps `panic = "unwind"` on purpose (+2 MB): `images::decode` catches a
+  decoder's panic on a damaged file, so it costs one thumbnail instead of the app. Don't switch
+  back to `abort`.
+- UI tests read thumbnails at the view's load size (Large icons load at 96 px), not the
+  icon size shown; check pixels through `thumb.to_rgba8()`.
 
 ## Tests are mandatory
 
