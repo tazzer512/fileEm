@@ -9,6 +9,7 @@ use std::time::{Duration, Instant};
 
 use std::rc::Rc;
 
+use fileem::view_mode::ViewMode;
 use fileem::{app, shell, AppWindow, FileRow, ProgressWindow, PropertiesWindow, SideView, TreeRow};
 use fileem_core::ops::{Decision, FileOperation, Kind, Resolution};
 use fileem_core::session::Session;
@@ -175,7 +176,11 @@ impl Fixture {
 
     /// An item of the open menu, by its full title.
     fn menu_item(&self, title: &str) -> Option<ElementHandle> {
-        ElementHandle::find_by_accessible_label(&self.ui, title).find(|e| e.size().width > 0.0)
+        // the open menu's popup comes after the window's elements (a column header may have the
+        // same text)
+        ElementHandle::find_by_accessible_label(&self.ui, title)
+            .filter(|e| e.size().width > 0.0 && e.accessible_role() != Some(i_slint_backend_testing::AccessibleRole::Button))
+            .last()
     }
 
     /// Clicks a menu item (a submenu opens; an item runs and closes the menu).
@@ -365,6 +370,18 @@ fn ui() {
     a_box_from_empty_space_selects_upwards_and_shift_adds();
     ctrl_box_toggles_and_a_box_below_the_list_scrolls_it();
     showing_the_second_side_keeps_the_left_scroll_position();
+    // view modes (stage 5)
+    the_view_button_and_menus_switch_views_and_keep_the_selection();
+    the_sort_button_sorts_and_shows_the_direction();
+    ctrl_shift_digits_and_ctrl_wheel_switch_the_view();
+    size_controls_resize_within_limits_and_each_view_keeps_its_size();
+    sizes_and_views_survive_the_session_and_new_tabs_inherit_the_view();
+    clicking_in_the_grid_selects_like_explorer_and_double_click_opens();
+    arrow_keys_follow_the_grid_layout();
+    a_box_in_the_grid_selects_the_items_it_touches();
+    a_file_dragged_onto_a_folder_in_the_grid_asks_then_moves();
+    grid_menus_target_the_item_or_the_folder_and_type_ahead_works();
+    images_show_as_thumbnails_in_the_big_icon_views();
 }
 
 fn lists_folders_first_with_status_and_no_hidden_files() {
@@ -1150,7 +1167,7 @@ fn both_lists_stay_usable_in_a_narrow_dual_window() {
 // ---- drag & drop, selection box ----
 
 fn box_shown(f: &Fixture) -> bool {
-    ElementHandle::find_by_accessible_label(&f.ui, "Selection box").any(|e| e.size().height > 0.0)
+    ElementHandle::find_by_accessible_label(&f.ui, "Selection box").any(|e| e.size().height > 0.0 || e.size().width > 0.0)
 }
 
 fn answer_drop(f: &Fixture, button: &str) {
@@ -1321,9 +1338,14 @@ fn ctrl_box_toggles_and_a_box_below_the_list_scrolls_it() {
     let status = f.element("Status");
     let below = LogicalPosition::new(status.absolute_position().x + 200.0, status.absolute_position().y + 10.0);
     f.drag_to(f.on_size("f00.txt"), below, &[]);
-    wait_until(&f, "scrolled to the end", |f| f.selected().len() == 60);
+    // ListView may nudge the scroll position while it re-measures: wait for the end itself
+    wait_until(&f, "scrolled to the end", |f| f.selected().len() == 60 && f.current().as_deref() == Some("f59.txt"));
     f.release(below);
     assert_eq!(f.current().as_deref(), Some("f59.txt"));
+    // regression: the row the box started on had scrolled away and took the release with it;
+    // the box stayed armed, kept scrolling and blocked the next drag
+    settle(&f);
+    assert!(!box_shown(&f), "the box ended with the release");
 }
 
 fn showing_the_second_side_keeps_the_left_scroll_position() {
@@ -1344,4 +1366,316 @@ fn showing_the_second_side_keeps_the_left_scroll_position() {
     pump();
     // regression: toggling rebuilt the left side, back at the top with f59 out of view
     assert_eq!(f.list_row("f59.txt").absolute_position().y, y);
+}
+
+// ---- view modes ----
+
+/// A fresh folder `name` inside the test folder with these files ("x/" for a folder), shown.
+fn open_folder(f: &Fixture, name: &str, files: &[&str]) -> PathBuf {
+    let dir = f.dir.join(name);
+    fs::create_dir(&dir).unwrap();
+    for n in files {
+        match n.strip_suffix('/') {
+            Some(d) => fs::create_dir(dir.join(d)).unwrap(),
+            None => fs::write(dir.join(n), "x").unwrap(),
+        }
+    }
+    f.ui.invoke_address_entered(0, dir.display().to_string().into());
+    wait_until(f, "the folder is shown", |f| f.address() == dir && f.names().len() == files.len());
+    dir
+}
+
+fn set_view(f: &Fixture, mode: ViewMode) {
+    app::run_command(&f.app, fileem::menu::Command::SetView(mode));
+    pump();
+}
+
+fn view(f: &Fixture) -> ViewMode {
+    app::view_of(&f.app, 0).0
+}
+
+fn icon_px(f: &Fixture) -> u32 {
+    app::view_of(&f.app, 0).1
+}
+
+/// The names of the items the grid shows, in order (only built slots exist).
+fn grid_names(f: &Fixture) -> Vec<String> {
+    let tree_width = f.ui.get_left().tree_width;
+    let mut items: Vec<(f32, f32, String)> = f
+        .names()
+        .iter()
+        .flat_map(|n| ElementHandle::find_by_accessible_label(&f.ui, n).collect::<Vec<_>>())
+        .filter(|e| e.accessible_role() == Some(i_slint_backend_testing::AccessibleRole::ListItem) && e.absolute_position().x > tree_width)
+        .map(|e| (e.absolute_position().y, e.absolute_position().x, e.accessible_label().unwrap().to_string()))
+        .collect();
+    items.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    items.dedup();
+    items.into_iter().map(|i| i.2).collect()
+}
+
+fn the_view_button_and_menus_switch_views_and_keep_the_selection() {
+    let f = open_window();
+    f.click("notes.txt");
+    f.click("View (Ctrl+Shift+1…8, Ctrl+wheel)");
+    for title in ["Extra large icons  (Ctrl+Shift+1)", "Details  (Ctrl+Shift+6)", "Content  (Ctrl+Shift+8)"] {
+        assert!(f.menu_item(title).is_some(), "{title}");
+    }
+    f.pick("Tiles  (Ctrl+Shift+7)");
+    assert_eq!(view(&f), ViewMode::Tiles);
+    assert_eq!(f.view().view_mode, ViewMode::Tiles.index() as i32, "the button shows the view");
+    for m in ViewMode::ALL {
+        set_view(&f, m);
+        assert_eq!(view(&f), m);
+        if m == ViewMode::Details {
+            assert_eq!(f.view().list_files.row_count(), 5, "the list shows the rows");
+        } else {
+            assert_eq!(grid_names(&f), ["alpha", "beta", "a.png", "big.bin", "notes.txt"], "{m:?} shows the items in order");
+            assert_eq!(f.view().list_files.row_count(), 0, "no hidden list rows");
+        }
+        assert_eq!(f.selected(), ["notes.txt"], "the selection carries over to {m:?}");
+    }
+    // the folder's menu has the views too, the current one checked
+    f.right_click_at(LogicalPosition::new(700.0, 500.0));
+    f.pick("View");
+    assert!(f.menu_item("Content  (Ctrl+Shift+8)").is_some());
+    f.pick("Small icons  (Ctrl+Shift+4)");
+    assert_eq!(view(&f), ViewMode::SmallIcons);
+}
+
+fn the_sort_button_sorts_and_shows_the_direction() {
+    let f = open_window();
+    let sort_button = |f: &Fixture| f.view().sort_tooltip.to_string();
+    assert_eq!(sort_button(&f), "Sort by Name, ascending");
+    f.click(&sort_button(&f));
+    f.pick("Size");
+    assert_eq!(f.names(), ["alpha", "beta", "a.png", "notes.txt", "big.bin"]);
+    f.click(&sort_button(&f));
+    f.pick("Descending");
+    assert_eq!(f.names(), ["beta", "alpha", "big.bin", "notes.txt", "a.png"]);
+    assert_eq!(sort_button(&f), "Sort by Size, descending");
+    assert!(!f.view().sort_ascending);
+}
+
+fn ctrl_shift_digits_and_ctrl_wheel_switch_the_view() {
+    let f = open_window();
+    f.chord(&[Key::Control, Key::Shift], "!");
+    assert_eq!(view(&f), ViewMode::ExtraLargeIcons, "US layout: Shift+1 is !");
+    f.chord(&[Key::Control, Key::Shift], "7");
+    assert_eq!(view(&f), ViewMode::Tiles);
+    f.chord(&[Key::Control, Key::Shift], "^");
+    assert_eq!(view(&f), ViewMode::Details);
+
+    // Ctrl+wheel over the files: up toward bigger icons, down toward Content
+    let wheel = |f: &Fixture, at: LogicalPosition, delta: f32| {
+        let w = f.ui.window();
+        w.dispatch_event(WindowEvent::KeyPressed { text: Key::Control.into() });
+        w.dispatch_event(WindowEvent::PointerMoved { position: at });
+        w.dispatch_event(WindowEvent::PointerScrolled { position: at, delta_x: 0.0, delta_y: delta });
+        w.dispatch_event(WindowEvent::KeyReleased { text: Key::Control.into() });
+        pump();
+    };
+    let empty = LogicalPosition::new(700.0, 500.0);
+    wheel(&f, empty, 40.0);
+    assert_eq!(view(&f), ViewMode::List, "below the rows");
+    wheel(&f, empty, -40.0);
+    assert_eq!(view(&f), ViewMode::Details, "on the grid's empty space");
+    wheel(&f, f.on_name("notes.txt"), -20.0);
+    assert_eq!(view(&f), ViewMode::Details, "less than a notch");
+    wheel(&f, f.on_name("notes.txt"), -20.0);
+    assert_eq!(view(&f), ViewMode::Tiles);
+}
+
+fn size_controls_resize_within_limits_and_each_view_keeps_its_size() {
+    let f = open_window();
+    for m in ViewMode::ALL {
+        set_view(&f, m);
+        assert_eq!(f.view().resizable, m.resizable(), "{m:?}");
+        assert_eq!(ElementHandle::find_by_accessible_label(&f.ui, "Bigger items (Ctrl++)").next().is_some(), m.resizable(), "{m:?} +");
+    }
+    set_view(&f, ViewMode::LargeIcons);
+    let width = f.list_row("notes.txt").size().width;
+    assert_eq!(icon_px(&f), 96);
+    f.click("Bigger items (Ctrl++)");
+    assert_eq!(icon_px(&f), 120);
+    pump();
+    assert!(f.list_row("notes.txt").size().width > width, "the items grew");
+    f.click("Smaller items (Ctrl+−)");
+    f.click("Smaller items (Ctrl+−)");
+    assert_eq!(icon_px(&f), 77);
+
+    // the slider: the middle is the view's own size, the ends the limits
+    f.ui.invoke_size_slider_moved(0, 1.0);
+    assert_eq!(icon_px(&f), 320);
+    assert!(!f.view().can_bigger);
+    f.ui.invoke_size_slider_moved(0, -1.0);
+    assert_eq!(icon_px(&f), 16);
+    f.ui.invoke_size_slider_moved(0, 0.02);
+    assert_eq!(icon_px(&f), 96, "near the middle snaps to the default");
+    assert_eq!(f.view().size_slider, 0.0);
+
+    // keys, and each view keeps its own size
+    set_view(&f, ViewMode::Tiles);
+    f.chord(&[Key::Control], "=");
+    assert_eq!(icon_px(&f), 60);
+    set_view(&f, ViewMode::MediumIcons);
+    assert_eq!(icon_px(&f), 48, "another view keeps its own size");
+    f.chord(&[Key::Control], "-");
+    assert_eq!(icon_px(&f), 38);
+    set_view(&f, ViewMode::SmallIcons);
+    assert!(!f.view().can_smaller, "Small icons are the smallest already");
+    set_view(&f, ViewMode::Details);
+    f.chord(&[Key::Control], "=");
+    set_view(&f, ViewMode::Tiles);
+    assert_eq!(icon_px(&f), 60, "switching back restores the size; Ctrl+= did nothing in Details");
+}
+
+fn sizes_and_views_survive_the_session_and_new_tabs_inherit_the_view() {
+    let f = open_window();
+    set_view(&f, ViewMode::MediumIcons);
+    f.ui.invoke_size_slider_moved(0, 0.37);
+    let px = icon_px(&f);
+    set_view(&f, ViewMode::Tiles);
+    f.chord(&[Key::Control], "t");
+    wait_until(&f, "a second tab", |f| app::tabs(&f.app, 0).0.len() == 2 && f.names().len() == 5);
+    assert_eq!(view(&f), ViewMode::Tiles, "a new tab opens in the view you're using");
+    set_view(&f, ViewMode::List);
+    app::collect_session(&f.app);
+    let session = app::session(&f.app);
+    assert_eq!(session.get("left.tab.0.view").as_deref(), Some("tiles"));
+    assert_eq!(session.get("left.tab.1.view").as_deref(), Some("list"));
+    assert!(session.get("left.tab.0.size").is_some_and(|s| s.starts_with("medium-icons:") && s.contains('.')), "fractional steps: {:?}", session.get("left.tab.0.size"));
+
+    let ui = AppWindow::new().unwrap();
+    let again = app::install(&ui, session, None);
+    assert_eq!(app::tab_views(&again, 0), [ViewMode::Tiles, ViewMode::List]);
+    assert_eq!(app::view_of(&again, 0).0, ViewMode::List, "the selected tab");
+    ui.invoke_tab_clicked(0, 0);
+    app::run_command(&again, fileem::menu::Command::SetView(ViewMode::MediumIcons));
+    assert_eq!(app::view_of(&again, 0), (ViewMode::MediumIcons, px), "the fractional size came back");
+}
+
+fn clicking_in_the_grid_selects_like_explorer_and_double_click_opens() {
+    let f = open_window();
+    let dir = open_folder(&f, "gridclick", &["sub/", "a.txt", "b.txt", "c.txt"]);
+    set_view(&f, ViewMode::LargeIcons);
+    f.click_at(&f.list_row("a.txt"));
+    assert_eq!(f.selected(), ["a.txt"]);
+    ctrl_click(&f, "c.txt");
+    assert_eq!(f.selected(), ["a.txt", "c.txt"]);
+    let w = f.ui.window();
+    w.dispatch_event(WindowEvent::KeyPressed { text: Key::Shift.into() });
+    f.click_at(&f.list_row("b.txt"));
+    w.dispatch_event(WindowEvent::KeyReleased { text: Key::Shift.into() });
+    assert_eq!(f.selected(), ["b.txt", "c.txt"], "shift selects from the last clicked item");
+    let sub = f.list_row("sub");
+    f.click_at(&sub);
+    f.click_at(&sub);
+    wait_until(&f, "sub opened", |f| f.address() == dir.join("sub"));
+    assert_eq!(view(&f), ViewMode::LargeIcons, "the tab keeps its view");
+}
+
+fn arrow_keys_follow_the_grid_layout() {
+    let f = open_window();
+    let names: Vec<String> = (0..40).map(|i| format!("f{i:02}.txt")).collect();
+    open_folder(&f, "gridkeys", &names.iter().map(String::as_str).collect::<Vec<_>>());
+    set_view(&f, ViewMode::MediumIcons);
+    f.key(Key::Home);
+    let lanes = app::grid(&f.app, 0).unwrap().lanes;
+    assert!(lanes > 1, "several icons per row");
+    f.key(Key::RightArrow);
+    assert_eq!(f.selected(), ["f01.txt"]);
+    f.key(Key::DownArrow);
+    assert_eq!(f.selected(), [names[1 + lanes].clone()], "Down moves one row");
+    f.chord(&[Key::Shift], Key::LeftArrow);
+    assert_eq!(f.selected(), [names[lanes].clone(), names[1 + lanes].clone()], "Shift extends");
+    f.key(Key::End);
+    assert_eq!(f.selected(), ["f39.txt"]);
+    pump();
+    assert!(f.list_row("f39.txt").absolute_position().y < 700.0, "scrolled into view");
+
+    set_view(&f, ViewMode::List);
+    f.key(Key::Home);
+    let rows = app::grid(&f.app, 0).unwrap().lanes;
+    f.key(Key::DownArrow);
+    assert_eq!(f.selected(), ["f01.txt"], "List runs down the column");
+    f.key(Key::RightArrow);
+    assert_eq!(f.selected(), [names[(1 + rows).min(39)].clone()], "Right moves one column");
+    set_view(&f, ViewMode::Details);
+    f.key(Key::Home);
+    f.key(Key::RightArrow);
+    assert_eq!(f.selected(), ["f00.txt"], "Details doesn't move sideways");
+}
+
+fn a_box_in_the_grid_selects_the_items_it_touches() {
+    let f = open_window();
+    open_folder(&f, "gridbox", &["a.txt", "b.txt", "c.txt"]);
+    set_view(&f, ViewMode::LargeIcons);
+    let c = f.center(&f.list_row("c.txt"));
+    let b = f.center(&f.list_row("b.txt"));
+    // from the empty space right of the last item, left into b
+    let from = LogicalPosition::new(c.x + 300.0, c.y);
+    f.drag_to(from, b, &[]);
+    assert!(box_shown(&f), "the box shows while dragging");
+    f.release(b);
+    assert_eq!(f.selected(), ["b.txt", "c.txt"]);
+    assert!(!box_shown(&f));
+    let w = f.ui.window();
+    w.dispatch_event(WindowEvent::PointerPressed { position: from, button: PointerEventButton::Left });
+    w.dispatch_event(WindowEvent::PointerReleased { position: from, button: PointerEventButton::Left });
+    assert!(f.selected().is_empty(), "a click on empty space clears the selection");
+}
+
+fn a_file_dragged_onto_a_folder_in_the_grid_asks_then_moves() {
+    let f = open_window();
+    let dir = open_folder(&f, "griddnd", &["into/", "drag.txt"]);
+    set_view(&f, ViewMode::Tiles);
+    let launched = shell::launched().len();
+    f.drag_drop(f.center(&f.list_row("drag.txt")), f.center(&f.list_row("into")));
+    answer_drop(&f, "Move");
+    wait_until(&f, "moved into the folder", |_| dir.join("into/drag.txt").exists() && !dir.join("drag.txt").exists());
+    assert_eq!(shell::launched().len(), launched, "dragging never opens the file");
+}
+
+fn grid_menus_target_the_item_or_the_folder_and_type_ahead_works() {
+    let f = open_window();
+    open_folder(&f, "gridmenu", &["apple.txt", "notes.txt", "zebra.txt"]);
+    set_view(&f, ViewMode::Content);
+    f.right_click(&f.list_row("notes.txt"));
+    assert_eq!(f.selected(), ["notes.txt"], "right-click selects the item");
+    assert!(f.menu_item("Open").is_some());
+    f.key(Key::Escape);
+    pump();
+    f.right_click_at(LogicalPosition::new(700.0, 500.0));
+    assert!(f.selected().is_empty(), "empty space: the folder's menu");
+    assert!(f.menu_item("View").is_some(), "the folder menu offers the views");
+    f.key(Key::Escape);
+    pump();
+    set_view(&f, ViewMode::SmallIcons);
+    f.type_text("ze");
+    assert_eq!(f.selected(), ["zebra.txt"]);
+}
+
+fn images_show_as_thumbnails_in_the_big_icon_views() {
+    let f = open_window();
+    let dir = f.dir.join("thumbs");
+    fs::create_dir(&dir).unwrap();
+    image::RgbImage::from_pixel(64, 40, image::Rgb([20, 120, 220])).save(dir.join("pic.png")).unwrap();
+    fs::write(dir.join("broken.png"), "not an image").unwrap();
+    fs::write(dir.join("plain.txt"), "x").unwrap();
+    f.ui.invoke_address_entered(0, dir.display().to_string().into());
+    wait_until(&f, "listed", |f| f.names() == ["broken.png", "pic.png", "plain.txt"]);
+    let thumb = |f: &Fixture, i: usize| f.rows()[i].thumb.size().width > 0;
+    assert!(!thumb(&f, 1), "no thumbnails in Details");
+    set_view(&f, ViewMode::LargeIcons);
+    wait_until(&f, "the thumbnail", |f| thumb(f, 1));
+    assert!(ElementHandle::find_by_accessible_label(&f.ui, "Thumbnail").next().is_some(), "drawn");
+    settle(&f);
+    assert!(!thumb(&f, 0), "a broken file keeps its icon");
+    assert!(!thumb(&f, 2), "other files keep their type icon");
+    set_view(&f, ViewMode::SmallIcons);
+    assert!(!thumb(&f, 1), "small views use icons");
+    // regression: reading the images for thumbnails refreshed the folder, over and over
+    let listed = f.names();
+    settle(&f);
+    assert_eq!(f.names(), listed);
 }

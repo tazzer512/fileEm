@@ -16,7 +16,7 @@ use fileem_core::ops::{names, Handle, Kind, State};
 use fileem_core::util::{fs_util, os};
 
 use super::nav::{self, refresh_selecting};
-use super::{icon_of, push_columns, set_status, sync_files, sync_selection, Shared};
+use super::{icon_of, push_columns, set_status, sync_files, sync_selection, views, Shared};
 use crate::address;
 use crate::bg;
 use crate::clipboard::FileClipboard;
@@ -231,7 +231,8 @@ fn new_item(app: &Shared, dir: PathBuf, folder: bool) {
 fn menu_state(app: &Shared) -> menu::State {
     let can_paste = app.borrow_mut().clipboard.get().is_some();
     let a = app.borrow();
-    menu::State { can_paste, trash: trash::is_supported(), sort: a.tab().sort(), show_hidden: a.show_hidden, dual: a.dual }
+    let view = a.side().tabs[a.side().active].view.mode;
+    menu::State { can_paste, trash: trash::is_supported(), sort: a.tab().sort(), view, show_hidden: a.show_hidden, dual: a.dual }
 }
 
 /// A right-click on list row `row` (-1: empty space) of the active side: selects as Explorer
@@ -277,6 +278,21 @@ pub fn header_menu(app: &Shared) {
     set_menu(app, m);
 }
 
+/// The view button next to the address bar.
+pub fn view_menu(app: &Shared) {
+    let mode = {
+        let a = app.borrow();
+        a.side().tabs[a.side().active].view.mode
+    };
+    set_menu(app, menu::view_menu(mode));
+}
+
+/// The sort button next to the view button.
+pub fn sort_menu(app: &Shared) {
+    let sort = app.borrow().tab().sort();
+    set_menu(app, menu::sort_menu(sort));
+}
+
 pub fn tab_menu(app: &Shared, side: usize, index: usize) {
     let n = app.borrow().sides[side].tabs.len();
     set_menu(app, menu::tab_menu(side, index, n));
@@ -306,6 +322,7 @@ fn set_menu(app: &Shared, m: Menu) {
     let Some(ui) = app.borrow().ui.upgrade() else { return };
     ui.set_menu_s0(rows(section(0)));
     ui.set_menu_s1(rows(section(1)));
+    ui.set_menu_view(rows(&m.view));
     ui.set_menu_sort(rows(&m.sort));
     ui.set_menu_new(rows(&m.new));
     ui.set_menu_s2(rows(section(2)));
@@ -380,6 +397,7 @@ pub fn run_command(app: &Shared, command: Command) {
             app.borrow_mut().tab_mut().set_sort(key, asc);
             sync_files(app, side);
         }
+        Command::SetView(mode) => views::set_view(app, side, mode),
         Command::ToggleHidden => nav::toggle_hidden(app),
         Command::Refresh => nav::refresh_active(app),
         Command::ToggleColumn(c) => {

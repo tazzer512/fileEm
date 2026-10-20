@@ -72,8 +72,18 @@ export component AppWindow inherits Window {
     callback filter-edited(int, string);
     callback row-released(int, int);
     callback box-start(int, bool, bool);
-    callback box-moved(int, length, length, length);
+    callback box-moved(int, length, length, length, length);
     callback box-ended(int, bool);
+    // ---- views (see SidePane) ----
+    callback view-menu(int);
+    callback sort-menu(int);
+    callback size-step(int, int);
+    callback size-slider-moved(int, float);
+    callback view-wheel(int, length);
+    callback grid-resized(int, length, length);
+    callback grid-range(int, int, int);
+    // the thumbnail threads decoded something (src/thumbs.rs)
+    callback thumbs-ready();
     // ---- drag & drop inside the window (see SidePane) ----
     in property <data-transfer> drag-data;
     callback drag-started(int, int, int);
@@ -83,13 +93,14 @@ export component AppWindow inherits Window {
     callback dir-changed(int);
 
     // ---- right-click menus (built by src/menu.rs on each request) ----
-    // sections are separated by lines; the Sort by and New submenus follow section 1
+    // sections are separated by lines; the View, Sort by and New submenus follow section 1
     in property <[MenuRow]> menu-s0;
     in property <[MenuRow]> menu-s1;
     in property <[MenuRow]> menu-s2;
     in property <[MenuRow]> menu-s3;
     in property <[MenuRow]> menu-s4;
     in property <[MenuRow]> menu-s5;
+    in property <[MenuRow]> menu-view;
     in property <[MenuRow]> menu-sort;
     in property <[MenuRow]> menu-new;
     // the keyboard's menu key: builds the active side's selection menu
@@ -212,7 +223,14 @@ export component AppWindow inherits Window {
                     activate(i) => { root.activate(i); }
                     row-released(i, r) => { root.row-released(i, r); }
                     box-start(i, c, sh) => { root.box-start(i, c, sh); }
-                    box-moved(i, a, b, h) => { root.box-moved(i, a, b, h); }
+                    box-moved(i, ax, ay, mx, my) => { root.box-moved(i, ax, ay, mx, my); }
+                    view-menu(i) => { root.view-menu(i); }
+                    sort-menu(i) => { root.sort-menu(i); }
+                    size-step(i, d) => { root.size-step(i, d); }
+                    size-slider-moved(i, v) => { root.size-slider-moved(i, v); }
+                    view-wheel(i, d) => { root.view-wheel(i, d); }
+                    grid-resized(i, w, h) => { root.grid-resized(i, w, h); }
+                    grid-range(i, first, count) => { root.grid-range(i, first, count); }
                     box-ended(i, drawn) => { root.box-ended(i, drawn); }
                     drag-started(i, kind, r) => { root.drag-started(i, kind, r); }
                     drop-check(i, kind, r) => { return root.drop-check(i, kind, r); }
@@ -274,6 +292,16 @@ export component AppWindow inherits Window {
                 checkable: e.checkable;
                 checked: e.checked;
                 activated => { root.menu-activated(e.id); }
+            }
+            if root.menu-view.length > 0: Menu {
+                title: "View";
+                for e in root.menu-view: MenuItem {
+                    title: e.title;
+                    enabled: e.enabled;
+                    checkable: e.checkable;
+                    checked: e.checked;
+                    activated => { root.menu-activated(e.id); }
+                }
             }
             if root.menu-sort.length > 0: Menu {
                 title: "Sort by";

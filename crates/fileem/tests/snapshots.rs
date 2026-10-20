@@ -1,5 +1,5 @@
 //! Visual checks without a desktop (`cargo test -p fileem --test snapshots -- --ignored`): renders
-//! the main window (also with both sides), a dialog and a right-click menu open, the progress window with a conflict
+//! the main window (also with both sides, and in the grid views), a dialog and a right-click menu open, the progress window with a conflict
 //! question and a Properties window, in the
 //! headless backend's software renderer, to `target/snapshots/*.ppm`. Look at them after UI
 //! changes; they are not compared automatically.
@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
+use fileem::view_mode::ViewMode;
 use fileem::{app, AppWindow};
 use fileem_core::ops::Kind;
 use fileem_core::session::Session;
@@ -97,6 +98,18 @@ fn snapshots() {
     pump_until("drop question", || ui.get_dialog_open());
     save(ui.window(), "dialog-drop");
     ui.invoke_dialog_cancelled();
+
+    // the grid views, with a thumbnail
+    image::RgbImage::from_fn(120, 80, |x, y| image::Rgb([(x * 2) as u8, (y * 3) as u8, 160])).save(dir.join("photo.png")).unwrap();
+    ui.invoke_refresh();
+    pump_until("relisted", || ui.get_left().files.iter().any(|r| r.name == "photo.png" && r.size != "3 bytes"));
+    for (mode, name) in [(ViewMode::LargeIcons, "view-large-icons"), (ViewMode::Tiles, "view-tiles"), (ViewMode::Content, "view-content"), (ViewMode::List, "view-list")] {
+        app::run_command(&a, fileem::menu::Command::SetView(mode));
+        let wait = mode == ViewMode::LargeIcons;
+        pump_until("thumbnail", || !wait || ui.get_left().files.iter().any(|r| r.thumb.size().width > 0));
+        save(ui.window(), name);
+    }
+    app::run_command(&a, fileem::menu::Command::SetView(ViewMode::Details));
 
     // a right-click menu on a file, and its Properties window
     ui.invoke_row_pressed(0, 1, false, false);

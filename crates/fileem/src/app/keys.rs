@@ -6,7 +6,9 @@ use std::time::{Duration, Instant};
 
 use slint::platform::Key;
 
-use super::{commands, nav, sync_selection, Shared};
+use super::{commands, nav, sync_selection, views, Shared};
+use crate::grid::Move;
+use crate::view_mode::ViewMode;
 
 /// Returns true when the key was handled.
 pub fn key(app: &Shared, text: &str, ctrl: bool, alt: bool, shift: bool) -> bool {
@@ -14,7 +16,15 @@ pub fn key(app: &Shared, text: &str, ctrl: bool, alt: bool, shift: bool) -> bool
     let is = |k: Key| c == char::from(k);
     let letter = |l: char| ctrl && !alt && c.eq_ignore_ascii_case(&l);
     let page = 20;
-    if letter('t') {
+    let side = app.borrow().active;
+    let grid_move = |m: Move| views::move_key(app, m, ctrl, shift);
+    if let Some(mode) = view_shortcut(c).filter(|_| ctrl && shift && !alt) {
+        views::set_view(app, side, mode);
+    } else if ctrl && !alt && (c == '=' || c == '+') {
+        views::resize(app, side, 1);
+    } else if ctrl && !alt && (c == '-' || c == '_') {
+        views::resize(app, side, -1);
+    } else if letter('t') {
         let (side, dir) = {
             let a = app.borrow();
             (a.active, a.tab().dir().map(Path::to_path_buf))
@@ -40,14 +50,27 @@ pub fn key(app: &Shared, text: &str, ctrl: bool, alt: bool, shift: bool) -> bool
         nav::forward(app);
     } else if (alt && is(Key::UpArrow)) || (!ctrl && !alt && is(Key::Backspace)) {
         nav::up(app);
+    } else if is(Key::LeftArrow) && !alt {
+        // only the grid moves sideways
+        return grid_move(Move::Left);
+    } else if is(Key::RightArrow) && !alt {
+        return grid_move(Move::Right);
     } else if is(Key::UpArrow) {
-        nav::move_focus(app, -1, ctrl, shift);
+        if !grid_move(Move::Up) {
+            nav::move_focus(app, -1, ctrl, shift);
+        }
     } else if is(Key::DownArrow) {
-        nav::move_focus(app, 1, ctrl, shift);
+        if !grid_move(Move::Down) {
+            nav::move_focus(app, 1, ctrl, shift);
+        }
     } else if is(Key::PageUp) {
-        nav::move_focus(app, -page, ctrl, shift);
+        if !grid_move(Move::PageUp) {
+            nav::move_focus(app, -page, ctrl, shift);
+        }
     } else if is(Key::PageDown) {
-        nav::move_focus(app, page, ctrl, shift);
+        if !grid_move(Move::PageDown) {
+            nav::move_focus(app, page, ctrl, shift);
+        }
     } else if is(Key::Home) {
         nav::move_focus(app, isize::MIN / 2, ctrl, shift);
     } else if is(Key::End) {
@@ -61,7 +84,6 @@ pub fn key(app: &Shared, text: &str, ctrl: bool, alt: bool, shift: bool) -> bool
         }
     } else if ctrl && c == ' ' {
         app.borrow_mut().tab_mut().toggle_current();
-        let side = app.borrow().active;
         sync_selection(app, side, false);
     } else if letter('c') && !shift {
         commands::clipboard_put(app, false);
@@ -71,7 +93,6 @@ pub fn key(app: &Shared, text: &str, ctrl: bool, alt: bool, shift: bool) -> bool
         commands::paste(app);
     } else if letter('a') {
         app.borrow_mut().tab_mut().select_all();
-        let side = app.borrow().active;
         sync_selection(app, side, false);
     } else if letter('r') {
         nav::refresh_active(app);
@@ -93,6 +114,16 @@ pub fn key(app: &Shared, text: &str, ctrl: bool, alt: bool, shift: bool) -> bool
         return false;
     }
     true
+}
+
+/// Ctrl+Shift+1…8: Explorer's views. With Shift held, keyboards send the shifted character:
+/// the digits (AZERTY) or the US layout's symbols are understood.
+fn view_shortcut(c: char) -> Option<ViewMode> {
+    let digit = match c {
+        '1'..='8' => c as usize - '0' as usize,
+        _ => "!@#$%^&*".chars().position(|s| s == c)? + 1,
+    };
+    ViewMode::from_index(digit - 1)
 }
 
 /// Slint sends special keys (arrows, F-keys) as private-use characters.

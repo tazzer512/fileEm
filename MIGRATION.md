@@ -8,9 +8,9 @@ rules (tests, integrity, conventions) that apply to both versions.
 executable with a much smaller memory footprint (measured: Java ~360 MB, Rust ~105 MB with
 OpenGL, ~32 MB with the software renderer).
 
-**Status (2026-10-19)**: stages 0–4 done on branch `rust`. The Java app in `src/` is still the
-complete, daily-use version; nothing was removed from it. Next: stage 5 (view modes,
-thumbnails).
+**Status (2026-10-20)**: stages 0–4 and 5a (view modes, thumbnails of common formats) done on
+branch `rust`. The Java app in `src/` is still the complete, daily-use version; nothing was
+removed from it. Next: stage 5b (PSD, camera raw, JPEG 2000 and Netpbm readers).
 
 ## How to work a stage
 
@@ -188,15 +188,42 @@ are the Java sources, as a size hint.
 - Not yet: the drag image (Slint draws none unless `drag-image` is set), drag & drop in the
   other view modes (stage 5).
 
-### Stage 5: view modes and thumbnails
+### Stage 5a: view modes and thumbnails (done)
 
-- The eight Explorer views (`ViewMode` 134, `FileGrid` 1025): virtualized grid on the same
-  rows and selection; size slider, Ctrl+wheel, Ctrl+Shift+1…8.
-- Thumbnails (`Thumbnails` 203): `image` crate, LRU bounded by pixels, fixed load sizes.
+- [x] **The eight Explorer views** per tab (`view_mode.rs`: ids, sizes, steps, slider mapping,
+  the Java session format; `grid.rs`: slots, lanes, hit tests, box hits, key moves). Slint
+  reports the grid's size (`grid-resized`) and the slots in view (`grid-range`); Rust computes
+  the layout and hands it over in `SideView`; Slint builds only the slots in view (`GridItem`
+  in `ui/grid.slint`) on a slot model from Rust. Same rows, selection, sort, filter, menus, drag
+  & drop and selection box as Details. `app/views.rs`.
+- [x] View button and sort button between address and filter (menus from `menu::view_menu` /
+  `sort_menu`), "View" submenu in the folder's menu, Ctrl+Shift+1…8 (digits or the US layout's
+  shifted symbols), Ctrl+wheel, arrow/page keys that follow the grid, item size (− / slider /
+  +, Ctrl+= / Ctrl+−) per view, sizes and views saved per tab (`<side>.tab.<i>.view/.size`, same
+  format as Java), new tabs open in the current view.
+- [x] **Thumbnails** (`thumbs.rs`): PNG/JPEG/GIF/BMP via the `image` crate on two threads, only for
+  the slots in view (newest wishes replace older ones), fixed load sizes, LRU bounded to 8 M
+  pixels (~32 MB; Java: 16 M), failures remembered per file version.
+- [x] Fixed on the way: the directory watcher reported *opens* (notify's inotify mask includes
+  `OPEN`), so every listing, thumbnail or read by another program refreshed the folder again,
+  forever (about every 0.5 s); reads are ignored now (`watcher::is_change`). A selection box
+  started on a row lost its release once that row scrolled away (the box stayed armed and kept
+  scrolling); rows now take presses only on icon + name, the rest goes to the list's fixed
+  background area. Status messages ("Cannot open …") survive view updates.
+- Not yet: Ctrl+wheel over a Details list that can scroll works only on the names (the list's
+  scroll area takes the wheel elsewhere); double-click on the size slider doesn't reset it;
+  List's column width is estimated from the name lengths, not measured; JPEG thumbnails ignore
+  EXIF orientation (as in Java).
+
+### Stage 5b: image readers
+
 - Readers to port into core: `PsdReader` 327 (`PsdReaderTest` 10), `RawReader` 550 + `RawImages`
   (`RawReaderTest` 8, `RawFixtures`), `NetpbmReader` 160, JPEG 2000 (`ImageIoReader` 218,
   `ImageIoReaderTest` 9): pick `jpeg2k`/OpenJPEG or a pure-Rust decoder; keep resolution-level
-  decoding for speed. Copy the test fixtures from `src/test/resources`.
+  decoding for speed. Copy the test fixtures from `src/test/resources`. They plug into
+  `thumbs::decode` (and the preview of stage 6). UI tests: `photoshopFilesShowAPreviewInTheIconViews`,
+  `cameraRawFilesShowAPreviewInTheIconViews`, the thumbnail half of
+  `jpeg2000AndPpmImagesArePreviewedAndShowAsThumbnails`.
 
 ### Stage 6: preview window
 
@@ -292,4 +319,20 @@ are the Java sources, as a size hint.
 - A `ListView` (Flickable) holds a left press back for 100 ms when it can scroll; UI tests wait
   that long after pressing before they move (`Fixture::drag_to`).
 - A `for s in (cond ? 2 : 1)` repeater rebuilds every instance when the count changes; keep a
-  fixed count and hide what isn't shown.
+  fixed count and hide what isn't shown. Worse, `for k in some-int-property` (and a model
+  expression like `cond ? model : []`) is a *new* model whenever its binding re-evaluates (any
+  change of the struct it reads), so every instance is rebuilt and a press in progress is lost
+  (double-clicks, drags). Repeat over models from Rust that keep their identity (`Side::slots`,
+  `list-files` / `no_files`).
+- A `ListView` destroys rows that scroll out of view, with their `TouchArea` and its mouse grab:
+  a gesture that may scroll (selection box) must be handled by an element that isn't a row.
+- `ListView` recomputes `content-y` from its own row-height estimate and can nudge a programmatic
+  scroll back a few pixels; tests wait for the final state, not the first moment it holds.
+- An element given only `width` inside a plain `Rectangle` doesn't fill its height (and a
+  component instance doesn't fill its parent at all): set `height` (and `width`) explicitly.
+- A `Flickable` gets wheel events after its children: rows can catch Ctrl+wheel, the area behind
+  a scrollable list can't.
+- `Slider.changed` fires only for the user's moves, not for `value` set from code; `released`
+  is the moment to give the keyboard focus back.
+- `notify`'s inotify backend reports opens and reads (`EventKind::Access`): filter them, or a
+  watched folder refreshes itself every time it is listed.

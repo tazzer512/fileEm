@@ -2,7 +2,7 @@
 //! `MainWindow.fileMenuItems` / `treeMenuItems`). Toolkit-free: app.slint shows the sections, the
 //! controller runs the chosen [`Command`].
 //!
-//! Not yet ported (they need later stages): search, bookmarks, view modes, eject.
+//! Not yet ported (they need later stages): search, bookmarks, eject.
 
 use std::path::{Path, PathBuf};
 
@@ -11,6 +11,7 @@ use fileem_core::fs::listing::SortKey;
 use crate::columns::{ColumnId, Columns};
 use crate::shell;
 use crate::tree::NodeKind;
+use crate::view_mode::ViewMode;
 
 /// What a menu item does. Commands carry their paths, so the tree and the list share them.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -43,6 +44,8 @@ pub enum Command {
     NewFile(PathBuf),
     SortBy(SortKey),
     SortAscending(bool),
+    /// The active tab's view mode.
+    SetView(ViewMode),
     ToggleHidden,
     Refresh,
     ToggleColumn(ColumnId),
@@ -77,11 +80,12 @@ impl Entry {
     }
 }
 
-/// Sections are separated by lines; the "Sort by" and "New" submenus (when not empty) follow the
-/// items of section 1.
+/// Sections are separated by lines; the "View", "Sort by" and "New" submenus (when not empty)
+/// follow the items of section 1.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Menu {
     pub sections: Vec<Vec<Entry>>,
+    pub view: Vec<Entry>,
     pub sort: Vec<Entry>,
     pub new: Vec<Entry>,
 }
@@ -96,6 +100,7 @@ impl Menu {
         for (i, s) in self.sections.iter().enumerate() {
             all.extend(s);
             if i == 1 {
+                all.extend(&self.view);
                 all.extend(&self.sort);
                 all.extend(&self.new);
             }
@@ -124,6 +129,8 @@ pub struct State {
     pub can_paste: bool,
     pub trash: bool,
     pub sort: (SortKey, bool),
+    /// The active tab's view mode.
+    pub view: ViewMode,
     pub show_hidden: bool,
     /// The second side is shown: copy / move to it.
     pub dual: bool,
@@ -186,7 +193,7 @@ fn background_menu(dir: Option<&Path>, st: &State) -> Menu {
         None => item("Paste", Command::PasteInto(PathBuf::new())).enabled(false),
     };
     let view = vec![check("Show hidden files", st.show_hidden, Command::ToggleHidden), item("Refresh  (Ctrl+R)", Command::Refresh)];
-    let mut menu = Menu { sections: vec![vec![paste], view], sort: sort_entries(st.sort), new: Vec::new() };
+    let mut menu = Menu { sections: vec![vec![paste], view], view: view_entries(st.view), sort: sort_entries(st.sort), new: Vec::new() };
     if let Some(d) = dir {
         menu.new = new_entries(d);
         menu.sections.push(vec![
@@ -207,6 +214,26 @@ fn sort_entries((key, ascending): (SortKey, bool)) -> Vec<Entry> {
     v.push(check("Ascending", ascending, Command::SortAscending(true)));
     v.push(check("Descending", !ascending, Command::SortAscending(false)));
     v
+}
+
+/// Explorer's view modes with their shortcuts, the current one checked.
+fn view_entries(current: ViewMode) -> Vec<Entry> {
+    ViewMode::ALL
+        .into_iter()
+        .map(|m| check(&format!("{}  (Ctrl+Shift+{})", m.label(), m.index() + 1), m == current, Command::SetView(m)))
+        .collect()
+}
+
+/// The view button's menu.
+pub fn view_menu(current: ViewMode) -> Menu {
+    Menu { sections: vec![view_entries(current)], ..Menu::default() }
+}
+
+/// The sort button's menu: the columns, then the direction.
+pub fn sort_menu(sort: (SortKey, bool)) -> Menu {
+    let mut entries = sort_entries(sort);
+    let direction = entries.split_off(entries.len() - 2);
+    Menu { sections: vec![entries, direction], ..Menu::default() }
 }
 
 fn new_entries(dir: &Path) -> Vec<Entry> {
@@ -249,7 +276,7 @@ pub fn tree_menu(dir: &Path, kind: NodeKind, st: &State) -> Menu {
         change.push(item("Delete permanently", Command::Delete(vec![d.clone()])));
     }
     let info = vec![item("Copy path", Command::CopyPath(vec![d.clone()])), item("Properties", Command::Properties(vec![d.clone()]))];
-    Menu { sections: vec![open, clip, change, info], sort: Vec::new(), new: new_entries(dir) }
+    Menu { sections: vec![open, clip, change, info], new: new_entries(dir), ..Menu::default() }
 }
 
 /// Right-click on the column headers: which columns to show (Name always stays).
@@ -284,7 +311,7 @@ mod tests {
     use super::*;
 
     fn state(can_paste: bool) -> State {
-        State { can_paste, trash: true, sort: (SortKey::Name, true), show_hidden: false, dual: false }
+        State { can_paste, trash: true, sort: (SortKey::Name, true), view: ViewMode::Details, show_hidden: false, dual: false }
     }
 
     fn has(m: &Menu, prefix: &str) -> bool {
@@ -335,6 +362,25 @@ mod tests {
         let st = State { trash: false, ..state(false) };
         assert!(!has(&file_menu(&[Item { path: p, is_dir: false }], None, &st), "Move to Trash"));
         assert!(!has(&tree_menu(p, NodeKind::Folder, &st), "Move to Trash"));
+    }
+
+    #[test]
+    fn the_empty_space_menu_and_the_buttons_offer_the_views_and_sorting() {
+        let m = file_menu(&[], Some(Path::new("/w")), &State { view: ViewMode::Tiles, ..state(false) });
+        let views: Vec<&str> = m.view.iter().map(|e| e.title.as_str()).collect();
+        assert_eq!(views[0], "Extra large icons  (Ctrl+Shift+1)");
+        assert_eq!(views[7], "Content  (Ctrl+Shift+8)");
+        assert_eq!(m.find("Tiles").unwrap().checked, Some(true));
+        assert_eq!(m.find("Details").unwrap().command, Command::SetView(ViewMode::Details));
+        assert!(file_menu(&[Item { path: Path::new("/w/a"), is_dir: false }], None, &state(false)).view.is_empty(), "items: no views");
+
+        let v = view_menu(ViewMode::List);
+        assert_eq!(v.entries().len(), 8);
+        assert_eq!(v.find("List").unwrap().checked, Some(true));
+        let s = sort_menu((SortKey::Size, false));
+        assert_eq!(s.sections[1].iter().map(|e| e.title.as_str()).collect::<Vec<_>>(), ["Ascending", "Descending"]);
+        assert_eq!(s.find("Size").unwrap().checked, Some(true));
+        assert_eq!(s.find("Descending").unwrap().checked, Some(true));
     }
 
     #[test]

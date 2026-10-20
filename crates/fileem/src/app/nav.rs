@@ -325,9 +325,10 @@ pub fn switch_side(app: &Shared) {
 pub fn new_tab(app: &Shared, side: usize, dir: PathBuf, select: bool) -> u64 {
     let id = {
         let mut a = app.borrow_mut();
-        // new tabs sort like the one you're looking at
+        // new tabs sort like the one you're looking at, and open in its view
         let sort = a.sides[side].tab().sort();
-        let t = a.new_tab_state(sort);
+        let mode = a.sides[side].tabs[a.sides[side].active].view.mode;
+        let t = a.new_tab_state(sort, mode);
         let id = t.id;
         a.sides[side].tabs.push(t);
         if select {

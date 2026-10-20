@@ -8,7 +8,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
-use notify::{RecommendedWatcher, RecursiveMode, Watcher};
+use notify::event::{AccessKind, AccessMode};
+use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 
 const DEBOUNCE: Duration = Duration::from_millis(400);
 
@@ -35,6 +36,9 @@ fn shared() -> Option<&'static Shared> {
             let routed = entries.clone();
             let watcher = notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
                 if let Ok(event) = event {
+                    if !is_change(&event.kind) {
+                        return;
+                    }
                     for p in &event.paths {
                         // a change of an item concerns its folder; one of the folder itself, the folder
                         changed(&routed, p.parent());
@@ -46,6 +50,13 @@ fn shared() -> Option<&'static Shared> {
             Some(Shared { watcher: Mutex::new(watcher), entries })
         })
         .as_ref()
+}
+
+/// Whether an event changes what a listing shows. Reads are none: inotify reports opening the
+/// folder or a file in it, so every listing (and thumbnail, preview, or another program reading)
+/// would otherwise refresh the folder again, endlessly. A file closed after writing is one.
+fn is_change(kind: &EventKind) -> bool {
+    !matches!(kind, EventKind::Access(a) if *a != AccessKind::Close(AccessMode::Write))
 }
 
 /// Debounces: the first change starts a timer; changes until it fires are folded into one call.
@@ -179,6 +190,23 @@ mod tests {
         std::thread::sleep(DEBOUNCE * 3);
         let n = calls.load(Ordering::SeqCst);
         assert!(n <= 5, "200 writes caused {n} notifications");
+    }
+
+    #[test]
+    fn reading_the_folder_or_its_files_is_no_change() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("a.txt"), "x").unwrap();
+        std::thread::sleep(DEBOUNCE);
+        let (calls, _rx, listener) = counter();
+        let _handle = watch(tmp.path(), listener);
+        // what a listing, a thumbnail or a preview does: open the folder and read files
+        for _ in 0..3 {
+            let _ = fs::read_dir(tmp.path()).unwrap().count();
+            let _ = fs::read(tmp.path().join("a.txt")).unwrap();
+        }
+        std::thread::sleep(DEBOUNCE * 3);
+        // regression: opens were reported, so every listing refreshed the folder again, forever
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
     }
 
     #[test]

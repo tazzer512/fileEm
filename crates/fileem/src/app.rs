@@ -5,11 +5,14 @@
 //! - `nav`: navigation, listings, watching, the tree, tabs and sides
 //! - `commands`: operations, clipboard, dialogs, menus, properties
 //! - `keys`: the keyboard
+//! - `dnd`: mouse selection (box) and drag & drop
+//! - `views`: view modes, item sizes, the grid and its thumbnails
 
 mod commands;
 mod dnd;
 mod keys;
 mod nav;
+mod views;
 
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
@@ -34,7 +37,9 @@ use crate::columns::{ColumnId, Columns};
 use crate::menu::Command;
 use crate::ops_ui::OpsUi;
 use crate::tab::{Nav, Tab};
+use crate::thumbs::Thumbnails;
 use crate::tree::{NodeKind, Tree};
+use crate::view_mode::{ViewMode, ViewState};
 use crate::{AppWindow, ColumnRow, CrumbRow, FileRow, PropertiesWindow, SideView, TabRow, TreeRow};
 
 pub use commands::{
@@ -63,8 +68,8 @@ pub struct TabState {
     watch: Option<WatchHandle>,
     /// Drops watcher reports for a folder no longer shown.
     watch_token: u64,
-    /// This tab's session keys only the Java app uses (`.view`, `.size`), kept as they were.
-    extra: Vec<(String, String)>,
+    /// View mode and item sizes.
+    view: ViewState,
 }
 
 /// One explorer side: a tree and tabs, and the Slint models that show them.
@@ -76,6 +81,10 @@ pub struct Side {
     reveal_token: u64,
     tree_width: f32,
     files: Rc<VecModel<FileRow>>,
+    /// The Details list's model in the grid views.
+    no_files: Rc<VecModel<FileRow>>,
+    /// The grid's slots (0, 1, …): only grows or shrinks, so Slint keeps the slots it built.
+    slots: Rc<VecModel<i32>>,
     tree_rows: Rc<VecModel<TreeRow>>,
     tab_rows: Rc<VecModel<TabRow>>,
     crumbs: Rc<VecModel<CrumbRow>>,
@@ -87,6 +96,13 @@ pub struct Side {
     filter_seq: i32,
     tree_row: i32,
     tree_seq: i32,
+    /// The grid's size, as Slint laid it out, and the slots it shows (first, count).
+    grid_size: (f32, f32),
+    grid_range: (usize, usize),
+    /// Ctrl+wheel turned since the last view change.
+    wheel: f32,
+    /// A message shown in the status line instead of the counts (`set_status`).
+    status_message: Option<String>,
 }
 
 impl Side {
@@ -98,6 +114,8 @@ impl Side {
             reveal_token: 0,
             tree_width: 240.0,
             files: Rc::new(VecModel::default()),
+            no_files: Rc::new(VecModel::default()),
+            slots: Rc::new(VecModel::default()),
             tree_rows: Rc::new(VecModel::default()),
             tab_rows: Rc::new(VecModel::default()),
             crumbs: Rc::new(VecModel::default()),
@@ -108,6 +126,10 @@ impl Side {
             filter_seq: 0,
             tree_row: -1,
             tree_seq: 0,
+            grid_size: (0.0, 0.0),
+            grid_range: (0, 0),
+            wheel: 0.0,
+            status_message: None,
         }
     }
 
@@ -144,6 +166,7 @@ pub struct App {
     /// A press on a row of the selection that waits for its release (side, row): see `Tab::press`.
     late_press: Option<(usize, usize)>,
     drag: dnd::Drag,
+    thumbs: Thumbnails,
 }
 
 pub type Shared = Rc<RefCell<App>>;
@@ -192,7 +215,7 @@ impl App {
         self.find(id).is_some_and(|(s, i)| self.sides[s].active == i && (s == 0 || self.dual))
     }
 
-    fn new_tab_state(&mut self, sort: (SortKey, bool)) -> TabState {
+    fn new_tab_state(&mut self, sort: (SortKey, bool), mode: ViewMode) -> TabState {
         let mut tab = Tab::new();
         tab.set_show_hidden(self.show_hidden);
         tab.set_sort(sort.0, sort.1);
@@ -208,7 +231,7 @@ impl App {
             select_after: None,
             watch: None,
             watch_token: 0,
-            extra: Vec::new(),
+            view: ViewState::new(mode),
         }
     }
 }
@@ -240,6 +263,12 @@ pub fn install(ui: &AppWindow, session: Rc<Session>, start: Option<PathBuf>) -> 
         properties: Vec::new(),
         late_press: None,
         drag: dnd::Drag::default(),
+        thumbs: Thumbnails::new({
+            let ui = ui.as_weak();
+            move || {
+                let _ = ui.upgrade_in_event_loop(|ui| ui.invoke_thumbs_ready());
+            }
+        }),
     }));
     ui.set_side_split(session.get_f64("split.sides", 0.5).clamp(0.2, 0.8) as f32);
     let mut opening: Vec<(u64, PathBuf)> = Vec::new();
@@ -254,17 +283,14 @@ pub fn install(ui: &AppWindow, session: Rc<Session>, start: Option<PathBuf>) -> 
         };
         for i in 0..count {
             let Some(dir) = session.get(&format!("{id}.tab.{i}")).filter(|p| !p.trim().is_empty()) else { continue };
-            let mut t = a.new_tab_state(sort);
-            for suffix in ["view", "size"] {
-                if let Some(v) = session.get(&format!("{id}.tab.{i}.{suffix}")) {
-                    t.extra.push((suffix.to_string(), v));
-                }
-            }
+            let mode = ViewMode::by_id(&session.get_or(&format!("{id}.tab.{i}.view"), "details"));
+            let mut t = a.new_tab_state(sort, mode);
+            t.view.restore_sizes(&session.get_or(&format!("{id}.tab.{i}.size"), ""));
             opening.push((t.id, PathBuf::from(dir)));
             a.sides[s].tabs.push(t);
         }
         if a.sides[s].tabs.is_empty() {
-            let t = a.new_tab_state(sort);
+            let t = a.new_tab_state(sort, ViewMode::Details);
             opening.push((t.id, fileem_core::util::os::home()));
             a.sides[s].tabs.push(t);
         }
@@ -314,8 +340,10 @@ pub fn collect_session(app: &Shared) {
         for (i, t) in side.tabs.iter().enumerate() {
             let dir = t.tab.dir().map(Path::to_path_buf).unwrap_or_else(fileem_core::util::os::home);
             s.put(&format!("{id}.tab.{i}"), dir.display());
-            for (suffix, value) in &t.extra {
-                s.put(&format!("{id}.tab.{i}.{suffix}"), value);
+            s.put(&format!("{id}.tab.{i}.view"), t.view.mode.id());
+            let sizes = t.view.sizes_state();
+            if !sizes.is_empty() {
+                s.put(&format!("{id}.tab.{i}.size"), sizes);
             }
         }
         s.put(&format!("{id}.selected"), side.active);
@@ -365,6 +393,23 @@ pub fn selected_paths(app: &Shared, side: usize) -> Vec<PathBuf> {
     app.borrow().sides[side].tab().selected_paths()
 }
 
+/// The view mode and icon size of a side's shown tab.
+pub fn view_of(app: &Shared, side: usize) -> (ViewMode, u32) {
+    let a = app.borrow();
+    let v = &a.sides[side].tabs[a.sides[side].active].view;
+    (v.mode, v.icon_px())
+}
+
+/// The view modes of a side's tabs, in order.
+pub fn tab_views(app: &Shared, side: usize) -> Vec<ViewMode> {
+    app.borrow().sides[side].tabs.iter().map(|t| t.view.mode).collect()
+}
+
+/// The grid layout of a side's shown tab (`None` in Details).
+pub fn grid(app: &Shared, side: usize) -> Option<crate::grid::Grid> {
+    views::grid_of(&app.borrow().sides[side])
+}
+
 /// The operations of this window (tests start their own through it).
 pub fn ops(app: &Shared) -> OpsUi {
     app.borrow().ops.clone()
@@ -394,7 +439,7 @@ fn wire(ui: &AppWindow, app: &Shared) {
     on!(on_row_pressed, app => |side, row, ctrl, shift| dnd::row_pressed(app, side as usize, row as usize, ctrl, shift));
     on!(on_row_released, app => |side, row| dnd::row_released(app, side as usize, row as usize));
     on!(on_box_start, app => |side, ctrl, shift| dnd::box_start(app, side as usize, ctrl, shift));
-    on!(on_box_moved, app => |side, anchor, mouse, height| dnd::box_moved(app, side as usize, anchor, mouse, height));
+    on!(on_box_moved, app => |side, ax, ay, mx, my| dnd::box_moved(app, side as usize, (ax, ay), (mx, my)));
     on!(on_box_ended, app => |side, drawn| dnd::box_ended(app, side as usize, drawn));
     on!(on_drag_started, app => |side, area, row| dnd::drag_started(app, side as usize, area, row as usize));
     on!(on_drop_check, app => |side, area, row| dnd::drop_check(app, side as usize, area, row));
@@ -470,6 +515,31 @@ fn wire(ui: &AppWindow, app: &Shared) {
     on!(on_dialog_cancelled, app => | | commands::close_dialog(app));
     on!(on_dialog_alternative, app => | | dnd::copy_instead(app));
     on!(on_key, app => |text, ctrl, alt, shift| keys::key(app, &text, ctrl, alt, shift));
+    on!(on_view_menu, app => |side| {
+        nav::set_active_side(app, side as usize);
+        commands::view_menu(app);
+    });
+    on!(on_sort_menu, app => |side| {
+        nav::set_active_side(app, side as usize);
+        commands::sort_menu(app);
+    });
+    on!(on_size_step, app => |side, direction| {
+        nav::set_active_side(app, side as usize);
+        views::resize(app, side as usize, direction);
+    });
+    on!(on_size_slider_moved, app => |side, position| {
+        nav::set_active_side(app, side as usize);
+        views::slider_moved(app, side as usize, position);
+    });
+    on!(on_view_wheel, app => |side, delta| {
+        nav::set_active_side(app, side as usize);
+        views::wheel(app, side as usize, delta);
+    });
+    on!(on_grid_resized, app => |side, width, height| views::grid_resized(app, side as usize, width, height));
+    on!(on_grid_range, app => |side, first, count| {
+        views::grid_range(app, side as usize, first.max(0) as usize, count.max(0) as usize);
+    });
+    on!(on_thumbs_ready, app => | | views::thumbs_ready(app));
 }
 
 // ---- models ----
@@ -477,12 +547,8 @@ fn wire(ui: &AppWindow, app: &Shared) {
 /// A message in the active side's status line, until the list or selection changes.
 fn set_status(app: &Shared, text: String) {
     let side = app.borrow().active;
-    let Some(ui) = app.borrow().ui.upgrade() else { return };
-    if side == 0 {
-        ui.set_left(SideView { status: text.into(), ..ui.get_left() });
-    } else {
-        ui.set_right(SideView { status: text.into(), ..ui.get_right() });
-    }
+    app.borrow_mut().sides[side].status_message = Some(text);
+    push_view(app, side);
 }
 
 /// Category to the icon numbers `FileIcon` in icons.slint draws.
@@ -505,7 +571,7 @@ fn icon_of(e: &FileEntry) -> i32 {
     }
 }
 
-fn file_row(tab: &Tab, row: usize, cols: &Columns) -> FileRow {
+fn file_row(tab: &Tab, row: usize, cols: &Columns, thumb: Option<slint::Image>) -> FileRow {
     let e = tab.row(row);
     // the extra columns cost per row (attributes look up the owner): only when shown
     let shown = |c: ColumnId| cols.is_visible(c);
@@ -523,16 +589,26 @@ fn file_row(tab: &Tab, row: usize, cols: &Columns) -> FileRow {
         selected: tab.is_selected(row),
         current: tab.current_row() == Some(row),
         hidden: e.is_hidden(),
+        thumb: thumb.unwrap_or_default(),
     }
 }
 
 /// Rebuilds a side's file rows and crumbs (after a listing, sort, filter or tab change).
 fn sync_files(app: &Shared, side: usize) {
     {
-        let a = app.borrow();
+        let mut a = app.borrow_mut();
+        let a = &mut *a;
+        a.sides[side].status_message = None;
         let s = &a.sides[side];
-        let tab = s.tab();
-        let rows: Vec<FileRow> = (0..tab.len()).map(|r| file_row(tab, r, &a.columns)).collect();
+        let t = &s.tabs[s.active];
+        let (tab, mode, px) = (&t.tab, t.view.mode, t.view.icon_px());
+        let thumbs = &mut a.thumbs;
+        let rows: Vec<FileRow> = (0..tab.len())
+            .map(|r| {
+                let thumb = views::thumb_key(mode, px, tab.row(r)).and_then(|k| thumbs.get(&k));
+                file_row(tab, r, &a.columns, thumb)
+            })
+            .collect();
         s.files.set_vec(rows);
         let crumbs: Vec<CrumbRow> = tab
             .dir()
@@ -545,6 +621,7 @@ fn sync_files(app: &Shared, side: usize) {
     }
     push_view(app, side);
     sync_window(app);
+    views::request_thumbs(app);
 }
 
 /// Updates only the selection flags of rows that changed; with `scroll`, the focused row is
@@ -553,6 +630,7 @@ fn sync_selection(app: &Shared, side: usize, scroll: bool) {
     {
         let mut a = app.borrow_mut();
         let s = &mut a.sides[side];
+        s.status_message = None;
         let current = s.tab().current_row();
         for r in 0..s.files.row_count() {
             let Some(mut row) = s.files.row_data(r) else { continue };
@@ -643,13 +721,37 @@ fn push_view(app: &Shared, side: usize) {
         (true, true) => "This folder is empty.",
         (true, false) => "No items match the filter.",
     };
+    let v = &s.tabs[s.active].view;
+    let g = views::grid_of(s);
+    let wanted = g.map_or(0, |g| g.slot_count());
+    while s.slots.row_count() < wanted {
+        s.slots.push(s.slots.row_count() as i32);
+    }
+    while s.slots.row_count() > wanted {
+        s.slots.remove(s.slots.row_count() - 1);
+    }
     let view = SideView {
+        view_mode: v.mode.index() as i32,
+        icon_size: v.icon_px() as f32,
+        cell_w: g.map_or(0.0, |g| g.cell_w),
+        cell_h: g.map_or(0.0, |g| g.cell_h),
+        lanes: g.map_or(1, |g| g.lanes as i32),
+        content_len: g.map_or(0.0, |g| g.content_len()),
+        flows_columns: v.mode.flows_in_columns(),
+        text_below: v.mode.text_below_icon(),
+        resizable: v.mode.resizable(),
+        size_slider: v.slider() as f32,
+        can_smaller: v.can_resize(-1),
+        can_bigger: v.can_resize(1),
+        sort_tooltip: format!("Sort by {}, {}", key.title(), if asc { "ascending" } else { "descending" }).into(),
         files: ModelRc::from(s.files.clone()),
+        slots: ModelRc::from(s.slots.clone()),
+        list_files: ModelRc::from(if g.is_none() { s.files.clone() } else { s.no_files.clone() }),
         tree: ModelRc::from(s.tree_rows.clone()),
         tabs: ModelRc::from(s.tab_rows.clone()),
         crumbs: ModelRc::from(s.crumbs.clone()),
         address: tab.dir().map(|d| d.display().to_string()).unwrap_or_default().into(),
-        status: tab.status().into(),
+        status: s.status_message.clone().unwrap_or_else(|| tab.status()).into(),
         message: message.into(),
         filter: tab.filter().into(),
         sort_column: sort_col as i32,

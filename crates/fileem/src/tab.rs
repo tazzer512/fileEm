@@ -292,20 +292,24 @@ impl Tab {
 
     /// The box now touches `rows` (see [`box_rows`]); the focus goes to the row under the mouse.
     pub fn box_select(&mut self, rows: Option<(usize, usize)>, focus: usize) {
+        let rows: Vec<usize> = rows.map(|(lo, hi)| (lo..=hi).collect()).unwrap_or_default();
+        self.box_select_rows(&rows, Some(focus));
+    }
+
+    /// The box now touches `rows` (in a grid, any set); the focus goes to `focus`, if given.
+    pub fn box_select_rows(&mut self, rows: &[usize], focus: Option<usize>) {
         let Some((base, toggle)) = &self.boxing else { return };
         let mut sel = base.clone();
-        if let Some((lo, hi)) = rows {
-            for r in lo..=hi.min(self.len().saturating_sub(1)) {
-                let p = self.row(r).path();
-                // toggling takes away what was selected; anything else is added
-                if !(*toggle && sel.remove(p)) {
-                    sel.insert(p.to_path_buf());
-                }
+        for &r in rows.iter().filter(|&&r| r < self.len()) {
+            let p = self.row(r).path();
+            // toggling takes away what was selected; anything else is added
+            if !(*toggle && sel.remove(p)) {
+                sel.insert(p.to_path_buf());
             }
         }
         self.selected = sel;
-        if !self.is_empty() {
-            let p = self.row(focus.min(self.len() - 1)).path().to_path_buf();
+        if let (false, Some(f)) = (self.is_empty(), focus) {
+            let p = self.row(f.min(self.len() - 1)).path().to_path_buf();
             self.anchor = Some(p.clone());
             self.current = Some(p);
         }

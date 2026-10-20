@@ -1,0 +1,115 @@
+// One item of the grid views (every view but Details; src/grid.rs places them): its icon or
+// thumbnail and name, plus type, size and date lines in Tiles and Content. It only draws: the
+// slot around it (side.slint) takes the mouse.
+
+import { Palette } from "std-widgets.slint";
+import { FileIcon } from "icons.slint";
+
+export component GridItem {
+    // ViewMode::index: 6 Tiles, 7 Content
+    in property <int> mode;
+    in property <length> icon-size;
+    // the big icon views put the name under the icon
+    in property <bool> text-below;
+    in property <string> name;
+    in property <string> kind;
+    in property <string> size;
+    in property <string> modified;
+    in property <int> icon;
+    in property <bool> hidden;
+    in property <image> thumb;
+    in property <bool> selected;
+    in property <bool> current;
+    // the window's keys go to this side (selection colors)
+    in property <bool> focused;
+    in property <bool> hover;
+    in property <bool> drop-target;
+
+    property <color> fg: root.selected && root.focused ? Palette.selection-foreground : Palette.foreground;
+    property <length> icon-x: root.text-below ? (root.width - root.icon-size) / 2 : 6px;
+    property <length> icon-y: root.text-below ? 6px : (root.height - root.icon-size) / 2;
+    // text beside the icon
+    property <length> tx: root.icon-x + root.icon-size + 8px;
+    property <length> tw: max(0px, root.width - root.tx - 6px);
+
+    Rectangle {
+        x: 2px;
+        y: 2px;
+        width: parent.width - 4px;
+        height: parent.height - 4px;
+        border-radius: 4px;
+        background: root.drop-target ? Palette.accent-background.with-alpha(0.3)
+            : root.selected ? Palette.selection-background.with-alpha(root.focused ? 1.0 : 0.45)
+            : root.hover ? Palette.foreground.with-alpha(0.05) : transparent;
+        border-width: (root.current && root.focused) || root.drop-target ? 1px : 0px;
+        border-color: Palette.accent-background;
+    }
+    if root.thumb.width > 0: Image {
+        x: root.icon-x;
+        y: root.icon-y;
+        width: root.icon-size;
+        height: root.icon-size;
+        source: root.thumb;
+        image-fit: contain;
+        opacity: root.hidden ? 0.55 : 1.0;
+        accessible-role: image;
+        accessible-label: "Thumbnail";
+    }
+    if root.thumb.width == 0: FileIcon {
+        x: root.icon-x;
+        y: root.icon-y;
+        width: root.icon-size;
+        height: root.icon-size;
+        kind: root.icon;
+        dimmed: root.hidden;
+    }
+    // the big icon views: up to two lines under the icon
+    if root.text-below: Text {
+        x: 4px;
+        y: root.icon-y + root.icon-size + 4px;
+        width: root.width - 8px;
+        height: max(0px, min(36px, root.height - self.y - 2px));
+        text: root.name;
+        wrap: word-wrap;
+        overflow: elide;
+        horizontal-alignment: center;
+        vertical-alignment: top;
+        color: root.fg;
+    }
+    // Small icons and List: the name beside the icon
+    if !root.text-below && root.mode != 6 && root.mode != 7: Text {
+        x: root.tx;
+        width: root.tw;
+        text: root.name;
+        vertical-alignment: center;
+        overflow: elide;
+        color: root.fg;
+    }
+    // Tiles: name, type and size
+    if root.mode == 6: VerticalLayout {
+        x: root.tx;
+        width: root.tw;
+        alignment: center;
+        Text { text: root.name; overflow: elide; color: root.fg; }
+        Text { text: root.kind; overflow: elide; color: root.fg.with-alpha(0.7); }
+        Text { text: root.size; overflow: elide; color: root.fg.with-alpha(0.7); }
+    }
+    // Content: name and type, date and size on the right
+    if root.mode == 7: HorizontalLayout {
+        x: root.tx;
+        width: root.tw;
+        spacing: 8px;
+        VerticalLayout {
+            alignment: center;
+            horizontal-stretch: 1;
+            Text { text: root.name; overflow: elide; color: root.fg; }
+            Text { text: root.kind; overflow: elide; color: root.fg.with-alpha(0.7); }
+        }
+        VerticalLayout {
+            alignment: center;
+            width: min(240px, root.tw * 0.45);
+            Text { text: root.modified == "" ? "" : "Date modified: " + root.modified; overflow: elide; color: root.fg.with-alpha(0.7); }
+            Text { text: root.size == "" ? "" : "Size: " + root.size; overflow: elide; color: root.fg.with-alpha(0.7); }
+        }
+    }
+}

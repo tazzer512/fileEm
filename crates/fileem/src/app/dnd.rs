@@ -11,12 +11,14 @@ use fileem_core::ops::Kind;
 use fileem_core::util::fs_util;
 
 use super::commands::{self, describe, Dialog, DialogSpec};
-use super::{nav, sync_selection, Shared};
+use super::{nav, sync_selection, views, Shared};
 use crate::tab;
 use crate::tree::NodeKind;
 
-/// Where a drag was picked up or is over: the file list or the folder tree.
+/// Where a drag was picked up or is over: the file list (or grid) or the folder tree.
 const LIST: i32 = 0;
+/// The Details list's row height (side.slint's `row-height`).
+const ROW_HEIGHT: f32 = 24.0;
 
 /// What is being dragged, and the last drop target asked about (asked on every mouse move).
 #[derive(Default)]
@@ -48,15 +50,22 @@ pub fn box_start(app: &Shared, side: usize, ctrl: bool, shift: bool) {
     app.borrow_mut().sides[side].tab_mut().start_box(ctrl, shift);
 }
 
-/// The box now reaches from `anchor` to `mouse` (content offsets, 0 = top of the first row).
-pub fn box_moved(app: &Shared, side: usize, anchor: f32, mouse: f32, row_height: f32) {
+/// The box now reaches from `anchor` to `mouse` (content coordinates: 0,0 is the top left of
+/// the first row or item). In a grid it selects the items it touches, in Details the rows.
+pub fn box_moved(app: &Shared, side: usize, anchor: (f32, f32), mouse: (f32, f32)) {
     {
         let mut a = app.borrow_mut();
         a.late_press = None;
+        let grid = views::grid_of(&a.sides[side]);
         let t = a.sides[side].tab_mut();
-        let rows = tab::box_rows(anchor, mouse, row_height, t.len());
-        let focus = (mouse.max(0.0) / row_height.max(1.0)).floor() as usize;
-        t.box_select(rows, focus);
+        match grid {
+            Some(g) => t.box_select_rows(&g.box_hits(anchor, mouse), g.index_at(mouse.0, mouse.1)),
+            None => {
+                let rows = tab::box_rows(anchor.1, mouse.1, ROW_HEIGHT, t.len());
+                let focus = (mouse.1.max(0.0) / ROW_HEIGHT).floor() as usize;
+                t.box_select(rows, focus);
+            }
+        }
     }
     sync_selection(app, side, false);
 }

@@ -1,10 +1,12 @@
-// One explorer side: folder tree | tab bar, address bar (breadcrumbs or typed path) + filter,
-// details list with resizable columns, status line. Everything comes in through `view` (built by
+// One explorer side: folder tree | tab bar, address bar (breadcrumbs or typed path), view and
+// sort buttons + filter, the files (details list with resizable columns, or the grid of the
+// other views), status line with the item size. Everything comes in through `view` (built by
 // src/app.rs); requests that would be function calls elsewhere (scroll to a row, edit the
 // address, focus the filter) arrive as sequence numbers that change.
 
-import { LineEdit, ListView, Palette } from "std-widgets.slint";
+import { LineEdit, ListView, Palette, ScrollView, Slider } from "std-widgets.slint";
 import { Icons, FileIcon, ToolButton } from "icons.slint";
+import { GridItem } from "grid.slint";
 
 export struct FileRow {
     name: string,
@@ -20,6 +22,8 @@ export struct FileRow {
     selected: bool,
     current: bool,
     hidden: bool,
+    // an image thumbnail in the grid views (empty: the type icon)
+    thumb: image,
 }
 
 export struct TreeRow {
@@ -58,6 +62,11 @@ export struct ColumnRow {
 
 export struct SideView {
     files: [FileRow],
+    // the Details list's rows: `files`, or none in the grid views (always the same two models,
+    // so the list never rebuilds its rows when the view is pushed again)
+    list-files: [FileRow],
+    // the grid's slots, numbered (src/grid.rs `slot_count`)
+    slots: [int],
     tree: [TreeRow],
     tabs: [TabRow],
     crumbs: [CrumbRow],
@@ -79,6 +88,23 @@ export struct SideView {
     filter-seq: int,
     tree-row: int,
     tree-seq: int,
+    // ViewMode::index (5: Details) and the grid's layout from src/grid.rs
+    view-mode: int,
+    icon-size: length,
+    cell-w: length,
+    cell-h: length,
+    lanes: int,
+    // along the scroll axis
+    content-len: length,
+    // List: columns, scrolling sideways
+    flows-columns: bool,
+    text-below: bool,
+    // the item size controls: icon views and Tiles
+    resizable: bool,
+    size-slider: float,
+    can-smaller: bool,
+    can-bigger: bool,
+    sort-tooltip: string,
 }
 
 component HeaderCell {
@@ -179,8 +205,8 @@ export component SidePane {
     callback row-released(int, int);
     // selection box: side, ctrl/cmd, shift
     callback box-start(int, bool, bool);
-    // side, anchor and mouse in content coordinates (0: top of the first row), row height
-    callback box-moved(int, length, length, length);
+    // side, anchor x/y and mouse x/y in content coordinates (0,0: top left of the first item)
+    callback box-moved(int, length, length, length, length);
     // side, whether a box was drawn (not just a click)
     callback box-ended(int, bool);
     // side, 0 list / 1 tree, row
@@ -189,16 +215,54 @@ export component SidePane {
     // accepted into the shown folder, -2 when refused
     callback drop-check(int, int, int) -> int;
     callback dropped(int, int, int);
+    // the view and sort buttons' menus
+    callback view-menu(int);
+    callback sort-menu(int);
+    // item size: side, -1 / +1; the slider's position (-1 … 1)
+    callback size-step(int, int);
+    callback size-slider-moved(int, float);
+    // Ctrl+wheel: side, delta (up positive)
+    callback view-wheel(int, length);
+    // the grid's size, and the slots it shows (first, count)
+    callback grid-resized(int, length, length);
+    callback grid-range(int, int, int);
 
     property <bool> focused: keys-focused && view.active;
+    property <bool> details: view.view-mode == 5;
+    // the shown file view's scroll offsets and size
+    property <length> scroll-x: details ? list.content-x : grid.content-x;
+    property <length> scroll-y: details ? list.content-y : grid.content-y;
+    property <length> body-w: details ? list.visible-width : grid.visible-width;
+    property <length> body-h: details ? list.visible-height : grid.visible-height;
 
     // ---- drop targets (-2: none) ----
     property <int> drop-row: -2;
     property <int> tree-drop-row: -2;
 
+    // the row under the mouse in the area behind the list (rows' own touch areas cover only names)
+    property <int> hover-row: bg-touch.has-hover && details ? list-row-at(bg-touch.mouse-y) : -1;
+
     pure function list-row-at(y: length) -> int {
         return y - list.content-y < 0 ? -1 : floor((y - list.content-y) / row-height) < view.files.length
             ? floor((y - list.content-y) / row-height) : -1;
+    }
+
+    // the grid item at a point of the grid (-1: empty space); same rules as src/grid.rs
+    pure function grid-index-at(x: length, y: length) -> int {
+        let cx = x - grid.content-x - 6px;
+        let cy = y - grid.content-y - 6px;
+        if (cx < 0 || cy < 0 || view.cell-w <= 0 || view.cell-h <= 0) {
+            return -1;
+        }
+        let col = floor(cx / view.cell-w);
+        let row = floor(cy / view.cell-h);
+        let i = view.flows-columns ? (row >= view.lanes ? -1 : col * view.lanes + row)
+            : (col >= view.lanes ? -1 : row * view.lanes + col);
+        return i < view.files.length ? i : -1;
+    }
+
+    pure function body-index-at(x: length, y: length) -> int {
+        return details ? list-row-at(y) : grid-index-at(x, y);
     }
 
     pure function tree-row-at(y: length) -> int {
@@ -213,12 +277,16 @@ export component SidePane {
     property <length> box-ay;
     property <length> box-mx;
     property <length> box-my;
+    // how far the mouse is past the edge along the scroll axis while drawing a box
+    property <length> box-over: !box-active ? 0px
+        : !details && view.flows-columns ? (box-mx < 0 ? box-mx : box-mx > body-w ? box-mx - body-w : 0px)
+        : (box-my < 0 ? box-my : box-my > body-h ? box-my - body-h : 0px);
 
     function box-press(x: length, y: length, ctrl: bool, shift: bool) {
         box-armed = true;
         box-active = false;
-        box-ax = x - list.content-x;
-        box-ay = y - list.content-y;
+        box-ax = x - scroll-x;
+        box-ay = y - scroll-y;
         box-mx = x;
         box-my = y;
         root.box-start(root.side, ctrl, shift);
@@ -231,7 +299,7 @@ export component SidePane {
         box-mx = x;
         box-my = y;
         if (!box-active) {
-            if (abs(x - (box-ax + list.content-x)) < 4px && abs(y - (box-ay + list.content-y)) < 4px) {
+            if (abs(x - (box-ax + scroll-x)) < 4px && abs(y - (box-ay + scroll-y)) < 4px) {
                 return;
             }
             box-active = true;
@@ -240,7 +308,7 @@ export component SidePane {
     }
 
     function box-update() {
-        root.box-moved(root.side, box-ay, box-my - list.content-y, row-height);
+        root.box-moved(root.side, box-ax, box-ay, box-mx - scroll-x, box-my - scroll-y);
     }
 
     function box-release() {
@@ -259,7 +327,9 @@ export component SidePane {
     // ---- requests from Rust ----
     property <int> ensure-seq: view.ensure-seq;
     changed ensure-seq => {
-        if (view.ensure-row >= 0) {
+        if (!details) {
+            grid-ensure(view.ensure-row);
+        } else if (view.ensure-row >= 0) {
             if (view.ensure-row * row-height < -list.content-y) {
                 list.content-y = -view.ensure-row * row-height;
             } else if ((view.ensure-row + 1) * row-height > -list.content-y + list.visible-height) {
@@ -268,7 +338,33 @@ export component SidePane {
         }
     }
     property <int> top-seq: view.top-seq;
-    changed top-seq => { list.content-y = 0; list.content-x = 0; }
+    changed top-seq => {
+        list.content-y = 0;
+        list.content-x = 0;
+        grid.content-x = 0;
+        grid.content-y = 0;
+    }
+
+    // scrolls just enough to show item `r` of the grid
+    function grid-ensure(r: int) {
+        if (r < 0 || grid.along <= 0) {
+            return;
+        }
+        let start = 6px + floor(r / max(1, view.lanes)) * grid.along;
+        if (view.flows-columns) {
+            if (start - 6px < -grid.content-x) {
+                grid.content-x = -(start - 6px);
+            } else if (start + grid.along + 6px > -grid.content-x + grid.visible-width) {
+                grid.content-x = -min(max(0px, grid.content-width - grid.visible-width), start + grid.along + 6px - grid.visible-width);
+            }
+        } else {
+            if (start - 6px < -grid.content-y) {
+                grid.content-y = -(start - 6px);
+            } else if (start + grid.along + 6px > -grid.content-y + grid.visible-height) {
+                grid.content-y = -min(max(0px, grid.content-height - grid.visible-height), start + grid.along + 6px - grid.visible-height);
+            }
+        }
+    }
     property <bool> editing;
     property <int> edit-seq: view.edit-seq;
     changed edit-seq => {
@@ -288,6 +384,9 @@ export component SidePane {
         filter-field.focus();
         filter-field.select-all();
     }
+    // the slider follows the size (buttons, keys, another view); its own moves come from the user
+    property <float> slider-pos: view.size-slider;
+    changed slider-pos => { size-slider.value = slider-pos; }
     property <string> filter-text: view.filter;
     changed filter-text => {
         if (filter-field.text != filter-text) {
@@ -600,6 +699,26 @@ export component SidePane {
                         }
                     }
                 }
+                ToolButton {
+                    y: (parent.height - self.height) / 2;
+                    icon: Icons.view(root.view.view-mode);
+                    tooltip: "View (Ctrl+Shift+1…8, Ctrl+wheel)";
+                    clicked => {
+                        root.activate(root.side);
+                        root.view-menu(root.side);
+                        root.show-menu(self.absolute-position.x, self.absolute-position.y + self.height);
+                    }
+                }
+                ToolButton {
+                    y: (parent.height - self.height) / 2;
+                    icon: root.view.sort-ascending ? Icons.sort-ascending : Icons.sort-descending;
+                    tooltip: root.view.sort-tooltip;
+                    clicked => {
+                        root.activate(root.side);
+                        root.sort-menu(root.side);
+                        root.show-menu(self.absolute-position.x, self.absolute-position.y + self.height);
+                    }
+                }
                 filter-field := LineEdit {
                     // narrower in a narrow side
                     min-width: 70px;
@@ -631,7 +750,8 @@ export component SidePane {
 
             // ---- details list ----
             Rectangle {
-                height: 26px;
+                height: root.details ? 26px : 0px;
+                visible: root.details;
                 clip: true;
                 // right-click: which columns to show
                 TouchArea {
@@ -670,8 +790,11 @@ export component SidePane {
                 Rectangle { y: parent.height - 1px; height: 1px; background: Palette.border; }
             }
             Rectangle {
-                // right-clicks on empty space pass through the list to here: the folder's menu
-                TouchArea {
+                // Presses on a row past its icon and name, and on empty space, pass through the
+                // list to here. This area is never rebuilt while scrolling, so a selection box keeps
+                // getting the mouse after its first row scrolled out of view (a row's own touch area
+                // would be gone, and the release with it).
+                bg-touch := TouchArea {
                     pointer-event(event) => {
                         if (event.kind == PointerEventKind.down) {
                             root.activate(root.side);
@@ -679,35 +802,62 @@ export component SidePane {
                         }
                         if (event.kind == PointerEventKind.down && event.button == PointerEventButton.left) {
                             root.box-press(self.mouse-x, self.mouse-y, event.modifiers.control || event.modifiers.meta, event.modifiers.shift);
-                            root.empty-pressed(root.side);
+                            if (root.list-row-at(self.mouse-y) >= 0) {
+                                root.row-pressed(root.side, root.list-row-at(self.mouse-y), event.modifiers.control || event.modifiers.meta, event.modifiers.shift);
+                            } else {
+                                root.empty-pressed(root.side);
+                            }
                         }
                         if (event.kind == PointerEventKind.up && event.button == PointerEventButton.left) {
                             root.box-release();
                         }
                         if (event.kind == PointerEventKind.down && event.button == PointerEventButton.right) {
-                            root.row-menu(root.side, -1);
+                            root.row-menu(root.side, root.list-row-at(self.mouse-y));
                             root.show-menu(self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y);
                         }
                     }
                     moved => { root.box-drag(self.mouse-x, self.mouse-y); }
+                    clicked => {
+                        if (root.list-row-at(self.mouse-y) >= 0) {
+                            root.row-released(root.side, root.list-row-at(self.mouse-y));
+                        }
+                    }
+                    double-clicked => {
+                        if (root.list-row-at(self.mouse-y) >= 0) {
+                            root.row-activated(root.side, root.list-row-at(self.mouse-y));
+                        }
+                    }
+                    // reaches here only where the list has nothing to scroll; names take it always
+                    scroll-event(event) => {
+                        if (event.modifiers.control || event.modifiers.meta) {
+                            root.view-wheel(root.side, event.delta-y);
+                            return accept;
+                        }
+                        return reject;
+                    }
                 }
                 list := ListView {
-                    content-width: max(root.columns-width, self.visible-width);
-                    for row[i] in root.view.files: file-row := Rectangle {
+                    // no sideways scroll bar under the grid views
+                    content-width: root.details ? max(root.columns-width, self.visible-width) : self.visible-width;
+                    // empty in the grid views: no hidden rows to build or find
+                    for row[i] in root.view.list-files: file-row := Rectangle {
                         height: root.row-height;
                         width: max(root.columns-width, list.visible-width);
                         accessible-role: list-item;
                         accessible-label: row.name;
                         accessible-item-selected: row.selected;
-                        // files are dragged by their icon and name; elsewhere a press starts a selection box
-                        property <bool> on-name: row-touch.mouse-x <= name-text.x + min(name-text.width, name-text.preferred-width) + 4px;
                         background: i == root.drop-row ? Palette.accent-background.with-alpha(0.3)
                             : row.selected ? Palette.selection-background.with-alpha(root.focused ? 1.0 : 0.45)
-                            : row-touch.has-hover ? Palette.foreground.with-alpha(0.05) : transparent;
+                            : row-touch.has-hover || i == root.hover-row ? Palette.foreground.with-alpha(0.05) : transparent;
                         border-width: (row.current && root.focused) || i == root.drop-row ? 1px : 0px;
                         border-color: Palette.accent-background;
+                        // files are dragged by their icon and name (with a little slack); the rest
+                        // of the row belongs to the area behind the list (selection box)
                         row-drag := DragArea {
-                            enabled: file-row.on-name && !root.box-armed;
+                            x: 0;
+                            width: name-text.x + min(name-text.width, name-text.preferred-width) + 4px;
+                            height: parent.height;
+                            enabled: !root.box-armed;
                             data: root.drag-data;
                             allow-move: true;
                             allow-copy: true;
@@ -723,25 +873,22 @@ export component SidePane {
                                     root.focus-keys();
                                 }
                                 if (event.kind == PointerEventKind.down && event.button == PointerEventButton.left) {
-                                    if (!file-row.on-name) {
-                                        root.box-press(list.content-x + self.mouse-x, list.content-y + i * root.row-height + self.mouse-y,
-                                            event.modifiers.control || event.modifiers.meta, event.modifiers.shift);
-                                    }
                                     root.row-pressed(root.side, i, event.modifiers.control || event.modifiers.meta, event.modifiers.shift);
-                                }
-                                if (event.kind == PointerEventKind.up && event.button == PointerEventButton.left) {
-                                    root.box-release();
                                 }
                                 if (event.kind == PointerEventKind.down && event.button == PointerEventButton.right) {
                                     root.row-menu(root.side, i);
                                     root.show-menu(self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y);
                                 }
                             }
-                            moved => {
-                                root.box-drag(list.content-x + self.mouse-x, list.content-y + i * root.row-height + self.mouse-y);
-                            }
                             clicked => { root.row-released(root.side, i); }
                             double-clicked => { root.row-activated(root.side, i); }
+                            scroll-event(event) => {
+                                if (event.modifiers.control || event.modifiers.meta) {
+                                    root.view-wheel(root.side, event.delta-y);
+                                    return accept;
+                                }
+                                return reject;
+                            }
                         }
                         }
                         HorizontalLayout {
@@ -779,12 +926,129 @@ export component SidePane {
                         }
                     }
                 }
-                // the selection box, clipped to the list
+                // ---- the grid views: only the slots in view exist, reused while scrolling ----
+                grid := ScrollView {
+                    visible: !root.details;
+                    property <bool> cols: root.view.flows-columns;
+                    property <length> along: cols ? root.view.cell-w : root.view.cell-h;
+                    property <length> offset: cols ? -self.content-x : -self.content-y;
+                    property <int> first: along > 0 ? max(0, floor((offset - 6px) / along)) * root.view.lanes : 0;
+                    property <int> slots: root.view.slots.length;
+                    content-width: cols ? max(root.view.content-len, self.visible-width) : self.visible-width;
+                    content-height: cols ? self.visible-height : max(root.view.content-len, self.visible-height);
+                    init => { root.grid-resized(root.side, self.visible-width, self.visible-height); }
+                    changed visible-width => { root.grid-resized(root.side, self.visible-width, self.visible-height); }
+                    changed visible-height => { root.grid-resized(root.side, self.visible-width, self.visible-height); }
+                    changed first => { root.grid-range(root.side, self.first, self.slots); }
+                    changed slots => { root.grid-range(root.side, self.first, self.slots); }
+                    // empty space: selection box, the folder's menu, Ctrl+wheel
+                    TouchArea {
+                        width: grid.content-width;
+                        height: grid.content-height;
+                        pointer-event(event) => {
+                            if (event.kind == PointerEventKind.down) {
+                                root.activate(root.side);
+                                root.focus-keys();
+                            }
+                            if (event.kind == PointerEventKind.down && event.button == PointerEventButton.left) {
+                                root.box-press(grid.content-x + self.mouse-x, grid.content-y + self.mouse-y,
+                                    event.modifiers.control || event.modifiers.meta, event.modifiers.shift);
+                                root.empty-pressed(root.side);
+                            }
+                            if (event.kind == PointerEventKind.up && event.button == PointerEventButton.left) {
+                                root.box-release();
+                            }
+                            if (event.kind == PointerEventKind.down && event.button == PointerEventButton.right) {
+                                root.row-menu(root.side, -1);
+                                root.show-menu(self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y);
+                            }
+                        }
+                        moved => { root.box-drag(grid.content-x + self.mouse-x, grid.content-y + self.mouse-y); }
+                        scroll-event(event) => {
+                            if (event.modifiers.control || event.modifiers.meta) {
+                                root.view-wheel(root.side, event.delta-y);
+                                return accept;
+                            }
+                            return reject;
+                        }
+                    }
+                    // a model from Rust that only changes length: an int count here would be a new
+                    // model on every update, and every slot would be built again (losing clicks)
+                    for k in root.view.slots: slot := Rectangle {
+                        property <int> idx: grid.first + k;
+                        property <FileRow> item: root.view.files[idx];
+                        property <int> line: floor(idx / max(1, root.view.lanes));
+                        property <int> lane: idx - line * max(1, root.view.lanes);
+                        visible: idx < root.view.files.length;
+                        x: 6px + (grid.cols ? line * root.view.cell-w : lane * root.view.cell-w);
+                        y: 6px + (grid.cols ? lane * root.view.cell-h : line * root.view.cell-h);
+                        width: root.view.cell-w;
+                        height: root.view.cell-h;
+                        accessible-role: list-item;
+                        accessible-label: item.name;
+                        accessible-item-selected: item.selected;
+                        DragArea {
+                            enabled: !root.box-armed;
+                            data: root.drag-data;
+                            allow-move: true;
+                            allow-copy: true;
+                            changed dragging => {
+                                if (self.dragging) {
+                                    root.drag-started(root.side, 0, slot.idx);
+                                }
+                            }
+                        slot-touch := TouchArea {
+                            pointer-event(event) => {
+                                if (event.kind == PointerEventKind.down) {
+                                    root.activate(root.side);
+                                    root.focus-keys();
+                                }
+                                if (event.kind == PointerEventKind.down && event.button == PointerEventButton.left) {
+                                    root.row-pressed(root.side, slot.idx, event.modifiers.control || event.modifiers.meta, event.modifiers.shift);
+                                }
+                                if (event.kind == PointerEventKind.down && event.button == PointerEventButton.right) {
+                                    root.row-menu(root.side, slot.idx);
+                                    root.show-menu(self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y);
+                                }
+                            }
+                            clicked => { root.row-released(root.side, slot.idx); }
+                            double-clicked => { root.row-activated(root.side, slot.idx); }
+                            scroll-event(event) => {
+                                if (event.modifiers.control || event.modifiers.meta) {
+                                    root.view-wheel(root.side, event.delta-y);
+                                    return accept;
+                                }
+                                return reject;
+                            }
+                        }
+                        }
+                        GridItem {
+                            width: parent.width;
+                            height: parent.height;
+                            mode: root.view.view-mode;
+                            icon-size: root.view.icon-size;
+                            text-below: root.view.text-below;
+                            name: slot.item.name;
+                            kind: slot.item.kind;
+                            size: slot.item.size;
+                            modified: slot.item.modified;
+                            icon: slot.item.icon;
+                            hidden: slot.item.hidden;
+                            thumb: slot.item.thumb;
+                            selected: slot.item.selected;
+                            current: slot.item.current;
+                            focused: root.focused;
+                            hover: slot-touch.has-hover;
+                            drop-target: slot.idx == root.drop-row;
+                        }
+                    }
+                }
+                // the selection box, clipped to the file view
                 if root.box-active: Rectangle {
-                    property <length> x1: clamp(root.box-ax + list.content-x, 0px, list.visible-width);
-                    property <length> y1: clamp(root.box-ay + list.content-y, 0px, list.visible-height);
-                    property <length> x2: clamp(root.box-mx, 0px, list.visible-width);
-                    property <length> y2: clamp(root.box-my, 0px, list.visible-height);
+                    property <length> x1: clamp(root.box-ax + root.scroll-x, 0px, root.body-w);
+                    property <length> y1: clamp(root.box-ay + root.scroll-y, 0px, root.body-h);
+                    property <length> x2: clamp(root.box-mx, 0px, root.body-w);
+                    property <length> y2: clamp(root.box-my, 0px, root.body-h);
                     x: min(x1, x2);
                     y: min(y1, y2);
                     width: abs(x2 - x1);
@@ -795,25 +1059,31 @@ export component SidePane {
                     accessible-role: groupbox;
                     accessible-label: "Selection box";
                 }
-                // above or below the list while drawing a box: scroll
+                // past the edge while drawing a box: scroll (sideways in List)
                 Timer {
                     interval: 30ms;
-                    running: root.box-active && (root.box-my < 0 || root.box-my > list.visible-height);
+                    running: root.box-over != 0px;
                     triggered => {
-                        list.content-y = clamp(list.content-y - clamp((root.box-my < 0 ? root.box-my : root.box-my - list.visible-height) / 2, -40px, 40px),
-                            min(0px, list.visible-height - list.content-height), 0px);
+                        let step = clamp(root.box-over / 2, -40px, 40px);
+                        if (root.details) {
+                            list.content-y = clamp(list.content-y - step, min(0px, list.visible-height - list.content-height), 0px);
+                        } else if (grid.cols) {
+                            grid.content-x = clamp(grid.content-x - step, min(0px, grid.visible-width - grid.content-width), 0px);
+                        } else {
+                            grid.content-y = clamp(grid.content-y - step, min(0px, grid.visible-height - grid.content-height), 0px);
+                        }
                         root.box-update();
                     }
                 }
-                // drops onto a folder row, or anywhere else into the shown folder
+                // drops onto a folder row or item, or anywhere else into the shown folder
                 DropArea {
                     can-drop(event) => {
-                        root.drop-row = root.drop-check(root.side, 0, root.list-row-at(event.position.y));
+                        root.drop-row = root.drop-check(root.side, 0, root.body-index-at(event.position.x, event.position.y));
                         return root.drop-row >= -1 ? DragAction.move : DragAction.none;
                     }
                     dropped(event) => {
                         root.drop-row = -2;
-                        root.dropped(root.side, 0, root.list-row-at(event.position.y));
+                        root.dropped(root.side, 0, root.body-index-at(event.position.x, event.position.y));
                         return DragAction.copy;
                     }
                     changed has-drag => {
@@ -835,17 +1105,53 @@ export component SidePane {
             Rectangle {
                 height: 24px;
                 background: Palette.alternate-background;
-                Text {
-                    x: 8px;
-                    width: parent.width - 16px;
-                    text: root.view.status;
-                    vertical-alignment: center;
-                    overflow: elide;
-                    color: Palette.foreground.with-alpha(0.75);
-                    font-size: 12px;
-                    accessible-role: text;
-                    accessible-label: "Status";
-                    accessible-value: root.view.status;
+                HorizontalLayout {
+                    padding-left: 8px;
+                    padding-right: 4px;
+                    spacing: 2px;
+                    Text {
+                        horizontal-stretch: 1;
+                        text: root.view.status;
+                        vertical-alignment: center;
+                        overflow: elide;
+                        color: Palette.foreground.with-alpha(0.75);
+                        font-size: 12px;
+                        accessible-role: text;
+                        accessible-label: "Status";
+                        accessible-value: root.view.status;
+                    }
+                    // item size: icon views and Tiles only
+                    if root.view.resizable: ToolButton {
+                        width: 22px;
+                        height: 22px;
+                        y: 1px;
+                        icon: Icons.minus;
+                        tooltip: "Smaller items (Ctrl+−)";
+                        enabled: root.view.can-smaller;
+                        clicked => { root.activate(root.side); root.size-step(root.side, -1); }
+                    }
+                    size-slider := Slider {
+                        visible: root.view.resizable;
+                        width: root.view.resizable ? 110px : 0px;
+                        minimum: -1;
+                        maximum: 1;
+                        accessible-label: "Item size";
+                        init => { self.value = root.slider-pos; }
+                        changed(v) => {
+                            root.activate(root.side);
+                            root.size-slider-moved(root.side, v);
+                        }
+                        released => { root.focus-keys(); }
+                    }
+                    if root.view.resizable: ToolButton {
+                        width: 22px;
+                        height: 22px;
+                        y: 1px;
+                        icon: Icons.plus;
+                        tooltip: "Bigger items (Ctrl++)";
+                        enabled: root.view.can-bigger;
+                        clicked => { root.activate(root.side); root.size-step(root.side, 1); }
+                    }
                 }
             }
         }
