@@ -178,6 +178,7 @@ export component PreviewPane {
 // handler, so arrow keys still move through the files.
 export component PreviewWindow inherits Window {
     default-font-family: Theme.font;
+    icon: Theme.app-icon;
     in property <PreviewView> view;
     callback zoom(int);
     callback fit();

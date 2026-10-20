@@ -15,8 +15,10 @@ Same machine (Linux, Wayland), resident memory of a running app showing a folder
 | Rust, OpenGL renderer (default) | ~105 MB | one 20 MB executable |
 | Rust, software renderer (`SLINT_BACKEND=winit-software`) | ~32 MB | same executable |
 
-Most of the OpenGL figure is the GPU driver. Whether to make the software renderer the default
-is still open (it uses the CPU to draw; fine for lists, to be checked on big 4K windows).
+Most of the OpenGL figure is the GPU driver. OpenGL stays the default: the software renderer
+draws a full 1080p window in about 50 ms and a 4K one in about 190 ms (MIGRATION.md, stage 9),
+too slow for smooth scrolling on big screens. Slint switches to it by itself where OpenGL is
+missing; `SLINT_BACKEND=winit-software` picks it to save memory.
 
 ## Build, run, test
 
@@ -30,10 +32,27 @@ is still open (it uses the CPU to draw; fine for lists, to be checked on big 4K 
 - `cargo clippy --workspace --all-targets`: must stay warning free.
 - Visual checks without a display: `cargo test -p fileem --test snapshots -- --ignored` renders
   the main window (also in the grid views), the preview, a search window, bookmarks (tree + Manage window), drives, a dialog, a right-click menu, the progress window and a Properties window headless to `target/snapshots/*.ppm`
-  (convert with Pillow to look at them). Extend it when adding windows or dialogs.
+  (convert with Pillow to look at them), and prints how long the software renderer takes for
+  the whole window at four screen sizes (`--release` for real numbers). Extend it when adding
+  windows or dialogs.
 - Visual checks of the real app (Wayland has no desktop screenshots): `FILEEM_SNAPSHOT=out.ppm cargo run -p fileem
   FOLDER` renders the window after the folder loaded, writes it as PPM and quits. Don't type while
   it runs: the window takes keyboard focus as it opens and your keys reach it.
+
+## Packages
+
+All from the release build (`cargo build --release -p fileem`), written to `target/dist/`;
+CI (`.github/workflows/rust.yml`) builds them on every push.
+
+- Linux, per user: `crates/fileem/packaging/linux/install.sh` (`--uninstall`): the executable in
+  `~/.local/share/fileem-rust`, icons and the launcher entry `com.fileem.FileEm.desktop`. Next to
+  the Java app's install, not over it.
+- Linux, system wide: `crates/fileem/packaging/linux/make-deb.sh` → `fileem_<version>_<arch>.deb`.
+- macOS: `crates/fileem/packaging/macos/make-app.sh` → `fileEm.app` (unsigned).
+- Windows: `target/release/fileem.exe` is the app (icon and version info built in, no console).
+- The app id `com.fileem.FileEm` (`about::APP_ID`) names the launcher entry, the icons and the
+  macOS bundle id; the windows carry it (Wayland app id, X11 class), so docks show the icon.
+  Icons are `crates/fileem/icons/` (from `tools/make-icon.py`).
 
 The test rules of `AGENTS.md` apply here too: every feature gets tests, every bug fix a
 regression test, file operations need integrity tests, and nothing touches real user folders,
@@ -90,6 +109,9 @@ crates/fileem/             the app
   src/app/theme.rs         puts the theme on every window, theme menu, light/dark, About box
   src/theme.rs             the five theme families in light and dark (toolkit-free; Java Theme
                            and its stylesheets)
+  icons/                   the app icon: PNGs 16–512 px, ico, icns (tools/make-icon.py)
+  packaging/linux/         launcher entry, install.sh (per user), make-deb.sh
+  packaging/macos/         make-app.sh (fileEm.app)
   src/about.rs             the About text: version, build date, Rust/Slint, system (Java AppInfo);
                            build.rs fills in the date and versions
   src/view_mode.rs         the eight views, sizes and steps, session format (Java ViewMode)
@@ -112,6 +134,7 @@ crates/fileem/             the app
   tests/ui.rs              end-to-end UI test on Slint's headless testing backend (software
                            renderer, so snapshots work)
   tests/signals.rs         signal delivery, in a process of its own (no test harness)
+  tests/packaging.rs       app id, icons and the packaging scripts (run into temp folders)
 ```
 
 Notes for the UI test: Slint's testing backend can be initialized once per process, so

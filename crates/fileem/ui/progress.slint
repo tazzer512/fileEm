@@ -21,6 +21,7 @@ export struct OpRow {
 
 export component ProgressWindow inherits Window {
     default-font-family: Theme.font;
+    icon: Theme.app-icon;
     in property <string> window-title;
     in property <[OpRow]> rows;
     title: window-title;

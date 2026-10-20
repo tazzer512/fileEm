@@ -5,6 +5,11 @@
 /// Java app and the packages use that one).
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
+/// The app id: Wayland's app id and X11's window class, so the desktop links the windows to the
+/// launcher entry of the same name (`packaging/linux/install.sh`) and shows its icon. Also the
+/// macOS bundle id. Not the Java app's (`com.fileem.FileEmApp`): both can be installed.
+pub const APP_ID: &str = "com.fileem.FileEm";
+
 /// The build date (yyyy-mm-dd).
 pub fn build_date() -> Option<&'static str> {
     option_env!("FILEEM_BUILT").filter(|d| !d.is_empty())

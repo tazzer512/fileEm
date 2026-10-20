@@ -20,6 +20,7 @@ export { PropertiesWindow, PropLine } from "properties.slint";
 
 export component AppWindow inherits Window {
     default-font-family: Theme.font;
+    icon: Theme.app-icon;
     in property <string> window-title: "fileEm";
     // shown in the About button's tooltip
     in property <string> version;

@@ -1,5 +1,6 @@
 """Draws the fileEm app icon and writes every size and format the app and its packages use."""
 import os
+import shutil
 from PIL import Image, ImageDraw, ImageFilter
 
 S = 1024  # master canvas, downscaled per size
@@ -94,3 +95,10 @@ big.resize((512, 512), Image.LANCZOS).save(os.path.join(pkg, "fileem.png"), opti
 big.resize((256, 256), Image.LANCZOS).save(os.path.join(pkg, "fileem.ico"),
                                           sizes=[(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)])
 big.save(os.path.join(pkg, "fileem.icns"))
+# The Rust app (crates/fileem): the same sizes for its window icon and packages
+rust = os.path.join("crates", "fileem", "icons")
+os.makedirs(rust, exist_ok=True)
+for s in (16, 24, 32, 48, 64, 128, 256, 512):
+    shutil.copy(os.path.join(res, f"fileem-{s}.png"), rust)
+for f in ("fileem.ico", "fileem.icns"):
+    shutil.copy(os.path.join(pkg, f), rust)

@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=fileEm (Rust)
+GenericName=File Manager
+Comment=Explorer-style file manager with an optional second side
+Exec=fileem %f
+Icon=com.fileem.FileEm
+Terminal=false
+Categories=System;FileTools;FileManager;
+Keywords=files;folders;explorer;commander;
+StartupWMClass=com.fileem.FileEm
+StartupNotify=true

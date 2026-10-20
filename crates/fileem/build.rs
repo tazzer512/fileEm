@@ -7,6 +7,21 @@ fn main() {
     let config = slint_build::CompilerConfiguration::new().with_style("fluent".into()).with_debug_info(debug);
     slint_build::compile_with_config("ui/app.slint", config).expect("ui/app.slint compiles");
     about();
+    windows_exe();
+}
+
+/// The Windows executable's icon (Explorer, the taskbar before a window shows) and its name in
+/// the file's properties; the version comes from Cargo.
+fn windows_exe() {
+    println!("cargo:rerun-if-changed=icons/fileem.ico");
+    #[cfg(windows)]
+    if std::env::var("CARGO_CFG_TARGET_OS").is_ok_and(|os| os == "windows") {
+        let mut res = winresource::WindowsResource::new();
+        res.set_icon("icons/fileem.ico").set("ProductName", "fileEm").set("FileDescription", "fileEm");
+        if let Err(e) = res.compile() {
+            println!("cargo:warning=no icon in fileem.exe: {e}");
+        }
+    }
 }
 
 /// What the About box shows besides the version (src/about.rs): the build date, the compiler

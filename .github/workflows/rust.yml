@@ -1,0 +1,58 @@
+# The Rust app on Linux, Windows and macOS: clippy, every test (the UI tests run headless on
+# Slint's testing backend, no display needed), the release build and its package, uploaded as
+# the run's artifacts (a .deb, fileEm.exe, fileEm.app zipped).
+name: Rust
+
+on:
+  push:
+    branches: [main, rust]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Linux build dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libfontconfig1-dev pkg-config desktop-file-utils
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Tests
+        run: cargo test --workspace
+      - name: Release build
+        run: cargo build --release -p fileem
+
+      - name: Package (Linux)
+        if: runner.os == 'Linux'
+        run: crates/fileem/packaging/linux/make-deb.sh
+      - name: Package (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          crates/fileem/packaging/macos/make-app.sh
+          ditto -c -k --keepParent target/dist/fileEm.app target/dist/fileEm-macos.zip
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: mkdir -p target/dist && cp target/release/fileem.exe target/dist/fileEm.exe
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fileem-${{ runner.os }}
+          path: |
+            target/dist/*.deb
+            target/dist/fileEm-macos.zip
+            target/dist/fileEm.exe
+          if-no-files-found: error

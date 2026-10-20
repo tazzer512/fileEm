@@ -211,4 +211,39 @@ fn snapshots() {
     ui.invoke_about();
     pump_until("about", || ui.get_dialog_open());
     save(ui.window(), "about");
+    ui.window().dispatch_event(WindowEvent::KeyPressed { text: Key::Escape.into() });
+
+    render_times(&ui, &a, tmp.path());
+}
+
+/// How long the software renderer takes to draw the whole main window at common screen sizes
+/// (the worst case: a full repaint; scrolling and hovering repaint less). Printed, not checked:
+/// the numbers behind the renderer choice in MIGRATION.md.
+fn render_times(ui: &AppWindow, a: &app::Shared, tmp: &Path) {
+    let many = tmp.join("many");
+    fs::create_dir_all(&many).unwrap();
+    for i in 0..300 {
+        fs::write(many.join(format!("file {i:03}.txt")), "x").unwrap();
+    }
+    let path = many.to_string_lossy().to_string();
+    ui.invoke_address_entered(0, path.clone().into());
+    ui.invoke_address_entered(1, path.into());
+    pump_until("listed", || ui.get_left().files.row_count() == 300 && ui.get_right().files.row_count() == 300);
+    for family in [fileem::theme::Family::Classic, fileem::theme::Family::Aurora] {
+        app::set_theme(a, family, false);
+        for (w, h) in [(1280.0, 780.0), (1920.0, 1080.0), (2560.0, 1440.0), (3840.0, 2160.0)] {
+            ui.window().set_size(slint::LogicalSize::new(w, h));
+            pump_until("laid out", || true);
+            let _ = ui.window().take_snapshot();
+            let mut times: Vec<Duration> = (0..5)
+                .map(|_| {
+                    let start = Instant::now();
+                    let _ = ui.window().take_snapshot().unwrap();
+                    start.elapsed()
+                })
+                .collect();
+            times.sort();
+            eprintln!("render {:?} {w}x{h}: {:.1} ms", family, times[2].as_secs_f64() * 1000.0);
+        }
+    }
 }

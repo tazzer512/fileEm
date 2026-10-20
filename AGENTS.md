@@ -68,6 +68,11 @@ remove or break it.
   snapshots (`theme-<id>-<mode>`).
 - One version number: the workspace's `version` in `Cargo.toml` equals the pom's `app.version`
   (`about.rs` tests it); bump both for a release.
+- Packaging (`crates/fileem/packaging/`, `icons/`, CI in `.github/workflows/rust.yml`): the app
+  id `com.fileem.FileEm` (`about::APP_ID`) names the launcher entry, its icons and the macOS
+  bundle id; renaming one breaks the dock icon (`tests/packaging.rs` checks). A new kind of
+  window sets `icon: Theme.app-icon;`. Tests run the scripts with `FILEEM_BIN` (a stand-in) and
+  `XDG_DATA_HOME` / `FILEEM_DIST` in temp folders: never install into the real `~/.local`.
 
 ## Tests are mandatory
 

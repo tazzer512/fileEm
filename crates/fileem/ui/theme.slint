@@ -44,6 +44,8 @@ export struct ThemeData {
 }
 
 export global Theme {
+    // the app icon of every window (title bar, task bar; Wayland takes the desktop entry's)
+    out property <image> app-icon: @image-url("../icons/fileem-256.png");
     // Classic light until Rust sets the saved theme
     in property <ThemeData> data: {
         dark: false,

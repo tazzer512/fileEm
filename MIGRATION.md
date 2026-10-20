@@ -12,7 +12,8 @@ OpenGL, ~32 MB with the software renderer).
 preview) done on branch `rust`, and the leftovers of stages 1–5 fixed except drag & drop with
 other applications (decided: not possible with Slint 1.18). The Java app in `src/` is still the
 complete, daily-use version; nothing was removed from it. Stage 7 (search, bookmarks,
-drives and eject) and stage 8 (themes, About) done; next stage 9, packaging and cutover.
+drives and eject), stage 8 (themes, About) and stage 9's packaging (Linux install script and
+deb, Windows exe, macOS bundle, CI) done; open: the cutover, after daily use.
 
 ## How to work a stage
 
@@ -399,15 +400,45 @@ are the Java sources, as a size hint.
   be themed. About is a dialog over the main window, not a separate window that stays open.
   Texts without a color of their own take the std style's foreground (close to the theme's).
 
-### Stage 9: packaging and cutover
+### Stage 9: packaging and cutover (packaging done; cutover open)
 
-- Linux: install script with `.desktop` entry and icons (like `tools/install-linux.sh`; the
-  window class / app id must match the desktop file), AppImage or deb.
-- Windows (`.exe`, icon resource, no console) and macOS (`.app` bundle, icns) builds; CI on
-  all three OSes running `cargo test` and the release build.
-- Decide the default renderer (OpenGL vs software) after testing big windows.
-- Cutover: when every stage is ticked and the Rust app has been used daily for a while, move
-  the Java app out (or to a `java` branch), make README/AGENTS describe the Rust app only.
+- [x] **App id and icon**: `about::APP_ID` = `com.fileem.FileEm`, set with
+  `slint::set_xdg_app_id` before the first window shows (Wayland `set_app_id`, X11 WM_CLASS
+  class; checked with `WAYLAND_DEBUG` and `xprop`). Not the Java app's id
+  (`com.fileem.FileEmApp`): both can be installed side by side. Every window's `icon` is
+  `Theme.app-icon` (the 256 px PNG, embedded), so title bars, X11 and the Windows taskbar show it;
+  Wayland docks take the launcher entry's. Icons live in `crates/fileem/icons/` (all PNG sizes,
+  ico, icns), written by `tools/make-icon.py` with the Java ones.
+- [x] **Linux** (`crates/fileem/packaging/linux/`): `com.fileem.FileEm.desktop` (the one entry
+  both scripts use; named after the app id, `StartupWMClass` too); `install.sh` installs per user
+  into `~/.local/share/fileem-rust` + icons + entry (`--uninstall` removes only those, never the
+  Java app's install); `make-deb.sh` builds `target/dist/fileem_<version>_<arch>.deb`
+  (`/usr/bin/fileem`, entry, icons; needs `dpkg-deb`). The entry is called "fileEm (Rust)" until
+  the cutover, so it can't be mixed up with the Java app's. No AppImage: the deb and the per-user
+  script cover the two ways the Java app is installed now.
+- [x] **Windows**: release builds have no console (`windows_subsystem`), `build.rs` embeds the
+  icon and version info in `fileem.exe` (`winresource`, a build dependency only on Windows).
+- [x] **macOS**: `packaging/macos/make-app.sh` builds `target/dist/fileEm.app` (Info.plist with the
+  app id as bundle id, the version, the icns). Unsigned.
+- [x] **CI** (`.github/workflows/rust.yml`): Linux, Windows and macOS run clippy (warnings are
+  errors), `cargo test --workspace` and the release build, then package (deb, exe, zipped .app)
+  and upload them as artifacts. Not run yet: the repository has no GitHub remote here.
+- [x] **Renderer**: OpenGL (femtovg) stays the default; Slint falls back to the software
+  renderer by itself where OpenGL is missing, and `SLINT_BACKEND=winit-software` picks it for
+  the smaller memory use. Measured (snapshot test's `render_times`, release build, i7-4810MQ):
+  a full repaint of the main window with 300 rows per side takes 25 ms at 1280×780, 52 ms at
+  1920×1080, 86 ms at 2560×1440 and 186 ms at 3840×2160 (same with Aurora's gradients). Fine
+  for small windows, too slow for smooth scrolling on big or HiDPI screens.
+- Tests: `tests/packaging.rs` (the entry is named after the app id and valid per
+  `desktop-file-validate`, every `.slint` window binds the icon, icons in every size and format,
+  the install / uninstall / refusal of `install.sh`, the deb's files and version, the bundle's
+  Info.plist; the scripts run on a stand-in executable into temp folders); UI scenario
+  `windows_carry_the_app_icon`.
+- Untested: the Windows and macOS builds and packages (no such machines here; CI will be the
+  first run), signing (Windows SmartScreen and macOS Gatekeeper warn about unsigned apps).
+- [ ] **Cutover**, once the Rust app has been used daily for a while: move the Java app out (or
+  to a `java` branch), name the launcher entry "fileEm", make README/AGENTS describe the Rust app
+  only.
 
 ## Decisions
 

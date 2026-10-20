@@ -15,6 +15,10 @@ fn main() -> Result<(), slint::PlatformError> {
     let start = std::env::args_os().nth(1).map(std::path::PathBuf::from);
     let session = Rc::new(Session::load_default());
     let ui = AppWindow::new()?;
+    // before the first window shows (the backend exists once a window was created)
+    if let Err(e) = slint::set_xdg_app_id(fileem::about::APP_ID) {
+        eprintln!("fileem: app id: {e}");
+    }
     let w = session.get_f64("window.w", 1280.0).clamp(480.0, 10_000.0);
     let h = session.get_f64("window.h", 780.0).clamp(320.0, 10_000.0);
     ui.window().set_size(slint::LogicalSize::new(w as f32, h as f32));

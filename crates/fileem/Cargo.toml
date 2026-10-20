@@ -27,6 +27,10 @@ clipboard-rs = { version = "0.3", default-features = false }
 # sigwait for saving on SIGTERM / logout (src/signals.rs)
 libc = "0.2"
 
+# the .exe's icon and version info (build.rs; needs rc.exe / windres, which Windows toolchains have)
+[target."cfg(windows)".build-dependencies]
+winresource = { version = "0.1.34", default-features = false }
+
 [build-dependencies]
 slint-build = "1"
 

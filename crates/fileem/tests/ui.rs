@@ -446,6 +446,7 @@ fn ui() {
         the_theme_menu_switches_family_and_mode_in_every_open_window;
         the_light_dark_button_toggles_and_the_theme_survives_a_restart;
         the_about_button_shows_version_build_date_and_system;
+        windows_carry_the_app_icon;
     }
 }
 
@@ -3217,6 +3218,19 @@ fn the_light_dark_button_toggles_and_the_theme_survives_a_restart() {
     // an unknown theme (a newer version's, a typo) is Classic
     let g = open_window_with(|s, _| s.put("theme.name", "nope"), true);
     assert_eq!(app::theme(&g.app), (Family::Classic, false));
+}
+
+fn windows_carry_the_app_icon() {
+    // the icon every window binds (tests/packaging.rs checks they all do), and that it is the
+    // 256 px one, not a missing image
+    let f = open_window();
+    let icon = f.ui.global::<fileem::Theme>().get_app_icon();
+    assert_eq!((icon.size().width, icon.size().height), (256, 256));
+    app::run_command(&f.app, fileem::menu::Command::Properties(vec![f.dir.clone()]));
+    wait_until(&f, "the properties window", |f| app::properties_windows(&f.app).len() == 1);
+    let p = app::properties_windows(&f.app).remove(0);
+    assert_eq!(p.global::<fileem::Theme>().get_app_icon().size().width, 256, "floating windows too");
+    p.invoke_close_clicked();
 }
 
 fn the_about_button_shows_version_build_date_and_system() {
