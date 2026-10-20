@@ -1,0 +1,421 @@
+// A search window (one per search): the folder searched, the pattern with the last searches, the
+// Hidden files box, Search / Stop, the results and a status line. Rust runs the search and keeps
+// the results (src/search.rs, src/app/search.rs); this file lays out and draws.
+
+import { Button, CheckBox, LineEdit, ListView, Palette } from "std-widgets.slint";
+import { FileIcon, Icons, MenuRow, ToolButton } from "icons.slint";
+import { HeaderCell } from "side.slint";
+import { DialogOverlay } from "dialog.slint";
+
+export struct SearchRow {
+    name: string,
+    folder: string,
+    size: string,
+    kind: string,
+    modified: string,
+    icon: int,
+    hidden: bool,
+    selected: bool,
+    current: bool,
+}
+
+export component SearchWindow inherits Window {
+    in property <string> window-title;
+    title: window-title;
+    preferred-width: 980px;
+    preferred-height: 520px;
+    min-width: 480px;
+    min-height: 300px;
+    background: Palette.background;
+    default-font-size: 13px;
+
+    // the folder searched (and everything below it)
+    in property <string> root-path;
+    in-out property <string> pattern;
+    in-out property <bool> include-hidden;
+    in property <bool> running;
+    in property <string> status;
+    in property <[SearchRow]> rows;
+    // the last searches, newest first
+    in property <[string]> history;
+    // -1: as found
+    in property <int> sort-column: -1;
+    in property <bool> sort-ascending: true;
+    // scroll `ensure-row` into view whenever `ensure-seq` changes
+    in property <int> ensure-row: -1;
+    in property <int> ensure-seq;
+
+    callback search(string);
+    callback stop();
+    // the search thread found more (or ended): Rust takes what it queued
+    callback results-ready();
+    // a pattern picked from the history list: searched at once
+    callback history-picked(string);
+    callback row-pressed(int, bool, bool);
+    callback row-activated(int);
+    callback row-menu(int);
+    callback sort-by(int);
+    // key text, ctrl/cmd, alt, shift; true when handled
+    callback key(string, bool, bool, bool) -> bool;
+    // Escape: stops a running search, else closes the window
+    callback escape();
+
+    // ---- right-click menu (src/menu.rs search_menu) ----
+    in property <[MenuRow]> menu-s0;
+    in property <[MenuRow]> menu-s1;
+    in property <[MenuRow]> menu-s2;
+    in property <[MenuRow]> menu-s3;
+    callback menu-activated(int);
+
+    // ---- dialog over this window (rename, delete, errors) ----
+    in property <bool> dialog-open;
+    in property <string> dialog-title;
+    in property <string> dialog-message;
+    in property <bool> dialog-input;
+    in-out property <string> dialog-text;
+    in property <int> dialog-select-end;
+    in property <string> dialog-error;
+    in property <[string]> dialog-lines;
+    in property <string> dialog-ok: "OK";
+    in property <bool> dialog-can-cancel: true;
+    in property <string> dialog-alt;
+    callback dialog-alternative();
+    callback dialog-accepted(string);
+    callback dialog-cancelled();
+
+    out property <length> row-height: 24px;
+    property <[length]> widths: [240px, 300px, 90px, 140px, 175px];
+    property <length> columns-width: widths[0] + widths[1] + widths[2] + widths[3] + widths[4];
+
+    public function focus-pattern() {
+        pattern-field.focus();
+    }
+
+    public function focus-results() {
+        results-keys.focus();
+    }
+
+    public function show-menu(x: length, y: length) {
+        context-menu.show({ x: x, y: y });
+    }
+
+    public function show-history() {
+        if (root.history.length > 0) {
+            history-popup.show();
+        }
+    }
+
+    function cell(row: SearchRow, col: int) -> string {
+        return col == 1 ? row.folder : col == 2 ? row.size : col == 3 ? row.kind : row.modified;
+    }
+
+    changed ensure-seq => {
+        if (root.ensure-row >= 0) {
+            if (root.ensure-row * row-height < -results-list.content-y) {
+                results-list.content-y = -root.ensure-row * row-height;
+            } else if ((root.ensure-row + 1) * row-height > -results-list.content-y + results-list.visible-height) {
+                results-list.content-y = -((root.ensure-row + 1) * row-height - results-list.visible-height);
+            }
+        }
+    }
+
+    FocusScope {
+        key-pressed(event) => {
+            if (event.text == Key.Escape) {
+                root.escape();
+                return EventResult.accept;
+            }
+            return EventResult.reject;
+        }
+        VerticalLayout {
+            VerticalLayout {
+                padding: 10px;
+                spacing: 6px;
+                HorizontalLayout {
+                    spacing: 6px;
+                    Path {
+                        width: 18px;
+                        height: 18px;
+                        y: (parent.height - self.height) / 2;
+                        viewbox-width: 24;
+                        viewbox-height: 24;
+                        commands: Icons.folder;
+                        fill: #d9a02b;
+                    }
+                    Text {
+                        text: root.root-path;
+                        vertical-alignment: center;
+                        overflow: elide;
+                        accessible-role: text;
+                        accessible-label: "Searching in";
+                    }
+                }
+                HorizontalLayout {
+                    spacing: 8px;
+                    pattern-field := LineEdit {
+                        text <=> root.pattern;
+                        min-width: 120px;
+                        placeholder-text: "Name or patterns, like *.jpg *.png or a*.* !*.mp3 (! excludes)";
+                        accessible-label: "Search for";
+                        accepted(text) => { root.search(text); }
+                        key-pressed(event) => {
+                            if (event.text == Key.DownArrow && (event.modifiers.alt || root.pattern == "")) {
+                                root.show-history();
+                                return EventResult.accept;
+                            }
+                            return EventResult.reject;
+                        }
+                    }
+                    history-button := ToolButton {
+                        icon: Icons.chevron-down;
+                        tooltip: "Last searches (Alt+Down)";
+                        enabled: root.history.length > 0;
+                        clicked => { root.show-history(); }
+                    }
+                    CheckBox {
+                        text: "Hidden files";
+                        checked <=> root.include-hidden;
+                    }
+                    Button {
+                        text: root.running ? "Stop" : "Search";
+                        min-width: 90px;
+                        clicked => {
+                            if (root.running) {
+                                root.stop();
+                            } else {
+                                root.search(root.pattern);
+                            }
+                        }
+                    }
+                }
+            }
+            // ---- results ----
+            Rectangle {
+                height: 26px;
+                clip: true;
+                HorizontalLayout {
+                    x: results-list.content-x;
+                    width: max(root.columns-width, results-list.visible-width);
+                    alignment: start;
+                    for title[ci] in ["Name", "Folder", "Size", "Type", "Date modified"]: HeaderCell {
+                        width: root.widths[ci];
+                        title: title;
+                        align: ci == 2 ? TextHorizontalAlignment.right : TextHorizontalAlignment.left;
+                        sorted: root.sort-column == ci;
+                        ascending: root.sort-ascending;
+                        clicked => { root.sort-by(ci); }
+                        resized(w) => { root.widths[ci] = max(40px, w); }
+                    }
+                }
+                Rectangle { y: parent.height - 1px; height: 1px; background: Palette.border; }
+            }
+            Rectangle {
+                vertical-stretch: 1;
+                results-keys := FocusScope {
+                    key-pressed(event) => {
+                        if (event.text == Key.Menu || (event.text == Key.F10 && event.modifiers.shift)) {
+                            root.row-menu(-1);
+                            root.show-menu(60px, 120px);
+                            return EventResult.accept;
+                        }
+                        if (root.key(event.text, event.modifiers.control || event.modifiers.meta, event.modifiers.alt, event.modifiers.shift)) {
+                            return EventResult.accept;
+                        }
+                        return EventResult.reject;
+                    }
+                }
+                if root.rows.length == 0: Text {
+                    text: root.running ? "" : "Type a name or a pattern and press Enter.";
+                    color: Palette.foreground.with-alpha(0.55);
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+                results-list := ListView {
+                    content-width: max(root.columns-width, self.visible-width);
+                    accessible-role: list;
+                    accessible-label: "Results";
+                    for row[i] in root.rows: Rectangle {
+                        height: root.row-height;
+                        width: max(root.columns-width, results-list.visible-width);
+                        accessible-role: list-item;
+                        accessible-label: row.name;
+                        accessible-item-selected: row.selected;
+                        background: row.selected ? Palette.selection-background.with-alpha(results-keys.has-focus ? 1.0 : 0.45)
+                            : touch.has-hover ? Palette.foreground.with-alpha(0.05) : transparent;
+                        border-width: row.current && results-keys.has-focus ? 1px : 0px;
+                        border-color: Palette.accent-background;
+                        touch := TouchArea {
+                            pointer-event(event) => {
+                                if (event.kind == PointerEventKind.down) {
+                                    results-keys.focus();
+                                }
+                                if (event.kind == PointerEventKind.down && event.button == PointerEventButton.left) {
+                                    root.row-pressed(i, event.modifiers.control || event.modifiers.meta, event.modifiers.shift);
+                                }
+                                if (event.kind == PointerEventKind.down && event.button == PointerEventButton.right) {
+                                    root.row-menu(i);
+                                    root.show-menu(self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y);
+                                }
+                            }
+                            double-clicked => { root.row-activated(i); }
+                        }
+                        HorizontalLayout {
+                            property <color> fg: row.selected && results-keys.has-focus ? Palette.selection-foreground : Palette.foreground;
+                            alignment: start;
+                            HorizontalLayout {
+                                width: root.widths[0];
+                                padding-left: 6px;
+                                padding-right: 6px;
+                                spacing: 6px;
+                                VerticalLayout {
+                                    alignment: center;
+                                    FileIcon { kind: row.icon; dimmed: row.hidden; }
+                                }
+                                Text {
+                                    text: row.name;
+                                    vertical-alignment: center;
+                                    overflow: elide;
+                                    color: fg;
+                                }
+                            }
+                            for ci in [1, 2, 3, 4]: HorizontalLayout {
+                                width: root.widths[ci];
+                                padding-left: 6px;
+                                padding-right: 6px;
+                                Text {
+                                    text: root.cell(row, ci);
+                                    horizontal-alignment: ci == 2 ? TextHorizontalAlignment.right : TextHorizontalAlignment.left;
+                                    vertical-alignment: center;
+                                    overflow: elide;
+                                    color: fg.with-alpha(0.8);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            Rectangle { height: 1px; background: Palette.border; }
+            Rectangle {
+                background: Palette.alternate-background;
+                HorizontalLayout {
+                    padding: 4px;
+                    padding-left: 10px;
+                    padding-right: 10px;
+                    Text {
+                        text: root.status;
+                        overflow: elide;
+                        color: Palette.foreground.with-alpha(0.75);
+                        accessible-role: text;
+                        accessible-label: "Status";
+                    }
+                }
+            }
+        }
+    }
+
+    // the last searches, under the pattern field
+    history-popup := PopupWindow {
+        x: pattern-field.absolute-position.x - root.absolute-position.x;
+        y: pattern-field.absolute-position.y - root.absolute-position.y + pattern-field.height;
+        width: pattern-field.width;
+        property <int> highlighted: 0;
+        Rectangle {
+            background: Palette.background;
+            border-width: 1px;
+            border-color: Palette.border;
+            drop-shadow-blur: 8px;
+            drop-shadow-color: #00000044;
+        }
+        FocusScope {
+            init => {
+                history-popup.highlighted = 0;
+                self.focus();
+            }
+            key-pressed(event) => {
+                if (event.text == Key.DownArrow) {
+                    history-popup.highlighted = min(root.history.length - 1, history-popup.highlighted + 1);
+                } else if (event.text == Key.UpArrow) {
+                    history-popup.highlighted = max(0, history-popup.highlighted - 1);
+                } else if (event.text == Key.Return) {
+                    root.history-picked(root.history[history-popup.highlighted]);
+                    history-popup.close();
+                } else if (event.text == Key.Escape) {
+                    history-popup.close();
+                    pattern-field.focus();
+                } else {
+                    return EventResult.reject;
+                }
+                return EventResult.accept;
+            }
+            VerticalLayout {
+                padding: 2px;
+                for item[i] in root.history: Rectangle {
+                    height: 24px;
+                    accessible-role: list-item;
+                    accessible-label: item;
+                    background: i == history-popup.highlighted || item-touch.has-hover ? Palette.selection-background.with-alpha(0.5) : transparent;
+                    item-touch := TouchArea {
+                        clicked => {
+                            root.history-picked(item);
+                            history-popup.close();
+                        }
+                    }
+                    Text {
+                        x: 8px;
+                        width: parent.width - 16px;
+                        text: item;
+                        vertical-alignment: center;
+                        overflow: elide;
+                    }
+                }
+            }
+        }
+    }
+
+    context-menu := ContextMenuArea {
+        enabled: false;
+        Menu {
+            for e in root.menu-s0: MenuItem {
+                title: e.title;
+                enabled: e.enabled;
+                activated => { root.menu-activated(e.id); }
+            }
+            MenuSeparator { }
+            for e in root.menu-s1: MenuItem {
+                title: e.title;
+                enabled: e.enabled;
+                activated => { root.menu-activated(e.id); }
+            }
+            MenuSeparator { }
+            for e in root.menu-s2: MenuItem {
+                title: e.title;
+                enabled: e.enabled;
+                activated => { root.menu-activated(e.id); }
+            }
+            MenuSeparator { }
+            for e in root.menu-s3: MenuItem {
+                title: e.title;
+                enabled: e.enabled;
+                activated => { root.menu-activated(e.id); }
+            }
+        }
+    }
+
+    if root.dialog-open: DialogOverlay {
+        width: root.width;
+        height: root.height;
+        title: root.dialog-title;
+        message: root.dialog-message;
+        input: root.dialog-input;
+        text <=> root.dialog-text;
+        select-end: root.dialog-select-end;
+        error: root.dialog-error;
+        lines: root.dialog-lines;
+        ok: root.dialog-ok;
+        can-cancel: root.dialog-can-cancel;
+        alt: root.dialog-alt;
+        accepted(text) => { root.dialog-accepted(text); }
+        cancelled => { root.dialog-cancelled(); }
+        alternative => { root.dialog-alternative(); }
+    }
+}

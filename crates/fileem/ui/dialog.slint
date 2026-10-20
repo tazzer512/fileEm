@@ -1,0 +1,113 @@
+// The question drawn over a window (main window, search window): a message, an optional name
+// field, a list of lines (operation errors), Cancel / a second choice / OK. Rust decides what the
+// answer does (src/app/commands.rs `Dialog`).
+
+import { Button, LineEdit, ListView, Palette } from "std-widgets.slint";
+
+export component DialogOverlay inherits Rectangle {
+    in property <string> title;
+    in property <string> message;
+    // a name field (rename, new folder), with the part before the extension selected
+    in property <bool> input;
+    in-out property <string> text;
+    in property <int> select-end;
+    in property <string> error;
+    // lines of a list (operation errors)
+    in property <[string]> lines;
+    in property <string> ok: "OK";
+    in property <bool> can-cancel: true;
+    // a second choice next to OK (Copy next to Move), empty for none
+    in property <string> alt;
+    callback alternative();
+    callback accepted(string);
+    callback cancelled();
+
+    background: #00000066;
+    // the window behind is not usable while the dialog is open
+    TouchArea { }
+    FocusScope {
+        init => {
+            if (!root.input) {
+                self.focus();
+            }
+        }
+        key-pressed(event) => {
+            if (event.text == Key.Escape && root.can-cancel) {
+                root.cancelled();
+                return EventResult.accept;
+            }
+            if (event.text == Key.Return && !root.input) {
+                root.accepted(root.text);
+                return EventResult.accept;
+            }
+            return EventResult.reject;
+        }
+        card := Rectangle {
+            width: min(480px, root.width - 40px);
+            height: min(card-layout.preferred-height, root.height - 40px);
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            background: Palette.background;
+            border-radius: 8px;
+            border-width: 1px;
+            border-color: Palette.border;
+            drop-shadow-blur: 24px;
+            drop-shadow-color: #00000055;
+            accessible-role: groupbox;
+            accessible-label: root.title;
+            card-layout := VerticalLayout {
+                padding: 18px;
+                spacing: 10px;
+                Text {
+                    text: root.title;
+                    font-size: 15px;
+                    font-weight: 600;
+                }
+                if root.message != "": Text {
+                    text: root.message;
+                    wrap: word-wrap;
+                }
+                if root.input: name-field := LineEdit {
+                    text <=> root.text;
+                    accessible-label: "Name";
+                    init => {
+                        self.focus();
+                        self.set-selection-offsets(0, root.select-end);
+                    }
+                    accepted(text) => { root.accepted(text); }
+                }
+                if root.error != "": Text {
+                    text: root.error;
+                    wrap: word-wrap;
+                    color: #d93a35;
+                }
+                if root.lines.length > 0: ListView {
+                    height: min(root.lines.length * 20px, 200px);
+                    for line in root.lines: Text {
+                        height: 20px;
+                        text: line;
+                        overflow: elide;
+                        vertical-alignment: center;
+                    }
+                }
+                HorizontalLayout {
+                    spacing: 8px;
+                    alignment: end;
+                    if root.can-cancel: Button {
+                        text: "Cancel";
+                        clicked => { root.cancelled(); }
+                    }
+                    if root.alt != "": Button {
+                        text: root.alt;
+                        clicked => { root.alternative(); }
+                    }
+                    Button {
+                        text: root.ok;
+                        primary: true;
+                        clicked => { root.accepted(root.text); }
+                    }
+                }
+            }
+        }
+    }
+}

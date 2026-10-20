@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 
 use slint::platform::Key;
 
-use super::{commands, nav, preview, sync_selection, views, Shared};
+use super::{commands, nav, preview, search, sync_selection, views, Shared};
 use crate::grid::Move;
 use crate::view_mode::ViewMode;
 
@@ -35,7 +35,12 @@ pub fn key(app: &Shared, text: &str, ctrl: bool, alt: bool, shift: bool) -> bool
         nav::close_tab(app, side, index);
     } else if letter('l') {
         nav::edit_address(app);
-    } else if letter('f') && !shift {
+    } else if letter('f') && shift {
+        let dir = app.borrow().tab().dir().map(Path::to_path_buf);
+        if let Some(d) = dir {
+            search::open(app, d);
+        }
+    } else if letter('f') {
         nav::focus_filter(app);
     } else if is(Key::F3) && !ctrl && !alt {
         preview::toggle(app);

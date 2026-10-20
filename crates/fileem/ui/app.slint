@@ -3,22 +3,16 @@
 // and draw.
 
 import { Button, LineEdit, ListView, Palette } from "std-widgets.slint";
-import { FunctionKey, Icons, ToolButton } from "icons.slint";
+import { FunctionKey, Icons, MenuRow, ToolButton } from "icons.slint";
+export { MenuRow } from "icons.slint";
+export { SearchWindow, SearchRow } from "search.slint";
 import { SidePane, SideView, ColumnRow } from "side.slint";
 import { PreviewPane, PreviewView } from "preview.slint";
+import { DialogOverlay } from "dialog.slint";
 export { FileRow, TreeRow, TabRow, CrumbRow, ColumnRow, SideView } from "side.slint";
 export { ProgressWindow, OpRow } from "progress.slint";
 export { PreviewWindow, PreviewView } from "preview.slint";
 export { PropertiesWindow, PropLine } from "properties.slint";
-
-// One item of a right-click menu (src/menu.rs); `id` is handed back to `menu-activated`.
-export struct MenuRow {
-    id: int,
-    title: string,
-    enabled: bool,
-    checkable: bool,
-    checked: bool,
-}
 
 export component AppWindow inherits Window {
     in property <string> window-title: "fileEm";
@@ -474,94 +468,21 @@ export component AppWindow inherits Window {
         }
     }
 
-    if root.dialog-open: Rectangle {
-        background: #00000066;
-        // the window behind is not usable while the dialog is open
-        TouchArea { }
-        FocusScope {
-            init => {
-                if (!root.dialog-input) {
-                    self.focus();
-                }
-            }
-            key-pressed(event) => {
-                if (event.text == Key.Escape && root.dialog-can-cancel) {
-                    root.dialog-cancelled();
-                    return EventResult.accept;
-                }
-                if (event.text == Key.Return && !root.dialog-input) {
-                    root.dialog-accepted(root.dialog-text);
-                    return EventResult.accept;
-                }
-                return EventResult.reject;
-            }
-            card := Rectangle {
-                width: min(480px, root.width - 40px);
-                height: min(card-layout.preferred-height, root.height - 40px);
-                x: (parent.width - self.width) / 2;
-                y: (parent.height - self.height) / 2;
-                background: Palette.background;
-                border-radius: 8px;
-                border-width: 1px;
-                border-color: Palette.border;
-                drop-shadow-blur: 24px;
-                drop-shadow-color: #00000055;
-                accessible-role: groupbox;
-                accessible-label: root.dialog-title;
-                card-layout := VerticalLayout {
-                    padding: 18px;
-                    spacing: 10px;
-                    Text {
-                        text: root.dialog-title;
-                        font-size: 15px;
-                        font-weight: 600;
-                    }
-                    if root.dialog-message != "": Text {
-                        text: root.dialog-message;
-                        wrap: word-wrap;
-                    }
-                    if root.dialog-input: name-field := LineEdit {
-                        text <=> root.dialog-text;
-                        accessible-label: "Name";
-                        init => {
-                            self.focus();
-                            self.set-selection-offsets(0, root.dialog-select-end);
-                        }
-                        accepted(text) => { root.dialog-accepted(text); }
-                    }
-                    if root.dialog-error != "": Text {
-                        text: root.dialog-error;
-                        wrap: word-wrap;
-                        color: #d93a35;
-                    }
-                    if root.dialog-lines.length > 0: ListView {
-                        height: min(root.dialog-lines.length * 20px, 200px);
-                        for line in root.dialog-lines: Text {
-                            height: 20px;
-                            text: line;
-                            overflow: elide;
-                            vertical-alignment: center;
-                        }
-                    }
-                    HorizontalLayout {
-                        spacing: 8px;
-                        alignment: end;
-                        if root.dialog-can-cancel: Button {
-                            text: "Cancel";
-                            clicked => { root.dialog-cancelled(); }
-                        }
-                        if root.dialog-alt != "": Button {
-                            text: root.dialog-alt;
-                            clicked => { root.dialog-alternative(); }
-                        }
-                        Button {
-                            text: root.dialog-ok;
-                            primary: true;
-                            clicked => { root.dialog-accepted(root.dialog-text); }
-                        }
-                    }
-                }
-            }
-        }
+    if root.dialog-open: DialogOverlay {
+        width: root.width;
+        height: root.height;
+        title: root.dialog-title;
+        message: root.dialog-message;
+        input: root.dialog-input;
+        text <=> root.dialog-text;
+        select-end: root.dialog-select-end;
+        error: root.dialog-error;
+        lines: root.dialog-lines;
+        ok: root.dialog-ok;
+        can-cancel: root.dialog-can-cancel;
+        alt: root.dialog-alt;
+        accepted(text) => { root.dialog-accepted(text); }
+        cancelled => { root.dialog-cancelled(); }
+        alternative => { root.dialog-alternative(); }
     }
 }

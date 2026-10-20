@@ -39,6 +39,10 @@ remove or break it.
   and `fileem_core::fs::preview` (kinds, text); `ui/preview.slint` has one pane used both docked
   and in `PreviewWindow`. Tests read it through `app::preview_state` / `app::preview_window` and
   the window's `preview` property.
+- Search is `fileem_core::fs::search` (patterns, the walk) + `search_history`, `src/search.rs`
+  (results, toolkit-free) and `src/app/search.rs` (the window). Tests drive search windows
+  through `app::open_search` / `search_windows` / `search_results` and the window's own
+  properties and callbacks; dialogs over a search window use the same `ui/dialog.slint`.
 - The release profile keeps `panic = "unwind"` on purpose (+2 MB): `images::decode` catches a
   decoder's panic on a damaged file, so it costs one thumbnail instead of the app. Don't switch
   back to `abort`.

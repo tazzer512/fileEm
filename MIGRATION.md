@@ -11,8 +11,8 @@ OpenGL, ~32 MB with the software renderer).
 **Status (2026-10-21)**: stages 0–6 (5a view modes and thumbnails, 5b image readers, 6 the
 preview) done on branch `rust`, and the leftovers of stages 1–5 fixed except drag & drop with
 other applications (decided: not possible with Slint 1.18). The Java app in `src/` is still the
-complete, daily-use version; nothing was removed from it. Next: stage 7 (search, bookmarks,
-volumes, eject).
+complete, daily-use version; nothing was removed from it. Stage 7: search done; next
+bookmarks, then volumes and eject.
 
 ## How to work a stage
 
@@ -285,8 +285,28 @@ are the Java sources, as a size hint.
 
 ### Stage 7: search, bookmarks, volumes, eject
 
-- `SearchWindow` 575 + `FileSearch` 209 (`FileSearchTest` 11) + `SearchHistory`
-  (`SearchHistoryTest` 3): streaming results in batches, history combo, result commands.
+- [x] **Search** (`fileem_core::fs::search` with `FileSearchTest` ported, `search_history` with
+  `SearchHistoryTest` ported; `src/search.rs` results, `src/app/search.rs`, `ui/search.slint`):
+  "Search in folder…" in the file, background and tree menus and Ctrl+Shift+F; a window per
+  search with the folder, the pattern field (Enter searches; the last 15 searches under the
+  arrow button or Alt+Down, a pick searches at once; session `search.history.<i>`), Hidden files
+  (starts like the list), Search / Stop; the search on a thread of its own (a stop flag, at most
+  50,000 results), results reach the window in batches (one queued UI update at a time); a
+  table (Name, Folder relative to the searched folder, Size, Type, Date modified) as found until
+  a header is clicked (natural order, again reverses), resizable columns; Escape stops, then
+  closes. Results: double-click / Enter open (folders in the main window's active tab, files with
+  their programs), the menu (Open, Open containing folder, Cut, Copy, Rename, Trash, Delete,
+  Copy path, Properties) and keys (F2, Del / F8, Shift+Del, Ctrl+C / X / A, Alt+Enter, arrows).
+  Rename and delete are asked over the search window (`ui/dialog.slint` is now shared by both
+  windows); a renamed result and what was found inside a renamed folder are re-read at their new
+  paths; deleted results leave the list when the operation ends.
+- UI tests: menu + results + types + folder column + excludes + open containing folder + open
+  file / folder + Escape; history in every window, Alt+Down and a pick, after a restart; rename
+  (file, folder with results inside), Shift+Del cancel / delete, Ctrl+C then paste; Ctrl+Shift+F,
+  hidden files, empty pattern, stopping with Escape.
+- Differences: opening a folder result can't bring the main window to the front (Slint can't
+  activate a window). The history list is our own popup under the field (Slint has no editable
+  combo box).
 - `Bookmarks` 158 + `BookmarksDialog` 205 (`BookmarksTest` 7): tree section, Ctrl+D,
   Ctrl+Shift+B.
 - `Volumes` 461 (`VolumesTest` 6): mount table parsing, polling with per-volume timeouts,
@@ -410,5 +430,7 @@ are the Java sources, as a size hint.
   into the controller: never call them while holding the app's `RefCell` borrow.
 - A `Window`'s own `close` callback shadows the builtin `close()`; and an element id equal to an
   enum value (`image`) breaks `accessible-role: image`.
+- An element id equal to an accessible role name (`list`) breaks `accessible-role: list` too.
+- `Path::join("")` adds a trailing separator (`new.txt/`), which no longer names a file.
 - `notify`'s inotify backend reports opens and reads (`EventKind::Access`): filter them, or a
   watched folder refreshes itself every time it is listed.

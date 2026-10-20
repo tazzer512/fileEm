@@ -86,6 +86,12 @@ fn delete(app: &Shared, paths: Vec<PathBuf>, permanent: bool) {
     if paths.is_empty() {
         return;
     }
+    let (dialog, spec) = delete_question(paths, permanent);
+    open_dialog(app, dialog, spec);
+}
+
+/// The question before moving `paths` to the Trash (where there is one) or deleting them.
+pub(super) fn delete_question(paths: Vec<PathBuf>, permanent: bool) -> (Dialog, DialogSpec) {
     let trash = !permanent && trash::is_supported();
     let what = describe(&paths);
     let (title, question, ok) = if trash {
@@ -93,7 +99,7 @@ fn delete(app: &Shared, paths: Vec<PathBuf>, permanent: bool) {
     } else {
         ("Delete permanently", format!("Permanently delete {what}?\n\nThis cannot be undone."), "Delete")
     };
-    open_dialog(app, Dialog::Delete { paths, trash }, DialogSpec::confirm(title, &question, ok));
+    (Dialog::Delete { paths, trash }, DialogSpec::confirm(title, &question, ok))
 }
 
 /// "“a.txt”" for one item, "3 items" for more.
@@ -108,9 +114,23 @@ pub(super) fn describe(paths: &[PathBuf]) -> String {
 /// are refreshed in every tab and tree (the watcher is slow on some systems) and its problems are
 /// listed.
 pub fn run_operation(app: &Shared, kind: Kind, sources: Vec<PathBuf>, target: Option<PathBuf>) -> Handle {
+    run_operation_then(app, kind, sources, target, |_| {})
+}
+
+/// [`run_operation`], and `then` once it ended (a search window drops the results that are gone).
+pub(super) fn run_operation_then(
+    app: &Shared,
+    kind: Kind,
+    sources: Vec<PathBuf>,
+    target: Option<PathBuf>,
+    then: impl FnOnce(&Shared) + 'static,
+) -> Handle {
     let ops = app.borrow().ops.clone();
     let done_app = app.clone();
-    ops.run(kind, sources, target, move |outcome| operation_done(&done_app, outcome))
+    ops.run(kind, sources, target, move |outcome| {
+        operation_done(&done_app, outcome);
+        then(&done_app);
+    })
 }
 
 fn operation_done(app: &Shared, outcome: Outcome) {
@@ -164,7 +184,7 @@ pub fn clipboard_put(app: &Shared, cut: bool) {
     put_files(app, paths, cut);
 }
 
-fn put_files(app: &Shared, paths: Vec<PathBuf>, cut: bool) {
+pub(super) fn put_files(app: &Shared, paths: Vec<PathBuf>, cut: bool) {
     if !paths.is_empty() {
         app.borrow_mut().clipboard.put(&paths, cut);
     }
@@ -310,25 +330,28 @@ pub fn tab_menu(app: &Shared, side: usize, index: usize) {
     set_menu(app, menu::tab_menu(side, index, n));
 }
 
+/// A menu section as Slint rows; the commands go to `commands`, by `MenuRow.id`.
+pub(super) fn menu_rows(entries: &[menu::Entry], commands: &mut Vec<Command>) -> ModelRc<MenuRow> {
+    let rows: Vec<MenuRow> = entries
+        .iter()
+        .map(|e| {
+            commands.push(e.command.clone());
+            MenuRow {
+                id: commands.len() as i32 - 1,
+                title: e.title.as_str().into(),
+                enabled: e.enabled,
+                checkable: e.checked.is_some(),
+                checked: e.checked == Some(true),
+            }
+        })
+        .collect();
+    ModelRc::from(Rc::new(VecModel::from(rows)))
+}
+
 /// Hands `m` to app.slint's sections; the commands stay here by id.
 fn set_menu(app: &Shared, m: Menu) {
     let mut commands = Vec::new();
-    let mut rows = |entries: &[menu::Entry]| -> ModelRc<MenuRow> {
-        let rows: Vec<MenuRow> = entries
-            .iter()
-            .map(|e| {
-                commands.push(e.command.clone());
-                MenuRow {
-                    id: commands.len() as i32 - 1,
-                    title: e.title.as_str().into(),
-                    enabled: e.enabled,
-                    checkable: e.checked.is_some(),
-                    checked: e.checked == Some(true),
-                }
-            })
-            .collect();
-        ModelRc::from(Rc::new(VecModel::from(rows)))
-    };
+    let mut rows = |entries: &[menu::Entry]| menu_rows(entries, &mut commands);
     let section = |i: usize| m.sections.get(i).map(Vec::as_slice).unwrap_or_default();
     debug_assert!(m.sections.len() <= menu::SECTIONS);
     let Some(ui) = app.borrow().ui.upgrade() else { return };
@@ -434,6 +457,11 @@ pub fn run_command(app: &Shared, command: Command) {
         }
         Command::CloseTab(s, i) => nav::close_tab(app, s, i),
         Command::CloseOtherTabs(s, i) => nav::close_other_tabs(app, s, i),
+        Command::Search(dir) => {
+            super::search::open(app, dir);
+        }
+        // only in a search window's menu, which runs them itself
+        Command::OpenResults | Command::ShowInFolder(_) => {}
     }
 }
 
@@ -454,7 +482,7 @@ pub fn properties_of_selection(app: &Shared) {
 
 /// Opens a Properties window (not modal; several can be open). Reading the items happens in the
 /// background, and so does counting folders, which stops when the window closes.
-fn open_properties(app: &Shared, paths: Vec<PathBuf>) {
+pub(super) fn open_properties(app: &Shared, paths: Vec<PathBuf>) {
     if paths.is_empty() {
         return;
     }
@@ -534,6 +562,7 @@ pub fn properties_windows(app: &Shared) -> Vec<PropertiesWindow> {
 /// Closes the windows that belong to this one (the main window is closing).
 pub fn close_windows(app: &Shared) {
     super::preview::hide_window(app);
+    super::search::close_all(app);
     let ids: Vec<u64> = app.borrow().properties.iter().map(|(i, ..)| *i).collect();
     for id in ids {
         close_properties(app, id);
@@ -592,41 +621,69 @@ impl DialogSpec {
     }
 }
 
+/// A window that draws the overlay dialog (`ui/dialog.slint`) through its `dialog-*` properties.
+pub(super) trait DialogHost {
+    fn show_dialog(&self, spec: DialogSpec);
+    fn hide_dialog(&self);
+    fn set_dialog_problem(&self, text: String);
+}
+
+// AppWindow and SearchWindow have the same `dialog-*` properties (generated as separate types)
+macro_rules! dialog_host {
+    ($window:ty, $focus:ident) => {
+        impl DialogHost for $window {
+            fn show_dialog(&self, spec: DialogSpec) {
+                self.set_dialog_title(spec.title.into());
+                self.set_dialog_message(spec.message.into());
+                self.set_dialog_input(spec.input.is_some());
+                let text = spec.input.unwrap_or_default();
+                // select the name without its extension, as Explorer does
+                let end = match text.rfind('.') {
+                    Some(dot) if dot > 0 && !spec.select_all => dot,
+                    _ => text.len(),
+                };
+                self.set_dialog_select_end(end as i32);
+                self.set_dialog_text(text.into());
+                self.set_dialog_error("".into());
+                let lines: Vec<SharedString> = spec.lines.into_iter().map(SharedString::from).collect();
+                self.set_dialog_lines(ModelRc::from(Rc::new(VecModel::from(lines))));
+                self.set_dialog_ok(spec.ok.into());
+                self.set_dialog_alt(spec.alt.into());
+                self.set_dialog_can_cancel(spec.can_cancel);
+                self.set_dialog_open(true);
+            }
+
+            fn hide_dialog(&self) {
+                self.set_dialog_open(false);
+                self.$focus();
+            }
+
+            fn set_dialog_problem(&self, text: String) {
+                self.set_dialog_error(text.into());
+            }
+        }
+    };
+}
+
+dialog_host!(crate::AppWindow, invoke_focus_list);
+dialog_host!(crate::SearchWindow, invoke_focus_results);
+
 pub fn open_dialog(app: &Shared, dialog: Dialog, spec: DialogSpec) {
     app.borrow_mut().dialog = dialog;
     let Some(ui) = app.borrow().ui.upgrade() else { return };
-    ui.set_dialog_title(spec.title.into());
-    ui.set_dialog_message(spec.message.into());
-    ui.set_dialog_input(spec.input.is_some());
-    let text = spec.input.unwrap_or_default();
-    // select the name without its extension, as Explorer does
-    let end = match text.rfind('.') {
-        Some(dot) if dot > 0 && !spec.select_all => dot,
-        _ => text.len(),
-    };
-    ui.set_dialog_select_end(end as i32);
-    ui.set_dialog_text(text.into());
-    ui.set_dialog_error("".into());
-    ui.set_dialog_lines(ModelRc::from(Rc::new(VecModel::from(
-        spec.lines.into_iter().map(SharedString::from).collect::<Vec<_>>(),
-    ))));
-    ui.set_dialog_ok(spec.ok.into());
-    ui.set_dialog_alt(spec.alt.into());
-    ui.set_dialog_can_cancel(spec.can_cancel);
-    ui.set_dialog_open(true);
+    ui.show_dialog(spec);
 }
 
 pub fn close_dialog(app: &Shared) {
     app.borrow_mut().dialog = Dialog::None;
     if let Some(ui) = app.borrow().ui.upgrade() {
-        ui.set_dialog_open(false);
-        ui.invoke_focus_list();
+        ui.hide_dialog();
     }
 }
 
 fn dialog_error(app: &Shared, text: String) {
     if let Some(ui) = app.borrow().ui.upgrade() {
-        ui.set_dialog_error(text.into());
+        ui.set_dialog_problem(text);
     }
 }
 
@@ -638,29 +695,13 @@ pub fn dialog_accepted(app: &Shared, text: &str) {
             close_dialog(app);
             run_operation(app, if trash { Kind::Trash } else { Kind::Delete }, paths, None);
         }
-        Dialog::Rename { src } => {
-            let dir = src.parent().map(Path::to_path_buf).unwrap_or_default();
-            if let Some(problem) = names::name_problem(&dir, text, Some(&src)) {
+        Dialog::Rename { src } => match rename_to(app, &src, text) {
+            Ok(_) => close_dialog(app),
+            Err(problem) => {
                 app.borrow_mut().dialog = Dialog::Rename { src };
-                return dialog_error(app, problem);
+                dialog_error(app, problem);
             }
-            match names::rename(&src, text) {
-                Ok(target) => {
-                    close_dialog(app);
-                    if app.borrow().tab().dir() == Some(dir.as_path()) {
-                        refresh_selecting(app, target.clone());
-                    }
-                    // a folder renamed from the tree may sit elsewhere; tabs inside it follow
-                    nav::reload_tree_node(app, &dir);
-                    nav::tabs_follow_rename(app, &src, &target);
-                }
-                Err(e) => {
-                    let name = fs_util::display_name(&src);
-                    app.borrow_mut().dialog = Dialog::Rename { src };
-                    dialog_error(app, format!("Cannot rename \u{201c}{name}\u{201d}: {}", reason(&e)));
-                }
-            }
-        }
+        },
         Dialog::New { dir, folder } => {
             if let Some(problem) = names::name_problem(&dir, text, None) {
                 app.borrow_mut().dialog = Dialog::New { dir, folder };
@@ -715,6 +756,25 @@ pub fn dialog_accepted(app: &Shared, text: &str) {
             quit_after_cancelling(app);
         }
     }
+}
+
+/// Renames `src` to the name `text` (checked first) and lets the window follow: the tab showing
+/// its folder selects it, the tree reloads, tabs inside a renamed folder move along. The problem
+/// to show in the dialog otherwise.
+pub(super) fn rename_to(app: &Shared, src: &Path, text: &str) -> Result<PathBuf, String> {
+    let dir = src.parent().map(Path::to_path_buf).unwrap_or_default();
+    if let Some(problem) = names::name_problem(&dir, text, Some(src)) {
+        return Err(problem);
+    }
+    let target = names::rename(src, text)
+        .map_err(|e| format!("Cannot rename \u{201c}{}\u{201d}: {}", fs_util::display_name(src), reason(&e)))?;
+    if app.borrow().tab().dir() == Some(dir.as_path()) {
+        refresh_selecting(app, target.clone());
+    }
+    // a folder renamed from the tree (or a search) may sit elsewhere; tabs inside it follow
+    nav::reload_tree_node(app, &dir);
+    nav::tabs_follow_rename(app, src, &target);
+    Ok(target)
 }
 
 fn reason(e: &std::io::Error) -> String {

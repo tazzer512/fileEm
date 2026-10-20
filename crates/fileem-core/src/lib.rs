@@ -6,5 +6,6 @@
 pub mod fs;
 pub mod images;
 pub mod ops;
+pub mod search_history;
 pub mod session;
 pub mod util;

@@ -8,12 +8,14 @@
 //! - `dnd`: mouse selection (box) and drag & drop
 //! - `views`: view modes, item sizes, the grid and its thumbnails
 //! - `preview`: the preview of the selected file, docked or in its own window
+//! - `search`: search windows
 
 mod commands;
 mod dnd;
 mod keys;
 mod nav;
 mod preview;
+mod search;
 mod views;
 
 use std::cell::RefCell;
@@ -29,6 +31,7 @@ use fileem_core::fs::listing::SortKey;
 use fileem_core::fs::places;
 use fileem_core::fs::watcher::WatchHandle;
 use fileem_core::fs::{Category, FileEntry};
+use fileem_core::search_history::SearchHistory;
 use fileem_core::session::Session;
 use fileem_core::util::{formats, fs_util};
 
@@ -184,6 +187,9 @@ pub struct App {
     drag: dnd::Drag,
     thumbs: Thumbnails,
     preview: preview::Preview,
+    searches: Vec<search::Search>,
+    /// The last searches, shared by every search window.
+    history: SearchHistory,
 }
 
 pub type Shared = Rc<RefCell<App>>;
@@ -281,6 +287,8 @@ pub fn install(ui: &AppWindow, session: Rc<Session>, start: Option<PathBuf>) -> 
         late_press: None,
         drag: dnd::Drag::default(),
         preview: preview::Preview::default(),
+        searches: Vec::new(),
+        history: SearchHistory::load(&session),
         thumbs: Thumbnails::new({
             let ui = ui.as_weak();
             move || {
@@ -394,6 +402,21 @@ pub fn preview_state(app: &Shared) -> (bool, bool, Option<String>, f64, bool) {
 
 pub fn preview_window(app: &Shared) -> Option<crate::PreviewWindow> {
     preview::window(app)
+}
+
+/// Opens a search window for `dir` (the menus' "Search in folder…", Ctrl+Shift+F).
+pub fn open_search(app: &Shared, dir: PathBuf) -> Option<crate::SearchWindow> {
+    search::open(app, dir)
+}
+
+/// The open search windows, oldest first.
+pub fn search_windows(app: &Shared) -> Vec<crate::SearchWindow> {
+    search::windows(app)
+}
+
+/// The `index`th search window's results as shown, and its selection.
+pub fn search_results(app: &Shared, index: usize) -> (Vec<PathBuf>, Vec<PathBuf>) {
+    search::results(app, index)
 }
 
 pub fn session(app: &Shared) -> Rc<Session> {

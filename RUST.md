@@ -27,7 +27,7 @@ is still open (it uses the CPU to draw; fine for lists, to be checked on big 4K 
 - `cargo test --workspace`: core tests, UI logic tests and the headless UI test, a few seconds.
 - `cargo clippy --workspace --all-targets`: must stay warning free.
 - Visual checks without a display: `cargo test -p fileem --test snapshots -- --ignored` renders
-  the main window (also in the grid views), a dialog, a right-click menu, the progress window and a Properties window headless to `target/snapshots/*.ppm`
+  the main window (also in the grid views), the preview, a search window, a dialog, a right-click menu, the progress window and a Properties window headless to `target/snapshots/*.ppm`
   (convert with Pillow to look at them). Extend it when adding windows or dialogs.
 - Visual checks of the real app (Wayland has no desktop screenshots): `FILEEM_SNAPSHOT=out.ppm cargo run -p fileem
   FOLDER` renders the window after the folder loaded, writes it as PPM and quits. Don't type while
@@ -46,10 +46,12 @@ crates/fileem-core/        no UI: everything that touches the file system
   src/util/                natural_order, formats, fs_util, os, eta       (Java util)
   src/fs/                  entry (FileEntry), file_types, listing, places,
                            trash, watcher, measure (folder sizes),
-                           preview (kinds, text reading)                  (Java fs)
+                           preview (kinds, text reading), search (name patterns, the walk)
+                                                                          (Java fs)
   src/ops/                 file_operation (+ tests.rs: port of FileOperationTest), names
                            (rename / create, never replacing)
   src/session.rs           session.properties shared with the Java app (Java Session)
+  src/search_history.rs    the last 15 search patterns (Java SearchHistory)
   src/images/              image decoding for thumbnails/preview: mod (formats, decode, shrink,
                            EXIF orientation), psd, raw, jpeg2000 (hayro-jpeg2000), netpbm;
                            fixtures (test files; also for the UI tests via feature `fixtures`)
@@ -61,6 +63,8 @@ crates/fileem/             the app
                            columns, list or grid, status with item size
   ui/grid.slint            one item of the grid views (draws only)
   ui/preview.slint         the preview pane (docked) and its own window (draws, pans)
+  ui/search.slint          a search window: pattern, history list, results, status
+  ui/dialog.slint          the question drawn over a window (main and search windows)
   ui/icons.slint           shared icons, the tool button and the F-key bar's buttons
   src/app.rs               controller: state, session, wiring, models (Java MainWindow)
   src/app/nav.rs           listings per tab, watching, trees, tabs, sides (Java ExplorerSide/FileTab)
@@ -71,6 +75,8 @@ crates/fileem/             the app
   src/app/views.rs         view modes, item sizes, grid geometry, keys, thumbnails (Java FileTab views)
   src/app/preview.rs       the preview: loading, settle delay, docking, session (Java PreviewWindow)
   src/preview.rs           the preview's zoom and fit, toolkit-free (Java PreviewWindow zoom)
+  src/app/search.rs        search windows: the search thread, batches, result commands (Java SearchWindow)
+  src/search.rs            a search's results: order, selection, follow renames, status texts
   src/view_mode.rs         the eight views, sizes and steps, session format (Java ViewMode)
   src/grid.rs              grid layout: slots, lanes, hit tests, box hits, key moves, the names
                            List measures for its column width (Java FileGrid)

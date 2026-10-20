@@ -241,6 +241,20 @@ pub fn navigate_address(app: &Shared, text: &str) {
     );
 }
 
+/// Opens the folder holding `item` in the active tab, with `item` selected (a search result's
+/// "Open containing folder").
+pub fn show_item(app: &Shared, item: PathBuf) {
+    let Some(parent) = item.parent().map(Path::to_path_buf) else { return };
+    let (id, same) = {
+        let a = app.borrow();
+        (a.active_tab_id(), a.tab().dir() == Some(parent.as_path()))
+    };
+    if let Some(t) = app.borrow_mut().tab_state(id) {
+        t.select_after = Some(item);
+    }
+    go(app, id, parent, if same { Nav::Refresh } else { Nav::Go });
+}
+
 /// Ctrl+L: the address bar turns into a text field.
 pub fn edit_address(app: &Shared) {
     let side = app.borrow().active;

@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use std::rc::Rc;
 
 use fileem::view_mode::ViewMode;
-use fileem::{app, shell, AppWindow, FileRow, ProgressWindow, PropertiesWindow, SideView, TreeRow};
+use fileem::{app, shell, AppWindow, FileRow, ProgressWindow, PropertiesWindow, SearchWindow, SideView, TreeRow};
 use fileem_core::ops::{Decision, FileOperation, Kind, Resolution};
 use fileem_core::session::Session;
 use i_slint_backend_testing::ElementHandle;
@@ -409,6 +409,11 @@ fn ui() {
     photoshop_raw_jpeg2000_and_netpbm_files_are_previewed();
     the_preview_docks_into_the_main_window_and_floats_again();
     the_preview_is_remembered_in_the_session();
+    // search (stage 7)
+    search_from_the_right_click_menu_finds_files_in_all_subfolders();
+    the_last_search_patterns_are_offered_in_every_window_and_remembered();
+    search_results_can_be_renamed_and_deleted_in_place();
+    ctrl_shift_f_searches_the_current_folder_and_hidden_files_follow_the_toggle();
 }
 
 fn lists_folders_first_with_status_and_no_hidden_files() {
@@ -2266,4 +2271,306 @@ fn the_preview_is_remembered_in_the_session() {
     app::collect_session(&f.app);
     assert_eq!(app::session(&f.app).get_int("preview.width", 0), 700);
     f.key(Key::F3);
+}
+
+// ---- search (stage 7) ----
+
+fn sw_key(w: &SearchWindow, text: impl Into<SharedString>) {
+    let text = text.into();
+    w.window().dispatch_event(WindowEvent::KeyPressed { text: text.clone() });
+    w.window().dispatch_event(WindowEvent::KeyReleased { text });
+    pump();
+}
+
+fn sw_chord(w: &SearchWindow, modifiers: &[Key], key: impl Into<SharedString>) {
+    for m in modifiers {
+        w.window().dispatch_event(WindowEvent::KeyPressed { text: (*m).into() });
+    }
+    sw_key(w, key);
+    for m in modifiers.iter().rev() {
+        w.window().dispatch_event(WindowEvent::KeyReleased { text: (*m).into() });
+    }
+}
+
+fn sw_type(w: &SearchWindow, text: &str) {
+    for c in text.chars() {
+        sw_key(w, c.to_string());
+    }
+}
+
+/// A click on an element of a search window (`offset`: a popup's position in it).
+fn sw_click(w: &SearchWindow, e: &ElementHandle, offset: (f32, f32), modifiers: &[Key]) {
+    let (pos, size) = (e.absolute_position(), e.size());
+    let position = LogicalPosition::new(offset.0 + pos.x + (size.width / 2.0).min(30.0), offset.1 + pos.y + size.height / 2.0);
+    let win = w.window();
+    for m in modifiers {
+        win.dispatch_event(WindowEvent::KeyPressed { text: (*m).into() });
+    }
+    win.dispatch_event(WindowEvent::PointerMoved { position });
+    win.dispatch_event(WindowEvent::PointerPressed { position, button: PointerEventButton::Left });
+    win.dispatch_event(WindowEvent::PointerReleased { position, button: PointerEventButton::Left });
+    for m in modifiers.iter().rev() {
+        win.dispatch_event(WindowEvent::KeyReleased { text: (*m).into() });
+    }
+    pump();
+}
+
+/// Clicks the result row `name` (Ctrl held: adds to the selection).
+fn sw_select(w: &SearchWindow, name: &str, ctrl: bool) {
+    let row = ElementHandle::find_by_accessible_label(w, name)
+        .find(|e| e.accessible_role() == Some(i_slint_backend_testing::AccessibleRole::ListItem))
+        .unwrap_or_else(|| panic!("no result {name:?}"));
+    sw_click(w, &row, (0.0, 0.0), if ctrl { &[Key::Control] } else { &[] });
+}
+
+/// Types `pattern` into the search window's field and runs it to the end.
+fn run_search(f: &Fixture, w: &SearchWindow, pattern: &str) {
+    w.invoke_focus_pattern();
+    w.set_pattern("".into());
+    sw_type(w, pattern);
+    sw_key(w, Key::Return);
+    wait_until(f, "the search finished", |_| !w.get_running());
+}
+
+/// The `index`th search window's results, relative to `root`, sorted.
+fn found(f: &Fixture, index: usize, root: &Path) -> Vec<String> {
+    let mut v: Vec<String> = app::search_results(&f.app, index)
+        .0
+        .iter()
+        .map(|p| p.strip_prefix(root).unwrap().to_string_lossy().replace('\\', "/"))
+        .collect();
+    v.sort();
+    v
+}
+
+/// A test folder with these files (a path ending in / is a folder), opened in the tab.
+fn open_tree(f: &Fixture, name: &str, paths: &[&str]) -> PathBuf {
+    let dir = f.dir.join(name);
+    for p in paths {
+        if let Some(folder) = p.strip_suffix('/') {
+            fs::create_dir_all(dir.join(folder)).unwrap();
+        } else {
+            fs::create_dir_all(dir.join(p).parent().unwrap()).unwrap();
+            fs::write(dir.join(p), p).unwrap();
+        }
+    }
+    f.ui.invoke_address_entered(0, dir.display().to_string().into());
+    wait_until(f, "the folder", |f| f.address() == dir);
+    dir
+}
+
+/// Runs a command of the search window's menu by its title, as a click would.
+fn sw_menu(w: &SearchWindow, title: &str) {
+    let rows: Vec<fileem::MenuRow> =
+        [w.get_menu_s0(), w.get_menu_s1(), w.get_menu_s2(), w.get_menu_s3()].iter().flat_map(|m| m.iter().collect::<Vec<_>>()).collect();
+    let item = rows.iter().find(|r| r.title.starts_with(title)).unwrap_or_else(|| panic!("no {title:?} in the menu"));
+    assert!(item.enabled, "{title} is enabled");
+    w.invoke_menu_activated(item.id);
+    pump();
+}
+
+fn search_from_the_right_click_menu_finds_files_in_all_subfolders() {
+    let f = open_window();
+    let dir = open_tree(&f, "searchhere", &["top.jpg", "notes.txt", "a/b/Deep.JPG", "a/b/2019_09_08.txt", "photos.jpg/"]);
+    let last = f.list_row("top.jpg");
+    f.right_click_at(LogicalPosition::new(last.absolute_position().x + 50.0, last.absolute_position().y + 150.0));
+    f.pick("Search in folder…  (Ctrl+Shift+F)");
+    wait_until(&f, "a search window", |f| app::search_windows(&f.app).len() == 1);
+    let w = app::search_windows(&f.app).remove(0);
+    assert_eq!(w.get_root_path(), dir.display().to_string());
+    assert_eq!(w.get_window_title(), "Search in searchhere");
+    assert!(w.window().is_visible());
+
+    run_search(&f, &w, "*.jpg");
+    assert_eq!(found(&f, 0, &dir), ["a/b/Deep.JPG", "photos.jpg", "top.jpg"], "every subfolder, any case, folders too");
+    assert!(w.get_status().starts_with("3 items found"), "{}", w.get_status());
+    for title in ["Name", "Folder", "Size", "Type", "Date modified"] {
+        assert!(ElementHandle::find_by_accessible_label(&w, title).next().is_some(), "column {title}");
+    }
+    let rows: Vec<fileem::SearchRow> = w.get_rows().iter().collect();
+    let row = |n: &str| rows.iter().find(|r| r.name == n).unwrap().clone();
+    assert_eq!(row("photos.jpg").kind, "Folder");
+    assert_eq!(row("top.jpg").kind, fileem_core::fs::FileEntry::read(&dir.join("top.jpg")).type_name(), "the file list's types");
+    assert_eq!(row("Deep.JPG").folder, Path::new("a").join("b").display().to_string());
+    assert_eq!(row("top.jpg").folder, ".");
+
+    run_search(&f, &w, "*.jpg !top*");
+    assert_eq!(found(&f, 0, &dir), ["a/b/Deep.JPG", "photos.jpg"], "! excludes");
+    run_search(&f, &w, "_09_");
+    assert_eq!(found(&f, 0, &dir), ["a/b/2019_09_08.txt"], "plain text matches inside names");
+
+    // the folder holding a result opens in the tab, with the result selected
+    sw_select(&w, "2019_09_08.txt", false);
+    w.invoke_row_menu(0);
+    sw_menu(&w, "Open containing folder");
+    wait_until(&f, "the result's folder", |f| f.address() == dir.join("a/b"));
+    wait_until(&f, "the result selected", |f| f.selected() == ["2019_09_08.txt"]);
+
+    // a file opens with its program, a folder in the tab
+    run_search(&f, &w, "*.jpg");
+    sw_select(&w, "top.jpg", false);
+    sw_key(&w, Key::Return);
+    let wanted = format!("open {}", dir.join("top.jpg").display());
+    assert!(shell::launched().contains(&wanted), "{:?}", shell::launched());
+    let photos = ElementHandle::find_by_accessible_label(&w, "photos.jpg").next().unwrap();
+    sw_click(&w, &photos, (0.0, 0.0), &[]);
+    sw_click(&w, &photos, (0.0, 0.0), &[]);
+    wait_until(&f, "the folder result opened", |f| f.address() == dir.join("photos.jpg"));
+
+    sw_key(&w, Key::Escape);
+    assert!(app::search_windows(&f.app).is_empty(), "Escape closes it when nothing runs");
+    assert!(!w.window().is_visible());
+}
+
+fn the_last_search_patterns_are_offered_in_every_window_and_remembered() {
+    let f = open_window();
+    let dir = open_tree(&f, "searchhist", &["a.jpg", "b.png", "c.txt"]);
+    let first = app::open_search(&f.app, dir.clone()).unwrap();
+    run_search(&f, &first, "*.jpg");
+    run_search(&f, &first, "*.png");
+    run_search(&f, &first, "*.jpg"); // used again: moves to the top, not listed twice
+    run_search(&f, &first, "   "); // nothing to look for: not remembered
+    assert_eq!(first.get_status(), "Type a name or a pattern to search for.");
+    first.window().dispatch_event(WindowEvent::CloseRequested);
+    pump();
+    assert!(app::search_windows(&f.app).is_empty());
+
+    let second = app::open_search(&f.app, dir.clone()).unwrap();
+    assert_eq!(second.get_history().iter().collect::<Vec<_>>(), ["*.jpg", "*.png"], "newest first");
+    assert_eq!(second.get_pattern(), "", "a new window starts empty");
+
+    // Alt+Down lists them; picking one searches it
+    second.invoke_focus_pattern();
+    sw_chord(&second, &[Key::Alt], Key::DownArrow);
+    let item = ElementHandle::find_by_accessible_label(&second, "*.png")
+        .find(|e| e.accessible_role() == Some(i_slint_backend_testing::AccessibleRole::ListItem))
+        .expect("the history list is open");
+    let offset = {
+        let inner = i_slint_core::window::WindowInner::from_pub(second.window());
+        match inner.active_popups().last().map(|p| &p.location) {
+            Some(i_slint_core::window::PopupWindowLocation::ChildWindow(at)) => (at.x, at.y),
+            _ => (0.0, 0.0),
+        }
+    };
+    sw_click(&second, &item, offset, &[]);
+    wait_until(&f, "the picked pattern searched", |f| !second.get_running() && found(f, 0, &dir) == ["b.png"]);
+    assert_eq!(second.get_pattern(), "*.png");
+    assert!(i_slint_core::window::WindowInner::from_pub(second.window()).active_popups().is_empty(), "the list closed");
+    sw_key(&second, Key::Escape);
+
+    // a restart offers them again
+    app::collect_session(&f.app);
+    let ui = AppWindow::new().unwrap();
+    let again = app::install(&ui, app::session(&f.app), Some(dir.clone()));
+    let third = app::open_search(&again, dir).unwrap();
+    assert_eq!(third.get_history().iter().collect::<Vec<_>>(), ["*.png", "*.jpg"]);
+    app::close_windows(&again);
+}
+
+fn search_results_can_be_renamed_and_deleted_in_place() {
+    let f = open_window();
+    let dir = open_tree(&f, "searchact", &["keep.txt", "old.txt", "gone.txt", "box/inner.txt"]);
+    let w = app::open_search(&f.app, dir.clone()).unwrap();
+    run_search(&f, &w, "*.txt box");
+    assert_eq!(found(&f, 0, &dir), ["box", "box/inner.txt", "gone.txt", "keep.txt", "old.txt"]);
+
+    // the right-click menu has the file list's commands
+    sw_select(&w, "old.txt", false);
+    w.invoke_row_menu(app::search_results(&f.app, 0).0.iter().position(|p| p.ends_with("old.txt")).unwrap() as i32);
+    let titles: Vec<String> = [w.get_menu_s0(), w.get_menu_s1(), w.get_menu_s2(), w.get_menu_s3()]
+        .iter()
+        .flat_map(|m| m.iter().map(|r| r.title.to_string()).collect::<Vec<_>>())
+        .collect();
+    for expected in ["Open", "Cut", "Copy", "Rename", "Delete permanently", "Copy path", "Properties"] {
+        assert!(titles.iter().any(|t| t.starts_with(expected)), "{expected} in {titles:?}");
+    }
+    assert_eq!(titles.iter().any(|t| t.starts_with("Move to Trash")), fileem_core::fs::trash::is_supported());
+
+    // F2 renames in place, over the search window: the result follows, still selected
+    sw_key(&w, Key::F2);
+    assert!(w.get_dialog_open() && !f.ui.get_dialog_open(), "asked over the search window");
+    assert_eq!(w.get_dialog_text(), "old.txt");
+    sw_type(&w, "new"); // replaces the selected "old"
+    sw_key(&w, Key::Return);
+    wait_until(&f, "renamed", |_| dir.join("new.txt").exists() && !dir.join("old.txt").exists());
+    wait_until(&f, "the result renamed", |f| found(f, 0, &dir).contains(&"new.txt".to_string()));
+    assert!(!found(&f, 0, &dir).contains(&"old.txt".to_string()));
+    assert_eq!(app::search_results(&f.app, 0).1, [dir.join("new.txt")], "still selected");
+
+    // renaming a folder moves the results found inside it along
+    sw_select(&w, "box", false);
+    sw_key(&w, Key::F2);
+    w.set_dialog_text("crate".into());
+    w.invoke_dialog_accepted("crate".into());
+    wait_until(&f, "the folder's results follow", |f| {
+        let r = found(f, 0, &dir);
+        r.contains(&"crate".to_string()) && r.contains(&"crate/inner.txt".to_string())
+    });
+    assert!(app::search_results(&f.app, 0).0.iter().all(|p| p.exists()), "{:?}", app::search_results(&f.app, 0));
+
+    // Shift+Del asks, then deletes; deleted results (and what was inside a deleted folder) leave
+    sw_select(&w, "gone.txt", false);
+    sw_chord(&w, &[Key::Shift], Key::Delete);
+    assert!(w.get_dialog_open());
+    sw_key(&w, Key::Escape);
+    assert!(!w.get_dialog_open() && dir.join("gone.txt").exists(), "cancelled: nothing deleted");
+    assert!(!app::search_windows(&f.app).is_empty(), "Escape closed only the question");
+
+    sw_select(&w, "crate", true);
+    sw_chord(&w, &[Key::Shift], Key::Delete);
+    assert!(w.get_dialog_message().contains("2 items"), "{}", w.get_dialog_message());
+    sw_key(&w, Key::Return);
+    wait_until(&f, "deleted", |_| !dir.join("gone.txt").exists() && !dir.join("crate").exists());
+    wait_until(&f, "the results updated", |f| found(f, 0, &dir) == ["keep.txt", "new.txt"]);
+    assert!(w.get_status().contains("3 items removed"), "{}", w.get_status());
+
+    // Ctrl+C puts the results on the file clipboard
+    sw_select(&w, "keep.txt", false);
+    sw_chord(&w, &[Key::Control], "c");
+    let into = dir.join("into");
+    fs::create_dir(&into).unwrap();
+    f.ui.invoke_address_entered(0, into.display().to_string().into());
+    wait_until(&f, "the paste target", |f| f.address() == into);
+    f.chord(&[Key::Control], "v");
+    wait_until(&f, "pasted", |_| into.join("keep.txt").exists());
+    assert!(dir.join("keep.txt").exists(), "copied, not moved");
+    sw_key(&w, Key::Escape);
+}
+
+fn ctrl_shift_f_searches_the_current_folder_and_hidden_files_follow_the_toggle() {
+    let f = open_window();
+    let dir = open_tree(&f, "searchkey", &["x.log", ".hidden/y.log", "sub/.z.log"]);
+    f.chord(&[Key::Control, Key::Shift], "F");
+    wait_until(&f, "a search window", |f| app::search_windows(&f.app).len() == 1);
+    let w = app::search_windows(&f.app).remove(0);
+    assert_eq!(w.get_root_path(), dir.display().to_string());
+    f.type_text("zz");
+    assert_eq!(f.view().filter, "", "Ctrl+Shift+F is not the filter");
+    assert!(!w.get_include_hidden(), "hidden files are off like in the list");
+
+    run_search(&f, &w, "*.log");
+    assert_eq!(found(&f, 0, &dir), ["x.log"]);
+    let hidden = ElementHandle::find_by_accessible_label(&w, "Hidden files").next().unwrap();
+    sw_click(&w, &hidden, (0.0, 0.0), &[]);
+    assert!(w.get_include_hidden());
+    run_search(&f, &w, "*.log");
+    assert_eq!(found(&f, 0, &dir), [".hidden/y.log", "sub/.z.log", "x.log"]);
+
+    run_search(&f, &w, "   ");
+    assert!(found(&f, 0, &dir).is_empty(), "nothing to look for");
+
+    // a search can be stopped: the results so far stay
+    for i in 0..300 {
+        fs::create_dir_all(dir.join(format!("many/d{i}"))).unwrap();
+    }
+    w.invoke_focus_pattern();
+    w.set_pattern("*".into());
+    w.invoke_search("*".into());
+    assert!(w.get_running());
+    sw_key(&w, Key::Escape);
+    assert!(!w.get_running(), "Escape stops a running search");
+    assert!(w.get_status().starts_with("Stopped."), "{}", w.get_status());
+    assert!(!app::search_windows(&f.app).is_empty(), "and leaves the window open");
+    sw_key(&w, Key::Escape);
+    assert!(app::search_windows(&f.app).is_empty());
 }

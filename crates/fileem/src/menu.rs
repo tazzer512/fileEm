@@ -2,7 +2,7 @@
 //! `MainWindow.fileMenuItems` / `treeMenuItems`). Toolkit-free: app.slint shows the sections, the
 //! controller runs the chosen [`Command`].
 //!
-//! Not yet ported (they need later stages): search, bookmarks, eject.
+//! Not yet ported (they need later stages): bookmarks, eject.
 
 use std::path::{Path, PathBuf};
 
@@ -54,6 +54,12 @@ pub enum Command {
     TabToOtherSide(usize, usize),
     CloseTab(usize, usize),
     CloseOtherTabs(usize, usize),
+    /// A search window for a folder and everything below it.
+    Search(PathBuf),
+    /// In a search window: open the selected results (folders in the main window's tab).
+    OpenResults,
+    /// In a search window: the result's folder in the main window's tab, the result selected.
+    ShowInFolder(PathBuf),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -156,6 +162,7 @@ pub fn file_menu(selection: &[Item], dir: Option<&Path>, st: &State) -> Menu {
     if single_dir {
         open.insert(1, item("Open in new tab", Command::OpenInNewTab(p.clone())));
         open.insert(2, item("Open in other side", Command::OpenInOtherSide(p.clone())));
+        open.push(search_item(&p));
     }
     if single {
         open.push(item(format!("Show in {}", shell::file_manager_name()), Command::Reveal(p.clone())));
@@ -197,6 +204,7 @@ fn background_menu(dir: Option<&Path>, st: &State) -> Menu {
     if let Some(d) = dir {
         menu.new = new_entries(d);
         menu.sections.push(vec![
+            search_item(d),
             item("Open in terminal", Command::OpenTerminal(d.to_path_buf())),
             item(format!("Open in {}", shell::file_manager_name()), Command::OpenInFileManager(d.to_path_buf())),
         ]);
@@ -252,6 +260,7 @@ pub fn tree_menu(dir: &Path, kind: NodeKind, st: &State) -> Menu {
         item("Open in other side", Command::OpenInOtherSide(d.clone())),
         item("Open in terminal", Command::OpenTerminal(d.clone())),
         item(format!("Show in {}", shell::file_manager_name()), Command::Reveal(d.clone())),
+        search_item(dir),
     ];
     let mut clip = Vec::new();
     if plain {
@@ -277,6 +286,31 @@ pub fn tree_menu(dir: &Path, kind: NodeKind, st: &State) -> Menu {
     }
     let info = vec![item("Copy path", Command::CopyPath(vec![d.clone()])), item("Properties", Command::Properties(vec![d.clone()]))];
     Menu { sections: vec![open, clip, change, info], new: new_entries(dir), ..Menu::default() }
+}
+
+fn search_item(dir: &Path) -> Entry {
+    item("Search in folder…  (Ctrl+Shift+F)", Command::Search(dir.to_path_buf()))
+}
+
+/// A search window's results: open them, their folder, the clipboard, rename and delete (the
+/// window runs these itself, so the results follow), the path and Properties.
+pub fn search_menu(selection: &[PathBuf], trash: bool) -> Menu {
+    let Some(first) = selection.first() else { return Menu::default() };
+    let sel = selection.to_vec();
+    let mut remove = vec![item("Rename  (F2)", Command::Rename(first.clone())).enabled(selection.len() == 1)];
+    if trash {
+        remove.push(item("Move to Trash  (Del)", Command::Trash(sel.clone())));
+    }
+    remove.push(item("Delete permanently  (Shift+Del)", Command::Delete(sel.clone())));
+    Menu {
+        sections: vec![
+            vec![item("Open  (Enter)", Command::OpenResults), item("Open containing folder", Command::ShowInFolder(first.clone()))],
+            vec![item("Cut  (Ctrl+X)", Command::Cut(sel.clone())), item("Copy  (Ctrl+C)", Command::Copy(sel.clone()))],
+            remove,
+            vec![item("Copy path", Command::CopyPath(sel.clone())), item("Properties  (Alt+Enter)", Command::Properties(sel))],
+        ],
+        ..Menu::default()
+    }
 }
 
 /// Right-click on the column headers: which columns to show (Name always stays).
@@ -427,6 +461,27 @@ mod tests {
         assert_eq!(m.find("Size").unwrap().checked, Some(true));
         assert_eq!(m.find("Extension").unwrap().checked, Some(false));
         assert_eq!(m.find("Extension").unwrap().command, Command::ToggleColumn(ColumnId::Extension));
+    }
+
+    #[test]
+    fn folders_offer_a_search_in_them_and_results_have_their_own_menu() {
+        let dir = Path::new("/w");
+        let sub = dir.join("sub");
+        let search = Command::Search(sub.clone());
+        assert_eq!(file_menu(&[Item { path: &sub, is_dir: true }], Some(dir), &state(false)).find("Search in folder").unwrap().command, search);
+        assert!(!has(&file_menu(&[Item { path: &dir.join("a.txt"), is_dir: false }], Some(dir), &state(false)), "Search in folder"), "not on a file");
+        assert_eq!(file_menu(&[], Some(dir), &state(false)).find("Search in folder").unwrap().command, Command::Search(dir.into()));
+        assert_eq!(tree_menu(&sub, NodeKind::Volume, &state(false)).find("Search in folder").unwrap().command, search);
+
+        let a = dir.join("a.txt");
+        let one = search_menu(std::slice::from_ref(&a), true);
+        assert_eq!(one.titles(), ["Open  (Enter)", "Open containing folder", "Cut  (Ctrl+X)", "Copy  (Ctrl+C)", "Rename  (F2)", "Move to Trash  (Del)", "Delete permanently  (Shift+Del)", "Copy path", "Properties  (Alt+Enter)"]);
+        assert_eq!(one.find("Open containing").unwrap().command, Command::ShowInFolder(a.clone()));
+        let two = search_menu(&[a.clone(), sub.clone()], false);
+        assert!(!two.find("Rename").unwrap().enabled);
+        assert!(!has(&two, "Move to Trash"));
+        assert_eq!(two.find("Delete").unwrap().command, Command::Delete(vec![a, sub]));
+        assert!(search_menu(&[], true).entries().is_empty());
     }
 
     #[test]

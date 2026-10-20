@@ -1,5 +1,5 @@
 //! Visual checks without a desktop (`cargo test -p fileem --test snapshots -- --ignored`): renders
-//! the main window (also with both sides, and in the grid views), the preview (floating and docked), a dialog and a right-click menu open, the progress window with a conflict
+//! the main window (also with both sides, and in the grid views), the preview (floating and docked), a search window, a dialog and a right-click menu open, the progress window with a conflict
 //! question and a Properties window, in the
 //! headless backend's software renderer, to `target/snapshots/*.ppm`. Look at them after UI
 //! changes; they are not compared automatically.
@@ -126,6 +126,19 @@ fn snapshots() {
     save(ui.window(), "preview-docked");
     ui.invoke_toggle_preview();
     ui.invoke_preview_dock();
+
+    // a search window with results, and a rename asked over it
+    let w = app::open_search(&a, dir.clone()).unwrap();
+    w.window().set_size(slint::LogicalSize::new(820.0, 380.0));
+    w.set_pattern("*.txt".into());
+    w.invoke_search("*.txt".into());
+    pump_until("results", || !w.get_running() && w.get_rows().row_count() == 2);
+    save(w.window(), "search");
+    w.invoke_row_pressed(0, false, false);
+    w.invoke_key(slint::SharedString::from(Key::F2), false, false, false);
+    pump_until("laid out", || w.get_dialog_open());
+    save(w.window(), "search-rename");
+    w.invoke_dialog_cancelled();
 
     // a right-click menu on a file, and its Properties window
     ui.invoke_row_pressed(0, 1, false, false);
