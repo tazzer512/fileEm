@@ -1,9 +1,10 @@
 // Manage bookmarks (Ctrl+Shift+B): every bookmark with its folder, and Open / Rename… / Remove /
 // Move up / Move down. Changes apply at once; Rust keeps the list (src/app/bookmarks.rs).
 
-import { Button, ListView, Palette } from "std-widgets.slint";
+import { Button, ListView } from "std-widgets.slint";
 import { FileIcon } from "icons.slint";
 import { DialogOverlay } from "dialog.slint";
+import { Theme } from "theme.slint";
 
 export struct BookmarkRow {
     name: string,
@@ -14,12 +15,13 @@ export struct BookmarkRow {
 }
 
 export component BookmarksWindow inherits Window {
+    default-font-family: Theme.font;
     title: "Manage bookmarks";
     preferred-width: 640px;
     preferred-height: 380px;
     min-width: 420px;
     min-height: 240px;
-    background: Palette.background;
+    background: Theme.window;
     default-font-size: 13px;
 
     in property <[BookmarkRow]> rows;
@@ -78,7 +80,7 @@ export component BookmarksWindow inherits Window {
         spacing: 10px;
         Rectangle {
             border-width: 1px;
-            border-color: Palette.border;
+            border-color: Theme.border;
             border-radius: 4px;
             list-keys := FocusScope {
                 init => { self.focus(); }
@@ -107,7 +109,7 @@ export component BookmarksWindow inherits Window {
             }
             if root.rows.length == 0: Text {
                 text: "No bookmarks yet.\nOpen a folder and press Ctrl+D to add one.";
-                color: Palette.foreground.with-alpha(0.55);
+                color: Theme.subtle;
                 horizontal-alignment: center;
                 vertical-alignment: center;
             }
@@ -119,8 +121,8 @@ export component BookmarksWindow inherits Window {
                     accessible-role: list-item;
                     accessible-label: row.name;
                     accessible-item-selected: row.selected;
-                    background: row.selected ? Palette.selection-background.with-alpha(list-keys.has-focus ? 1.0 : 0.45)
-                        : touch.has-hover ? Palette.foreground.with-alpha(0.05) : transparent;
+                    background: row.selected ? (list-keys.has-focus ? Theme.selection-focused : Theme.selection)
+                        : touch.has-hover ? Theme.hover : transparent;
                     touch := TouchArea {
                         pointer-event(event) => {
                             if (event.kind == PointerEventKind.down) {
@@ -131,7 +133,7 @@ export component BookmarksWindow inherits Window {
                         double-clicked => { root.open(); }
                     }
                     HorizontalLayout {
-                        property <color> fg: row.selected && list-keys.has-focus ? Palette.selection-foreground : Palette.foreground;
+                        property <color> fg: row.selected && list-keys.has-focus ? Theme.selection-fg : Theme.fg;
                         padding-left: 10px;
                         padding-right: 10px;
                         spacing: 10px;

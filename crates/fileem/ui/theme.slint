@@ -1,0 +1,118 @@
+// The theme's colors and corner radii (src/theme.rs has the families; src/app/theme.rs sets them
+// on every window). Globals belong to one window, so Rust sets `data` on each one it opens.
+
+// A fill: one color (`stops` 1) or a linear gradient of 2–4 evenly spread colors. Rust can't build
+// gradient brushes through Slint's public API, so the gradient is made here.
+export struct ThemeFill {
+    angle: angle,
+    stops: int,
+    c0: color,
+    c1: color,
+    c2: color,
+    c3: color,
+}
+
+export struct ThemeData {
+    dark: bool,
+    font: string,
+    window: ThemeFill,
+    toolbar: ThemeFill,
+    tabbar: ThemeFill,
+    tab-active: ThemeFill,
+    view: ThemeFill,
+    sidebar: ThemeFill,
+    status: ThemeFill,
+    field: color,
+    fg: color,
+    muted: color,
+    subtle: color,
+    border: color,
+    divider: color,
+    accent: color,
+    accent-fg: color,
+    accent-subtle: color,
+    highlight: ThemeFill,
+    hover: color,
+    selection: color,
+    selection-focused: ThemeFill,
+    selection-fg: color,
+    tree-current: color,
+    danger: color,
+    radius: length,
+    control-radius: length,
+    tab-radius: length,
+}
+
+export global Theme {
+    // Classic light until Rust sets the saved theme
+    in property <ThemeData> data: {
+        dark: false,
+        font: "",
+        window: { stops: 1, c0: #ffffff },
+        toolbar: { stops: 1, c0: #f6f8fa },
+        tabbar: { stops: 1, c0: #f6f8fa },
+        tab-active: { stops: 1, c0: #ffffff },
+        view: { stops: 1, c0: #ffffff },
+        sidebar: { stops: 1, c0: #f6f8fa },
+        status: { stops: 1, c0: #f6f8fa },
+        field: #ffffff,
+        fg: #24292f,
+        muted: #57606a,
+        subtle: #6e7781,
+        border: #d0d7de,
+        divider: #d0d7de,
+        accent: #0969da,
+        accent-fg: #0969da,
+        accent-subtle: #ddf4ff,
+        highlight: { stops: 1, c0: #0969da },
+        hover: #f6f8fa,
+        selection: #eaeef2,
+        selection-focused: { stops: 1, c0: #54aeff66 },
+        selection-fg: #24292f,
+        tree-current: #ddf4ff,
+        danger: #cf222e,
+        radius: 4px,
+        control-radius: 6px,
+        tab-radius: 4px,
+    };
+    pure function fill(f: ThemeFill) -> brush {
+        if (f.stops <= 1) {
+            return f.c0;
+        }
+        if (f.stops == 2) {
+            return @linear-gradient(f.angle, f.c0 0%, f.c1 100%);
+        }
+        if (f.stops == 3) {
+            return @linear-gradient(f.angle, f.c0 0%, f.c1 50%, f.c2 100%);
+        }
+        return @linear-gradient(f.angle, f.c0 0%, f.c1 33.333%, f.c2 66.667%, f.c3 100%);
+    }
+    out property <bool> dark: data.dark;
+    out property <string> font: data.font;
+    out property <brush> window: fill(data.window);
+    out property <brush> toolbar: fill(data.toolbar);
+    out property <brush> tabbar: fill(data.tabbar);
+    out property <brush> tab-active: fill(data.tab-active);
+    out property <brush> view: fill(data.view);
+    out property <brush> sidebar: fill(data.sidebar);
+    out property <brush> status: fill(data.status);
+    out property <color> field: data.field;
+    out property <color> fg: data.fg;
+    out property <color> muted: data.muted;
+    out property <color> subtle: data.subtle;
+    out property <color> border: data.border;
+    out property <color> divider: data.divider;
+    out property <color> accent: data.accent;
+    out property <color> accent-fg: data.accent-fg;
+    out property <color> accent-subtle: data.accent-subtle;
+    out property <brush> highlight: fill(data.highlight);
+    out property <color> hover: data.hover;
+    out property <color> selection: data.selection;
+    out property <brush> selection-focused: fill(data.selection-focused);
+    out property <color> selection-fg: data.selection-fg;
+    out property <color> tree-current: data.tree-current;
+    out property <color> danger: data.danger;
+    out property <length> radius: data.radius;
+    out property <length> control-radius: data.control-radius;
+    out property <length> tab-radius: data.tab-radius;
+}

@@ -2,9 +2,12 @@
 // and dialogs. All commands and keys go to Rust (see src/app.rs); the .slint files only lay out
 // and draw.
 
-import { Button, LineEdit, ListView, Palette } from "std-widgets.slint";
+import { Button, LineEdit, ListView } from "std-widgets.slint";
 import { FunctionKey, Icons, MenuRow, ToolButton, ToolSeparator } from "icons.slint";
+import { Theme } from "theme.slint";
 export { MenuRow } from "icons.slint";
+export { Palette } from "std-widgets.slint";
+export { Theme, ThemeData, ThemeFill } from "theme.slint";
 export { SearchWindow, SearchRow } from "search.slint";
 export { BookmarksWindow, BookmarkRow } from "bookmarks.slint";
 import { SidePane, SideView, ColumnRow } from "side.slint";
@@ -16,14 +19,18 @@ export { PreviewWindow, PreviewView } from "preview.slint";
 export { PropertiesWindow, PropLine } from "properties.slint";
 
 export component AppWindow inherits Window {
+    default-font-family: Theme.font;
     in property <string> window-title: "fileEm";
+    // shown in the About button's tooltip
+    in property <string> version;
     title: window-title;
     preferred-width: 1100px;
     preferred-height: 700px;
     // every toolbar button stays reachable
-    min-width: 600px;
+    min-width: max(600px, self.toolbar-min-width);
+    out property <length> toolbar-min-width: toolbar.min-width;
     min-height: 320px;
-    background: Palette.background;
+    background: Theme.window;
     default-font-size: 13px;
 
     in property <SideView> left;
@@ -53,6 +60,10 @@ export component AppWindow inherits Window {
     callback toggle-hidden();
     callback toggle-dual();
     callback toggle-bookmark();
+    // the toolbar's theme menu, light / dark button and About box
+    callback theme-menu();
+    callback toggle-dark();
+    callback about();
     // a toolbar button that does what a key does: "new-folder", "cut", "copy", "paste",
     // "rename", "delete", "properties", "new-tab"
     callback tool(string);
@@ -213,8 +224,8 @@ export component AppWindow inherits Window {
             // ---- toolbar ----
             Rectangle {
                 height: 42px;
-                background: Palette.alternate-background;
-                HorizontalLayout {
+                background: Theme.toolbar;
+                toolbar := HorizontalLayout {
                     padding: 6px;
                     spacing: 2px;
                     ToolButton {
@@ -283,9 +294,27 @@ export component AppWindow inherits Window {
                         checked: root.show-hidden;
                         clicked => { root.toggle-hidden(); }
                     }
+                    ToolButton {
+                        icon: Icons.palette;
+                        tooltip: "Theme";
+                        clicked => {
+                            root.theme-menu();
+                            root.show-menu(self.absolute-position.x, self.absolute-position.y + self.height);
+                        }
+                    }
+                    ToolButton {
+                        icon: Icons.light-dark;
+                        tooltip: "Light / dark mode";
+                        clicked => { root.toggle-dark(); }
+                    }
+                    ToolButton {
+                        icon: Icons.about;
+                        tooltip: "About fileEm " + root.version;
+                        clicked => { root.about(); }
+                    }
                 }
             }
-            Rectangle { height: 1px; background: Palette.border; }
+            Rectangle { height: 1px; background: Theme.border; }
 
             // the sides, and the docked preview on their right
             main-area := Rectangle {
@@ -361,8 +390,8 @@ export component AppWindow inherits Window {
                     if root.dual: Rectangle {
                         x: sides.split-x;
                         width: 5px;
-                        background: side-splitter.has-hover || side-splitter.pressed ? Palette.accent-background.with-alpha(0.3) : Palette.alternate-background;
-                        Rectangle { x: 2px; width: 1px; background: Palette.border; }
+                        background: side-splitter.has-hover || side-splitter.pressed ? Theme.accent.with-alpha(0.3) : Theme.window;
+                        Rectangle { x: 2px; width: 1px; background: Theme.divider; }
                         side-splitter := TouchArea {
                             mouse-cursor: col-resize;
                             moved => {
@@ -375,8 +404,8 @@ export component AppWindow inherits Window {
                 if root.preview-docked: Rectangle {
                     x: main-area.split-x;
                     width: 5px;
-                    background: preview-splitter.has-hover || preview-splitter.pressed ? Palette.accent-background.with-alpha(0.3) : Palette.alternate-background;
-                    Rectangle { x: 2px; width: 1px; background: Palette.border; }
+                    background: preview-splitter.has-hover || preview-splitter.pressed ? Theme.accent.with-alpha(0.3) : Theme.window;
+                    Rectangle { x: 2px; width: 1px; background: Theme.divider; }
                     preview-splitter := TouchArea {
                         mouse-cursor: col-resize;
                         moved => {
@@ -399,9 +428,9 @@ export component AppWindow inherits Window {
                 }
             }
             // ---- the F-key bar: each button presses its key ----
-            Rectangle { height: 1px; background: Palette.border; }
+            Rectangle { height: 1px; background: Theme.border; }
             Rectangle {
-                background: Palette.alternate-background;
+                background: Theme.toolbar;
                 HorizontalLayout {
                     padding: 3px;
                     padding-left: 6px;

@@ -43,7 +43,7 @@ pub struct Preview {
     generation: u64,
     job: Option<Job>,
     settle: slint::Timer,
-    window: Option<PreviewWindow>,
+    pub(super) window: Option<PreviewWindow>,
     top_seq: i32,
 }
 
@@ -163,6 +163,7 @@ fn place(app: &Shared) {
 
 fn create_window(app: &Shared) -> PreviewWindow {
     let w = PreviewWindow::new().expect("the preview window");
+    super::theme::style(app, &w);
     {
         let a = app.borrow();
         let s = &a.session;

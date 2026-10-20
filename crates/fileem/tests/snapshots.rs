@@ -1,6 +1,6 @@
 //! Visual checks without a desktop (`cargo test -p fileem --test snapshots -- --ignored`): renders
 //! the main window (also with both sides, and in the grid views), the preview (floating and docked), a search window, bookmarks (tree + Manage window), drives, a dialog and a right-click menu open, the progress window with a conflict
-//! question and a Properties window, in the
+//! question, a Properties window, every theme in both modes and the About box, in the
 //! headless backend's software renderer, to `target/snapshots/*.ppm`. Look at them after UI
 //! changes; they are not compared automatically.
 
@@ -188,4 +188,27 @@ fn snapshots() {
     p.window().set_size(slint::LogicalSize::new(480.0, 420.0));
     pump_until("laid out", || true);
     save(p.window(), "properties-folder");
+
+    // every theme in both modes, with the second side and a selection; a dark Properties window
+    // and the About box
+    p.invoke_close_clicked();
+    ui.window().dispatch_event(WindowEvent::KeyPressed { text: Key::Escape.into() });
+    ui.window().dispatch_event(WindowEvent::KeyPressed { text: Key::F9.into() });
+    ui.invoke_row_pressed(0, 2, false, false);
+    for family in fileem::theme::Family::ALL {
+        for dark in [false, true] {
+            app::set_theme(&a, family, dark);
+            pump_until("laid out", || true);
+            save(ui.window(), &format!("theme-{}-{}", family.id(), if dark { "dark" } else { "light" }));
+        }
+    }
+    app::run_command(&a, fileem::menu::Command::Properties(vec![dir.clone()]));
+    pump_until("properties", || !app::properties_windows(&a).is_empty());
+    let p = app::properties_windows(&a).remove(0);
+    p.window().set_size(slint::LogicalSize::new(480.0, 420.0));
+    pump_until("laid out", || p.get_lines().iter().any(|l| l.value.contains("files,")));
+    save(p.window(), "theme-properties-dark");
+    ui.invoke_about();
+    pump_until("about", || ui.get_dialog_open());
+    save(ui.window(), "about");
 }

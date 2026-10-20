@@ -2,8 +2,8 @@
 // thumbnail and name, plus type, size and date lines in Tiles and Content. It only draws: the
 // slot around it (side.slint) takes the mouse.
 
-import { Palette } from "std-widgets.slint";
 import { FileIcon } from "icons.slint";
+import { Theme } from "theme.slint";
 
 export component GridItem {
     // ViewMode::index: 6 Tiles, 7 Content
@@ -25,7 +25,7 @@ export component GridItem {
     in property <bool> hover;
     in property <bool> drop-target;
 
-    property <color> fg: root.selected && root.focused ? Palette.selection-foreground : Palette.foreground;
+    property <color> fg: root.selected && root.focused ? Theme.selection-fg : Theme.fg;
     property <length> icon-x: root.text-below ? (root.width - root.icon-size) / 2 : 6px;
     property <length> icon-y: root.text-below ? 6px : (root.height - root.icon-size) / 2;
     // text beside the icon
@@ -37,12 +37,12 @@ export component GridItem {
         y: 2px;
         width: parent.width - 4px;
         height: parent.height - 4px;
-        border-radius: 4px;
-        background: root.drop-target ? Palette.accent-background.with-alpha(0.3)
-            : root.selected ? Palette.selection-background.with-alpha(root.focused ? 1.0 : 0.45)
-            : root.hover ? Palette.foreground.with-alpha(0.05) : transparent;
+        border-radius: Theme.radius;
+        background: root.drop-target ? Theme.accent.with-alpha(0.3)
+            : root.selected ? (root.focused ? Theme.selection-focused : Theme.selection)
+            : root.hover ? Theme.hover : transparent;
         border-width: (root.current && root.focused) || root.drop-target ? 1px : 0px;
-        border-color: Palette.accent-background;
+        border-color: Theme.accent;
     }
     if root.thumb.width > 0: Image {
         x: root.icon-x;

@@ -442,6 +442,10 @@ fn ui() {
         eject_is_refused_while_an_operation_uses_the_drive;
         eject_removes_the_whole_drive_and_moves_tabs_off_every_partition;
         a_failed_eject_shows_the_reason_and_can_be_retried;
+        // themes and About (stage 8)
+        the_theme_menu_switches_family_and_mode_in_every_open_window;
+        the_light_dark_button_toggles_and_the_theme_survives_a_restart;
+        the_about_button_shows_version_build_date_and_system;
     }
 }
 
@@ -3128,4 +3132,116 @@ fn a_failed_eject_shows_the_reason_and_can_be_retried() {
     answer.send(Ok(())).unwrap();
     wait_until(&f, "ejected the second time", |f| dialog_open(f) && f.ui.get_dialog_message().contains("safely removed"));
     f.key(Key::Return);
+}
+
+// ---- themes and About (stage 8) ----
+
+/// A window's theme: its `Theme` data and whether the std widgets are dark.
+macro_rules! theme_of {
+    ($w:expr) => {
+        (
+            $w.global::<fileem::Theme>().get_data(),
+            $w.global::<fileem::Palette>().get_color_scheme() == slint::language::ColorScheme::Dark,
+        )
+    };
+}
+
+fn the_theme_menu_switches_family_and_mode_in_every_open_window() {
+    use fileem::theme::Family;
+    let f = open_window();
+    assert_eq!(app::theme(&f.app), (Family::Classic, false), "Classic light without a saved theme");
+    assert_eq!(theme_of!(f.ui), (app::theme_data(Family::Classic, false), false));
+    // every kind of window open: preview, search, bookmarks, properties, progress
+    f.click("notes.txt");
+    f.key(Key::F3);
+    let preview = app::preview_window(&f.app).expect("the preview floats");
+    let search = app::open_search(&f.app, f.dir.clone()).unwrap();
+    app::run_command(&f.app, fileem::menu::Command::ManageBookmarks);
+    let manage = app::bookmarks_window(&f.app).unwrap();
+    app::run_command(&f.app, fileem::menu::Command::Properties(vec![f.dir.clone()]));
+    wait_until(&f, "the properties", |f| !app::properties_windows(&f.app).is_empty());
+    let props = app::properties_windows(&f.app).remove(0);
+    let copy = blocking_copy(&f);
+    wait_until(&f, "the progress window", |f| progress(f).is_some());
+    let ops = progress(&f).unwrap();
+    let all = |f: &Fixture| -> Vec<(fileem::ThemeData, bool)> {
+        vec![theme_of!(f.ui), theme_of!(preview), theme_of!(search), theme_of!(manage), theme_of!(props), theme_of!(ops)]
+    };
+
+    f.click_at(&f.tool("Theme"));
+    assert!(f.menu_item("Adwaita (GNOME)").is_some(), "the theme menu is open");
+    assert!(menu_row(&f, "Classic").checked && menu_row(&f, "Light").checked);
+    assert!(!menu_row(&f, "Aurora").checked && !menu_row(&f, "Dark").checked);
+    f.pick("Aurora");
+    assert_eq!(app::theme(&f.app), (Family::Aurora, false));
+    let aurora_light = (app::theme_data(Family::Aurora, false), false);
+    assert!(all(&f).iter().all(|t| *t == aurora_light), "every window switched");
+
+    f.click_at(&f.tool("Theme"));
+    assert!(menu_row(&f, "Aurora").checked && menu_row(&f, "Light").checked, "the marks follow");
+    f.pick("Dark");
+    assert_eq!(app::theme(&f.app), (Family::Aurora, true), "the family stays");
+    let aurora_dark = (app::theme_data(Family::Aurora, true), true);
+    assert!(all(&f).iter().all(|t| *t == aurora_dark), "every window is dark, std widgets too");
+    assert_ne!(aurora_light.0, aurora_dark.0);
+
+    // windows opened later start in the theme
+    let later = app::open_search(&f.app, f.dir.join("alpha")).unwrap();
+    assert_eq!(theme_of!(later), aurora_dark);
+    copy.cancel();
+    wait_until(&f, "the copy stopped", |f| progress(f).is_none());
+}
+
+fn the_light_dark_button_toggles_and_the_theme_survives_a_restart() {
+    use fileem::theme::Family;
+    let f = open_window_with(
+        |s, _| {
+            s.put("theme.name", "macos");
+            s.put("theme.dark", true);
+        },
+        true,
+    );
+    assert_eq!(app::theme(&f.app), (Family::MacOs, true), "the saved theme");
+    assert_eq!(theme_of!(f.ui), (app::theme_data(Family::MacOs, true), true));
+    f.click_at(&f.tool("Light / dark mode"));
+    assert_eq!(app::theme(&f.app), (Family::MacOs, false));
+    assert_eq!(theme_of!(f.ui), (app::theme_data(Family::MacOs, false), false));
+    app::collect_session(&f.app);
+    app::session(&f.app).save();
+    let saved = Session::load(app::session(&f.app).file());
+    assert_eq!(saved.get("theme.name").as_deref(), Some("macos"), "the Java app's ids");
+    assert_eq!(saved.get("theme.dark").as_deref(), Some("false"));
+    f.click_at(&f.tool("Light / dark mode"));
+    assert_eq!(app::theme(&f.app), (Family::MacOs, true), "and back");
+
+    // an unknown theme (a newer version's, a typo) is Classic
+    let g = open_window_with(|s, _| s.put("theme.name", "nope"), true);
+    assert_eq!(app::theme(&g.app), (Family::Classic, false));
+}
+
+fn the_about_button_shows_version_build_date_and_system() {
+    let f = open_window();
+    let version = fileem::about::VERSION;
+    f.click_at(&f.tool(&format!("About fileEm {version}")));
+    assert!(dialog_open(&f));
+    assert_eq!(f.ui.get_dialog_title(), format!("fileEm {version}"));
+    let text = f.ui.get_dialog_message().to_string();
+    assert!(text.starts_with(&format!("Version {version}\nBuilt 20")), "{text}");
+    assert!(text.contains("Rust 1.") && text.contains("Slint 1."), "{text}");
+    assert!(text.ends_with(&format!("({})", std::env::consts::ARCH)), "{text}");
+    assert!(!f.ui.get_dialog_can_cancel(), "only OK");
+    f.key(Key::Escape);
+    assert!(!dialog_open(&f), "Escape is OK");
+
+    // at the window's smallest width every toolbar button still fits, none on top of another
+    let min = f.ui.get_toolbar_min_width();
+    assert!(min > 600.0, "the toolbar sets the smallest width: {min}");
+    f.ui.window().set_size(slint::LogicalSize::new(min, 500.0));
+    pump();
+    let right_edge = |label: &str| {
+        let e = f.tool(label);
+        e.absolute_position().x + e.size().width
+    };
+    assert!(right_edge(&format!("About fileEm {version}")) <= min);
+    assert!(right_edge("Bookmark this folder (Ctrl+D)") <= f.tool("View (Ctrl+Shift+1…8, Ctrl+wheel)").absolute_position().x);
 }

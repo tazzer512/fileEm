@@ -2,7 +2,8 @@
 // Pause/Resume and Cancel, and conflict questions asked inline in the operation's row (never a
 // modal dialog: other operations and the main window stay usable). See src/ops_ui.rs.
 
-import { Button, CheckBox, ProgressIndicator, Palette } from "std-widgets.slint";
+import { Button, CheckBox, ProgressIndicator } from "std-widgets.slint";
+import { Theme } from "theme.slint";
 
 export struct OpRow {
     id: int,
@@ -19,12 +20,13 @@ export struct OpRow {
 }
 
 export component ProgressWindow inherits Window {
+    default-font-family: Theme.font;
     in property <string> window-title;
     in property <[OpRow]> rows;
     title: window-title;
     preferred-width: 520px;
     min-width: 420px;
-    background: Palette.background;
+    background: Theme.window;
     default-font-size: 13px;
 
     callback pause(int);
@@ -46,7 +48,7 @@ export component ProgressWindow inherits Window {
             spacing: 12px;
             for row[i] in root.rows: VerticalLayout {
                 spacing: 10px;
-                if i > 0: Rectangle { height: 1px; background: Palette.border; }
+                if i > 0: Rectangle { height: 1px; background: Theme.border; }
                 Text {
                     text: row.title;
                     font-size: 15px;
@@ -56,7 +58,7 @@ export component ProgressWindow inherits Window {
                 Text {
                     text: row.message;
                     overflow: elide;
-                    color: Palette.foreground.with-alpha(0.65);
+                    color: Theme.muted;
                 }
                 ProgressIndicator {
                     height: 6px;
@@ -68,7 +70,7 @@ export component ProgressWindow inherits Window {
                 }
                 if row.asking: Rectangle {
                     border-radius: 6px;
-                    background: Palette.alternate-background;
+                    background: Theme.accent-subtle;
                     VerticalLayout {
                         padding: 10px;
                         spacing: 8px;
@@ -80,11 +82,11 @@ export component ProgressWindow inherits Window {
                         GridLayout {
                             spacing: 8px;
                             Row {
-                                Text { text: "Source:"; color: Palette.foreground.with-alpha(0.65); }
+                                Text { text: "Source:"; color: Theme.muted; }
                                 Text { text: row.source; wrap: word-wrap; }
                             }
                             Row {
-                                Text { text: "Existing:"; color: Palette.foreground.with-alpha(0.65); }
+                                Text { text: "Existing:"; color: Theme.muted; }
                                 Text { text: row.existing; wrap: word-wrap; }
                             }
                         }

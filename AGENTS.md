@@ -59,6 +59,15 @@ remove or break it.
   renderer, so `take_snapshot` (drag images) works headless.
 - Slint `changed` handlers run between event-loop iterations, never in the middle of an event:
   don't read a value a handler maintains in the release of a drag (see MIGRATION.md's lessons).
+- Themes: `src/theme.rs` has every family's colors (light and dark), `ui/theme.slint` the
+  `Theme` global. `.slint` files draw with `Theme.*`, never `Palette.*` or hard-coded colors
+  (file type icons and shadows aside). A color the theme lacks becomes a new field of
+  `theme::Palette` and `ThemeData`, filled in for every family (`theme.rs`'s contrast test
+  covers text colors). Globals are per window: a new kind of window
+  gets `theme::style` when created and a line in `theme::set`. Check new styling with the
+  snapshots (`theme-<id>-<mode>`).
+- One version number: the workspace's `version` in `Cargo.toml` equals the pom's `app.version`
+  (`about.rs` tests it); bump both for a release.
 
 ## Tests are mandatory
 

@@ -9,6 +9,7 @@ use fileem_core::util::fs_util;
 
 use crate::columns::{ColumnId, Columns};
 use crate::shell;
+use crate::theme::Family;
 use crate::tree::NodeKind;
 use crate::view_mode::ViewMode;
 
@@ -69,6 +70,10 @@ pub enum Command {
     ManageBookmarks,
     /// Safely removes a drive (its root and its label).
     Eject(PathBuf, String),
+    /// The theme family; the mode stays.
+    SetTheme(Family),
+    /// Light (false) or dark (true); the family stays.
+    SetDark(bool),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -384,6 +389,13 @@ pub fn header_menu(columns: &Columns) -> Menu {
     Menu { sections: vec![entries], ..Menu::default() }
 }
 
+/// The toolbar's theme menu: the families, then light and dark.
+pub fn theme_menu(family: Family, dark: bool) -> Menu {
+    let families = Family::ALL.iter().map(|&f| check(f.label(), f == family, Command::SetTheme(f))).collect();
+    let modes = vec![check("Light", !dark, Command::SetDark(false)), check("Dark", dark, Command::SetDark(true))];
+    Menu { sections: vec![families, modes], ..Menu::default() }
+}
+
 /// Right-click on a tab.
 pub fn tab_menu(side: usize, index: usize, tabs: usize) -> Menu {
     Menu {
@@ -604,4 +616,16 @@ mod tests {
         assert!(!has(&tree_menu(root, NodeKind::Volume, None, &state(false)), "Eject"), "an internal disk");
         assert!(!has(&tree_menu(root, NodeKind::Folder, eject(true), &state(false)), "Eject"), "a folder on it");
     }
+
+    #[test]
+    fn theme_menu_marks_the_family_and_the_mode() {
+        let m = theme_menu(Family::Adwaita, true);
+        assert_eq!(m.titles(), ["Classic", "Windows 11", "macOS", "Adwaita (GNOME)", "Aurora", "Light", "Dark"]);
+        let checked: Vec<&str> = m.entries().into_iter().filter(|e| e.checked == Some(true)).map(|e| e.title.as_str()).collect();
+        assert_eq!(checked, ["Adwaita (GNOME)", "Dark"]);
+        assert_eq!(m.find("Aurora").unwrap().command, Command::SetTheme(Family::Aurora));
+        assert_eq!(m.find("Light").unwrap().command, Command::SetDark(false));
+        assert_eq!(m.sections.len(), 2);
+    }
+
 }

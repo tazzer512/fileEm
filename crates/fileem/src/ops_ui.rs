@@ -15,7 +15,8 @@ use slint::{ComponentHandle, ModelRc, VecModel};
 use fileem_core::ops::{Decision, FileOperation, Handle, Kind, Resolution, State};
 
 use crate::progress::{self, Conflict, Question, Row};
-use crate::{OpRow, ProgressWindow};
+use crate::app::Themed;
+use crate::{OpRow, ProgressWindow, ThemeData};
 
 /// How long an operation may run before it gets a row in the progress window.
 pub const SHOW_AFTER: Duration = Duration::from_millis(350);
@@ -49,6 +50,8 @@ struct Inner {
     ticker: slint::Timer,
     started: Instant,
     ticks: u32,
+    /// The main window's theme, for the progress window (the default until it is set).
+    theme: Option<ThemeData>,
 }
 
 /// The operations of one main window and their progress window. Cheap to clone.
@@ -86,6 +89,7 @@ impl OpsUi {
             ticker: slint::Timer::default(),
             started: Instant::now(),
             ticks: 0,
+            theme: None,
         }));
         ALL.with(|all| all.borrow_mut().insert(id, Rc::downgrade(&inner)));
         OpsUi { id, inner }
@@ -152,6 +156,15 @@ impl OpsUi {
         handles.iter().all(|h| h.await_stopped(deadline.saturating_duration_since(Instant::now())))
     }
 
+    /// The theme of the progress window, now and when it opens.
+    pub fn set_theme(&self, theme: ThemeData) {
+        let mut inner = self.inner.borrow_mut();
+        if let Some(w) = &inner.window {
+            w.set_theme(&theme);
+        }
+        inner.theme = Some(theme);
+    }
+
     /// The progress window while it shows rows (tests).
     pub fn window(&self) -> Option<ProgressWindow> {
         let inner = self.inner.borrow();
@@ -184,6 +197,9 @@ impl OpsUi {
     fn open_window(&self) {
         if self.inner.borrow().window.is_none() {
             let Ok(w) = ProgressWindow::new() else { return };
+            if let Some(theme) = &self.inner.borrow().theme {
+                w.set_theme(theme);
+            }
             w.set_rows(ModelRc::from(self.inner.borrow().model.clone()));
             let me = self.clone();
             w.on_pause(move |id| me.with_row(id, Row::toggle_pause));

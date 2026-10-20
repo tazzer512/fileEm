@@ -4,9 +4,10 @@
 // src/app.rs); requests that would be function calls elsewhere (scroll to a row, edit the
 // address, focus the filter) arrive as sequence numbers that change.
 
-import { LineEdit, ListView, Palette, ScrollView, Slider } from "std-widgets.slint";
+import { LineEdit, ListView, ScrollView, Slider } from "std-widgets.slint";
 import { Icons, FileIcon, ToolButton } from "icons.slint";
 import { GridItem } from "grid.slint";
+import { Theme } from "theme.slint";
 
 export struct FileRow {
     name: string,
@@ -138,11 +139,11 @@ export component HeaderCell {
     accessible-label: title;
     accessible-action-default => { clicked(); }
     Rectangle {
-        background: touch.dragging ? Palette.foreground.with-alpha(0.12)
-            : touch.has-hover ? Palette.foreground.with-alpha(0.06) : transparent;
+        background: touch.dragging ? Theme.fg.with-alpha(0.12)
+            : touch.has-hover ? Theme.hover : transparent;
     }
-    if root.drop-left: Rectangle { x: 0; width: 2px; background: Palette.accent-background; }
-    if root.drop-right: Rectangle { x: parent.width - 2px; width: 2px; background: Palette.accent-background; }
+    if root.drop-left: Rectangle { x: 0; width: 2px; background: Theme.accent; }
+    if root.drop-right: Rectangle { x: parent.width - 2px; width: 2px; background: Theme.accent; }
     HorizontalLayout {
         padding-left: 6px;
         padding-right: 6px;
@@ -152,13 +153,13 @@ export component HeaderCell {
             horizontal-alignment: root.align;
             vertical-alignment: center;
             overflow: elide;
-            color: Palette.foreground.with-alpha(0.75);
+            color: Theme.muted;
         }
         Text {
             text: sorted ? (ascending ? "▲" : "▼") : "";
             font-size: 9px;
             vertical-alignment: center;
-            color: Palette.foreground.with-alpha(0.6);
+            color: Theme.muted;
         }
     }
     touch := TouchArea {
@@ -195,7 +196,7 @@ export component HeaderCell {
     Rectangle {
         x: parent.width - 6px;
         width: 6px;
-        Rectangle { x: 5px; width: 1px; background: Palette.border; }
+        Rectangle { x: 5px; width: 1px; background: Theme.border; }
         edge := TouchArea {
             mouse-cursor: col-resize;
             moved => { root.resized(root.width + self.mouse-x - self.pressed-x); }
@@ -547,6 +548,7 @@ export component SidePane {
             // the file list keeps a usable width in a narrow window; the tree gives way
             width: max(80px, min(root.view.tree-width, root.width - 265px));
             Rectangle {
+                background: Theme.sidebar;
             tree-list := ListView {
                 changed visible-height => { root.apply-tree-scroll(); }
                 changed content-height => { root.apply-tree-scroll(); }
@@ -557,13 +559,13 @@ export component SidePane {
                     Rectangle {
                         x: 4px;
                         width: parent.width - 8px;
-                        border-radius: 4px;
-                        background: i == root.tree-drop-row ? Palette.accent-background.with-alpha(0.3)
-                            : row.current ? Palette.accent-background.with-alpha(0.18)
-                            : tree-touch.has-hover && !row.header ? Palette.foreground.with-alpha(0.06) : transparent;
+                        border-radius: Theme.radius;
+                        background: i == root.tree-drop-row ? Theme.accent-subtle
+                            : row.current ? Theme.tree-current
+                            : tree-touch.has-hover && !row.header ? Theme.hover : transparent;
                         // the right-clicked row is outlined while its menu is open
                         border-width: row.current || i == root.tree-drop-row || i == root.view.tree-menu-row ? 1px : 0px;
-                        border-color: i == root.view.tree-menu-row ? Palette.accent-background : Palette.accent-background.with-alpha(0.6);
+                        border-color: Theme.accent;
                     }
                     DragArea {
                         enabled: row.draggable;
@@ -617,7 +619,7 @@ export component SidePane {
                                 viewbox-width: 24;
                                 viewbox-height: 24;
                                 commands: row.expanded ? Icons.chevron-down : Icons.chevron-right;
-                                fill: Palette.foreground.with-alpha(0.6);
+                                fill: Theme.muted;
                             }
                             TouchArea {
                                 enabled: row.expandable;
@@ -635,7 +637,7 @@ export component SidePane {
                             // the free space gives way first
                             min-width: row.extra != "" ? min(self.preferred-width, 110px) : 0px;
                             font-weight: row.header || row.on-path ? 600 : 400;
-                            color: row.header ? Palette.foreground.with-alpha(0.6) : Palette.foreground;
+                            color: row.header ? Theme.muted : Theme.fg;
                             font-size: row.header ? 11px : 13px;
                         }
                         // before the free space, which gets cut off first
@@ -646,14 +648,14 @@ export component SidePane {
                             accessible-enabled: !row.ejecting;
                             accessible-action-default => { if (!row.ejecting) { root.tree-eject(root.side, i); } }
                             border-radius: 3px;
-                            background: eject-touch.has-hover && !row.ejecting ? Palette.foreground.with-alpha(0.1) : transparent;
+                            background: eject-touch.has-hover && !row.ejecting ? Theme.fg.with-alpha(0.1) : transparent;
                             Path {
                                 width: 14px;
                                 height: 14px;
                                 viewbox-width: 24;
                                 viewbox-height: 24;
                                 commands: Icons.eject;
-                                fill: Palette.foreground.with-alpha(row.ejecting ? 0.3 : 0.7);
+                                fill: Theme.fg.with-alpha(row.ejecting ? 0.3 : 0.7);
                             }
                             eject-touch := TouchArea {
                                 enabled: !row.ejecting;
@@ -666,7 +668,7 @@ export component SidePane {
                             vertical-alignment: center;
                             overflow: elide;
                             font-size: 11px;
-                            color: Palette.foreground.with-alpha(0.55);
+                            color: Theme.subtle;
                         }
                     }
                 }
@@ -694,8 +696,8 @@ export component SidePane {
         // ---- splitter ----
         Rectangle {
             width: 5px;
-            background: splitter.has-hover || splitter.pressed ? Palette.accent-background.with-alpha(0.3) : transparent;
-            Rectangle { x: 2px; width: 1px; background: Palette.border; }
+            background: splitter.has-hover || splitter.pressed ? Theme.accent.with-alpha(0.3) : transparent;
+            Rectangle { x: 2px; width: 1px; background: Theme.border; }
             splitter := TouchArea {
                 mouse-cursor: col-resize;
                 moved => {
@@ -709,10 +711,10 @@ export component SidePane {
             // ---- tab bar ----
             Rectangle {
                 height: 32px;
-                background: Palette.alternate-background;
+                background: Theme.tabbar;
                 // the active side of two is marked
-                if root.dual && root.view.active: Rectangle { y: 0; height: 2px; background: Palette.accent-background; }
-                Rectangle { y: parent.height - 1px; height: 1px; background: Palette.border; }
+                if root.dual && root.view.active: Rectangle { y: 0; height: 2px; background: Theme.highlight; }
+                Rectangle { y: parent.height - 1px; height: 1px; background: Theme.border; }
                 HorizontalLayout {
                     padding-left: 4px;
                     padding-top: 3px;
@@ -736,10 +738,10 @@ export component SidePane {
                         min-width: 80px;
                         max-width: 200px;
                         preferred-width: tab-layout.preferred-width;
-                        border-radius: 4px;
-                        background: tab.active ? Palette.background : tab-touch.has-hover ? Palette.foreground.with-alpha(0.06) : transparent;
+                        border-radius: Theme.tab-radius;
+                        background: tab.active ? Theme.tab-active : tab-touch.has-hover ? Theme.hover : transparent;
                         border-width: tab.active ? 1px : 0px;
-                        border-color: Palette.border;
+                        border-color: Theme.border;
                         accessible-role: AccessibleRole.tab;
                         accessible-label: tab.title;
                         accessible-item-selected: tab.active;
@@ -747,7 +749,7 @@ export component SidePane {
                         if root.tab-dragging && slot >= 0: Rectangle {
                             x: slot == t ? -2px : parent.width;
                             width: 2px;
-                            background: Palette.accent-background;
+                            background: Theme.accent;
                         }
                         tab-touch := TouchArea {
                             // a left press moved sideways: the tab is being dragged to another place
@@ -828,10 +830,10 @@ export component SidePane {
                 Rectangle {
                     min-width: 60px;
                     horizontal-stretch: 1;
-                    border-radius: 4px;
+                    border-radius: Theme.control-radius;
                     border-width: 1px;
-                    border-color: Palette.border;
-                    background: Palette.control-background;
+                    border-color: Theme.border;
+                    background: Theme.field;
                     clip: true;
                     accessible-role: groupbox;
                     accessible-label: "Address";
@@ -855,12 +857,12 @@ export component SidePane {
                             if c > 0: Text {
                                 text: "›";
                                 vertical-alignment: center;
-                                color: Palette.foreground.with-alpha(0.5);
+                                color: Theme.subtle;
                             }
                             Rectangle {
                                 width: crumb-layout.preferred-width;
                                 border-radius: 3px;
-                                background: crumb-touch.has-hover ? Palette.foreground.with-alpha(0.08) : transparent;
+                                background: crumb-touch.has-hover ? Theme.fg.with-alpha(0.08) : transparent;
                                 accessible-role: button;
                                 accessible-label: crumb.drive ? "File System" : crumb.label;
                                 accessible-action-default => { root.crumb-clicked(root.side, c); }
@@ -951,7 +953,7 @@ export component SidePane {
                     }
                 }
             }
-            Rectangle { height: 1px; background: Palette.border; }
+            Rectangle { height: 1px; background: Theme.border; }
 
             // ---- details list ----
             Rectangle {
@@ -1029,9 +1031,10 @@ export component SidePane {
                         menu(x, y) => { root.activate(root.side); root.header-menu(root.side); root.show-menu(x, y); }
                     }
                 }
-                Rectangle { y: parent.height - 1px; height: 1px; background: Palette.border; }
+                Rectangle { y: parent.height - 1px; height: 1px; background: Theme.border; }
             }
             Rectangle {
+                background: Theme.view;
                 // Presses on a row past its icon and name, and on empty space, pass through the
                 // list to here. This area is never rebuilt while scrolling, so a selection box keeps
                 // getting the mouse after its first row scrolled out of view (a row's own touch area
@@ -1054,11 +1057,12 @@ export component SidePane {
                         accessible-role: list-item;
                         accessible-label: row.name;
                         accessible-item-selected: row.selected;
-                        background: i == root.drop-row ? Palette.accent-background.with-alpha(0.3)
-                            : row.selected ? Palette.selection-background.with-alpha(root.focused ? 1.0 : 0.45)
-                            : row-touch.has-hover || i == root.hover-row ? Palette.foreground.with-alpha(0.05) : transparent;
+                        border-radius: Theme.radius;
+                        background: i == root.drop-row ? Theme.accent.with-alpha(0.3)
+                            : row.selected ? (root.focused ? Theme.selection-focused : Theme.selection)
+                            : row-touch.has-hover || i == root.hover-row ? Theme.hover : transparent;
                         border-width: (row.current && root.focused) || i == root.drop-row ? 1px : 0px;
-                        border-color: Palette.accent-background;
+                        border-color: Theme.accent;
                         // files are dragged by their icon and name (with a little slack); the rest
                         // of the row belongs to the area behind the list (selection box)
                         row-drag := DragArea {
@@ -1103,7 +1107,7 @@ export component SidePane {
                         }
                         }
                         HorizontalLayout {
-                            property <color> fg: row.selected && root.focused ? Palette.selection-foreground : Palette.foreground;
+                            property <color> fg: row.selected && root.focused ? Theme.selection-fg : Theme.fg;
                             alignment: start;
                             HorizontalLayout {
                                 width: root.name-width;
@@ -1294,9 +1298,9 @@ export component SidePane {
                     y: min(y1, y2);
                     width: abs(x2 - x1);
                     height: abs(y2 - y1);
-                    background: Palette.accent-background.with-alpha(0.15);
+                    background: Theme.accent.with-alpha(0.15);
                     border-width: 1px;
-                    border-color: Palette.accent-background;
+                    border-color: Theme.accent;
                     accessible-role: groupbox;
                     accessible-label: "Selection box";
                 }
@@ -1337,15 +1341,15 @@ export component SidePane {
             if root.view.files.length == 0 && root.view.message != "": Text {
                 text: root.view.message;
                 horizontal-alignment: center;
-                color: Palette.foreground.with-alpha(0.6);
+                color: Theme.muted;
                 height: 40px;
             }
 
             // ---- status line ----
-            Rectangle { height: 1px; background: Palette.border; }
+            Rectangle { height: 1px; background: Theme.border; }
             Rectangle {
                 height: 24px;
-                background: Palette.alternate-background;
+                background: Theme.status;
                 HorizontalLayout {
                     padding-left: 8px;
                     padding-right: 4px;
@@ -1355,7 +1359,7 @@ export component SidePane {
                         text: root.view.status;
                         vertical-alignment: center;
                         overflow: elide;
-                        color: Palette.foreground.with-alpha(0.75);
+                        color: Theme.muted;
                         font-size: 12px;
                         accessible-role: text;
                         accessible-label: "Status";

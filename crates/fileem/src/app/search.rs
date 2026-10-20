@@ -29,7 +29,7 @@ use crate::{SearchRow, SearchWindow};
 
 pub struct Search {
     id: u64,
-    window: SearchWindow,
+    pub(super) window: SearchWindow,
     results: Results,
     rows: Rc<VecModel<SearchRow>>,
     run: Option<Run>,
@@ -104,6 +104,7 @@ impl Listener for Collector {
 /// file list shows them.
 pub fn open(app: &Shared, dir: PathBuf) -> Option<SearchWindow> {
     let w = SearchWindow::new().ok()?;
+    super::theme::style(app, &w);
     let id = app.borrow_mut().next_id();
     w.set_window_title(format!("Search in {}", fs_util::display_name(&dir)).into());
     w.set_root_path(dir.display().to_string().into());

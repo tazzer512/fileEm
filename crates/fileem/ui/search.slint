@@ -2,10 +2,11 @@
 // Hidden files box, Search / Stop, the results and a status line. Rust runs the search and keeps
 // the results (src/search.rs, src/app/search.rs); this file lays out and draws.
 
-import { Button, CheckBox, LineEdit, ListView, Palette } from "std-widgets.slint";
+import { Button, CheckBox, LineEdit, ListView } from "std-widgets.slint";
 import { FileIcon, Icons, MenuRow, ToolButton } from "icons.slint";
 import { HeaderCell } from "side.slint";
 import { DialogOverlay } from "dialog.slint";
+import { Theme } from "theme.slint";
 
 export struct SearchRow {
     name: string,
@@ -20,13 +21,14 @@ export struct SearchRow {
 }
 
 export component SearchWindow inherits Window {
+    default-font-family: Theme.font;
     in property <string> window-title;
     title: window-title;
     preferred-width: 980px;
     preferred-height: 520px;
     min-width: 480px;
     min-height: 300px;
-    background: Palette.background;
+    background: Theme.window;
     default-font-size: 13px;
 
     // the folder searched (and everything below it)
@@ -207,7 +209,7 @@ export component SearchWindow inherits Window {
                         resized(w) => { root.widths[ci] = max(40px, w); }
                     }
                 }
-                Rectangle { y: parent.height - 1px; height: 1px; background: Palette.border; }
+                Rectangle { y: parent.height - 1px; height: 1px; background: Theme.border; }
             }
             Rectangle {
                 vertical-stretch: 1;
@@ -226,7 +228,7 @@ export component SearchWindow inherits Window {
                 }
                 if root.rows.length == 0: Text {
                     text: root.running ? "" : "Type a name or a pattern and press Enter.";
-                    color: Palette.foreground.with-alpha(0.55);
+                    color: Theme.subtle;
                     horizontal-alignment: center;
                     vertical-alignment: center;
                 }
@@ -240,10 +242,10 @@ export component SearchWindow inherits Window {
                         accessible-role: list-item;
                         accessible-label: row.name;
                         accessible-item-selected: row.selected;
-                        background: row.selected ? Palette.selection-background.with-alpha(results-keys.has-focus ? 1.0 : 0.45)
-                            : touch.has-hover ? Palette.foreground.with-alpha(0.05) : transparent;
+                        background: row.selected ? (results-keys.has-focus ? Theme.selection-focused : Theme.selection)
+                            : touch.has-hover ? Theme.hover : transparent;
                         border-width: row.current && results-keys.has-focus ? 1px : 0px;
-                        border-color: Palette.accent-background;
+                        border-color: Theme.accent;
                         touch := TouchArea {
                             pointer-event(event) => {
                                 if (event.kind == PointerEventKind.down) {
@@ -260,7 +262,7 @@ export component SearchWindow inherits Window {
                             double-clicked => { root.row-activated(i); }
                         }
                         HorizontalLayout {
-                            property <color> fg: row.selected && results-keys.has-focus ? Palette.selection-foreground : Palette.foreground;
+                            property <color> fg: row.selected && results-keys.has-focus ? Theme.selection-fg : Theme.fg;
                             alignment: start;
                             HorizontalLayout {
                                 width: root.widths[0];
@@ -294,9 +296,9 @@ export component SearchWindow inherits Window {
                     }
                 }
             }
-            Rectangle { height: 1px; background: Palette.border; }
+            Rectangle { height: 1px; background: Theme.border; }
             Rectangle {
-                background: Palette.alternate-background;
+                background: Theme.status;
                 HorizontalLayout {
                     padding: 4px;
                     padding-left: 10px;
@@ -304,7 +306,7 @@ export component SearchWindow inherits Window {
                     Text {
                         text: root.status;
                         overflow: elide;
-                        color: Palette.foreground.with-alpha(0.75);
+                        color: Theme.muted;
                         accessible-role: text;
                         accessible-label: "Status";
                     }
@@ -320,9 +322,9 @@ export component SearchWindow inherits Window {
         width: pattern-field.width;
         property <int> highlighted: 0;
         Rectangle {
-            background: Palette.background;
+            background: Theme.window;
             border-width: 1px;
-            border-color: Palette.border;
+            border-color: Theme.border;
             drop-shadow-blur: 8px;
             drop-shadow-color: #00000044;
         }
@@ -353,7 +355,7 @@ export component SearchWindow inherits Window {
                     height: 24px;
                     accessible-role: list-item;
                     accessible-label: item;
-                    background: i == history-popup.highlighted || item-touch.has-hover ? Palette.selection-background.with-alpha(0.5) : transparent;
+                    background: i == history-popup.highlighted || item-touch.has-hover ? Theme.selection : transparent;
                     item-touch := TouchArea {
                         clicked => {
                             root.history-picked(item);

@@ -71,6 +71,7 @@ crates/fileem/             the app
   ui/bookmarks.slint       the Manage bookmarks window
   ui/dialog.slint          the question drawn over a window (main, search and bookmarks windows)
   ui/icons.slint           shared icons, the tool button and the F-key bar's buttons
+  ui/theme.slint           the Theme global every window draws with (colors, radii, font)
   src/app.rs               controller: state, session, wiring, models (Java MainWindow)
   src/app/nav.rs           listings per tab, watching, trees, tabs, sides (Java ExplorerSide/FileTab)
   src/app/commands.rs      operations, clipboard, dialogs, menus, properties
@@ -86,6 +87,11 @@ crates/fileem/             the app
                            FolderTree.syncVolumes, MainWindow.eject)
   src/app/bookmarks.rs     bookmarks: toggling, menus, the trees' section, the Manage window
                            (Java MainWindow bookmarks, FolderTree.syncBookmarks, BookmarksDialog)
+  src/app/theme.rs         puts the theme on every window, theme menu, light/dark, About box
+  src/theme.rs             the five theme families in light and dark (toolkit-free; Java Theme
+                           and its stylesheets)
+  src/about.rs             the About text: version, build date, Rust/Slint, system (Java AppInfo);
+                           build.rs fills in the date and versions
   src/view_mode.rs         the eight views, sizes and steps, session format (Java ViewMode)
   src/grid.rs              grid layout: slots, lanes, hit tests, box hits, key moves, the names
                            List measures for its column width (Java FileGrid)

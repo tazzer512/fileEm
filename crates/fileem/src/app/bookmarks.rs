@@ -21,7 +21,7 @@ use crate::{BookmarkRow, BookmarksWindow};
 
 /// The open Manage bookmarks window.
 pub struct Manage {
-    window: BookmarksWindow,
+    pub(super) window: BookmarksWindow,
     rows: Rc<VecModel<BookmarkRow>>,
     selected: Option<PathBuf>,
     /// Bookmarked folders that aren't there (checked in the background).
@@ -126,6 +126,7 @@ pub fn manage(app: &Shared) -> Option<BookmarksWindow> {
         return Some(w);
     }
     let w = BookmarksWindow::new().ok()?;
+    super::theme::style(app, &w);
     let rows = Rc::new(VecModel::default());
     w.set_rows(ModelRc::from(rows.clone()));
     let selected = app.borrow().bookmarks.items().first().map(|b| b.path.clone());

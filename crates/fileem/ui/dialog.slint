@@ -2,7 +2,8 @@
 // field, a list of lines (operation errors), Cancel / a second choice / OK. Rust decides what the
 // answer does (src/app/commands.rs `Dialog`).
 
-import { Button, LineEdit, ListView, Palette } from "std-widgets.slint";
+import { Button, LineEdit, ListView } from "std-widgets.slint";
+import { Theme } from "theme.slint";
 
 export component DialogOverlay inherits Rectangle {
     in property <string> title;
@@ -36,6 +37,11 @@ export component DialogOverlay inherits Rectangle {
                 root.cancelled();
                 return EventResult.accept;
             }
+            // a message with only OK (About, errors): Escape is OK
+            if (event.text == Key.Escape && !root.input) {
+                root.accepted(root.text);
+                return EventResult.accept;
+            }
             if (event.text == Key.Return && !root.input) {
                 root.accepted(root.text);
                 return EventResult.accept;
@@ -47,10 +53,10 @@ export component DialogOverlay inherits Rectangle {
             height: min(card-layout.preferred-height, root.height - 40px);
             x: (parent.width - self.width) / 2;
             y: (parent.height - self.height) / 2;
-            background: Palette.background;
+            background: Theme.window;
             border-radius: 8px;
             border-width: 1px;
-            border-color: Palette.border;
+            border-color: Theme.border;
             drop-shadow-blur: 24px;
             drop-shadow-color: #00000055;
             accessible-role: groupbox;
@@ -79,7 +85,7 @@ export component DialogOverlay inherits Rectangle {
                 if root.error != "": Text {
                     text: root.error;
                     wrap: word-wrap;
-                    color: #d93a35;
+                    color: Theme.danger;
                 }
                 if root.lines.length > 0: ListView {
                     height: min(root.lines.length * 20px, 200px);

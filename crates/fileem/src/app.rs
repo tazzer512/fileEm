@@ -11,6 +11,7 @@
 //! - `search`: search windows
 //! - `bookmarks`: bookmarks, their tree section and the Manage bookmarks window
 //! - `volumes`: the drives (polling) and ejecting them
+//! - `theme`: the theme of every window, and the About box
 
 mod bookmarks;
 mod commands;
@@ -19,6 +20,7 @@ mod keys;
 mod nav;
 mod preview;
 mod search;
+mod theme;
 mod views;
 mod volumes;
 
@@ -54,6 +56,7 @@ use crate::tree::{NodeKind, Tree};
 use crate::view_mode::{ViewMode, ViewState};
 use crate::{AppWindow, ColumnRow, CrumbRow, FileRow, PropertiesWindow, SideView, TabRow, TreeRow};
 
+pub use theme::{about, current as theme, data as theme_data, set as set_theme, toggle_dark, Themed};
 pub use volumes::{Ejector, SystemEjector};
 pub use commands::{
     clipboard_text, close_requested, close_windows, open_dialog, properties_windows, run_command, run_operation,
@@ -207,6 +210,8 @@ pub struct App {
     ejector: Arc<dyn Ejector>,
     /// Lists the drives every few seconds; `None` once a test shows its own.
     poller: Option<volumes::Poller>,
+    /// The theme family and whether it is dark, shared by all the windows.
+    theme: (crate::theme::Family, bool),
 }
 
 pub type Shared = Rc<RefCell<App>>;
@@ -315,6 +320,7 @@ pub fn install(ui: &AppWindow, session: Rc<Session>, start: Option<PathBuf>) -> 
         ejecting: HashSet::new(),
         ejector: Arc::new(SystemEjector),
         poller: None,
+        theme: theme::restore(&session),
         thumbs: Thumbnails::new({
             let ui = ui.as_weak();
             move || {
@@ -322,6 +328,9 @@ pub fn install(ui: &AppWindow, session: Rc<Session>, start: Option<PathBuf>) -> 
             }
         }),
     }));
+    let (family, dark) = app.borrow().theme;
+    theme::set(&app, family, dark);
+    ui.set_version(crate::about::VERSION.into());
     ui.set_side_split(session.get_f64("split.sides", 0.5).clamp(0.2, 0.8) as f32);
     let mut opening: Vec<(u64, PathBuf)> = Vec::new();
     for (s, id) in SIDE_IDS.iter().enumerate() {
@@ -378,8 +387,8 @@ pub fn install(ui: &AppWindow, session: Rc<Session>, start: Option<PathBuf>) -> 
 }
 
 /// Copies the window's state into the session (autosave, close). Only keys this version knows
-/// are written; the rest (theme, preview, …) stays as the Java app left it, so both versions can
-/// share the file during the migration.
+/// are written; the rest stays as the Java app left it, so both versions can share the file
+/// during the migration.
 pub fn collect_session(app: &Shared) {
     let a = app.borrow();
     let s = &a.session;
@@ -388,6 +397,8 @@ pub fn collect_session(app: &Shared) {
     s.put("sort.column", key.id());
     s.put("sort.ascending", asc);
     s.put("dual", a.dual);
+    s.put("theme.name", a.theme.0.id());
+    s.put("theme.dark", a.theme.1);
     a.columns.save(s);
     for (side, id) in a.sides.iter().zip(SIDE_IDS) {
         s.remove_prefix(&format!("{id}.tab."));
@@ -641,6 +652,9 @@ fn wire(ui: &AppWindow, app: &Shared) {
     on!(on_dialog_cancelled, app => | | commands::close_dialog(app));
     on!(on_dialog_alternative, app => | | dnd::copy_instead(app));
     on!(on_key, app => |text, ctrl, alt, shift| keys::key(app, &text, ctrl, alt, shift));
+    on!(on_theme_menu, app => | | theme::menu(app));
+    on!(on_toggle_dark, app => | | theme::toggle_dark(app));
+    on!(on_about, app => | | theme::about(app));
     on!(on_view_menu, app => |side| {
         nav::set_active_side(app, side as usize);
         commands::view_menu(app);

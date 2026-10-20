@@ -379,7 +379,7 @@ pub(super) fn menu_rows(entries: &[menu::Entry], commands: &mut Vec<Command>) ->
 }
 
 /// Hands `m` to app.slint's sections; the commands stay here by id.
-fn set_menu(app: &Shared, m: Menu) {
+pub(super) fn set_menu(app: &Shared, m: Menu) {
     let mut commands = Vec::new();
     let mut rows = |entries: &[menu::Entry]| menu_rows(entries, &mut commands);
     let section = |i: usize| m.sections.get(i).map(Vec::as_slice).unwrap_or_default();
@@ -500,6 +500,14 @@ pub fn run_command(app: &Shared, command: Command) {
             super::bookmarks::manage(app);
         }
         Command::Eject(root, label) => super::volumes::eject(app, root, label),
+        Command::SetTheme(family) => {
+            let dark = app.borrow().theme.1;
+            super::theme::set(app, family, dark);
+        }
+        Command::SetDark(dark) => {
+            let family = app.borrow().theme.0;
+            super::theme::set(app, family, dark);
+        }
     }
 }
 
@@ -531,6 +539,7 @@ pub(super) fn open_properties(app: &Shared, paths: Vec<PathBuf>) {
 
 fn show_properties(app: &Shared, paths: Vec<PathBuf>, sheet: properties::Sheet) {
     let Ok(w) = PropertiesWindow::new() else { return };
+    super::theme::style(app, &w);
     w.set_window_title(sheet.title.into());
     w.set_header(sheet.header.into());
     w.set_item_icon(sheet.entry.as_ref().map_or(-1, icon_of));

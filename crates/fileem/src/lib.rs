@@ -3,6 +3,7 @@
 
 slint::include_modules!();
 
+pub mod about;
 pub mod address;
 pub mod app;
 pub mod bg;
@@ -18,6 +19,7 @@ pub mod search;
 pub mod shell;
 pub mod signals;
 pub mod tab;
+pub mod theme;
 pub mod thumbs;
 pub mod tree;
 pub mod view_mode;

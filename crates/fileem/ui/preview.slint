@@ -2,8 +2,9 @@
 // message. One pane, shown docked in the main window or in a window of its own; Rust
 // (src/app/preview.rs) loads the content and keeps the zoom, the pane draws it and pans.
 
-import { Palette, ScrollView } from "std-widgets.slint";
+import { ScrollView } from "std-widgets.slint";
 import { Icons, ToolButton } from "icons.slint";
+import { Theme } from "theme.slint";
 
 export struct PreviewView {
     title: string,
@@ -63,7 +64,7 @@ export component PreviewPane {
         scroll.content-y = clamp(scroll.content-y - dy * scroll.visible-height / 4, min(0px, scroll.visible-height - scroll.content-height), 0px);
     }
 
-    Rectangle { background: Palette.background; }
+    Rectangle { background: Theme.window; }
     VerticalLayout {
         HorizontalLayout {
             padding-top: 4px;
@@ -90,7 +91,7 @@ export component PreviewPane {
                 clicked => { root.close(); }
             }
         }
-        Rectangle { height: 1px; background: Palette.border; }
+        Rectangle { height: 1px; background: Theme.border; }
         Rectangle {
             vertical-stretch: 1;
             scroll := ScrollView {
@@ -132,7 +133,7 @@ export component PreviewPane {
                     text: root.view.mode == 2 ? root.view.text : "";
                     font-family: "monospace";
                     font-size: root.view.font-size;
-                    color: Palette.foreground;
+                    color: Theme.fg;
                 }
             }
             if root.view.mode == 0: Text {
@@ -142,10 +143,10 @@ export component PreviewPane {
                 wrap: word-wrap;
                 horizontal-alignment: center;
                 vertical-alignment: center;
-                color: Palette.foreground.with-alpha(0.6);
+                color: Theme.muted;
             }
         }
-        Rectangle { height: 1px; background: Palette.border; }
+        Rectangle { height: 1px; background: Theme.border; }
         // zoom, then pan; docked, the pan buttons go to a second row
         HorizontalLayout {
             alignment: center;
@@ -176,6 +177,7 @@ export component PreviewPane {
 // The preview floating in a window of its own. Keys it doesn't use go to the main window's
 // handler, so arrow keys still move through the files.
 export component PreviewWindow inherits Window {
+    default-font-family: Theme.font;
     in property <PreviewView> view;
     callback zoom(int);
     callback fit();
@@ -191,6 +193,7 @@ export component PreviewWindow inherits Window {
     // all the buttons in one row
     min-width: 330px;
     min-height: 200px;
+    background: Theme.window;
     forward-focus: keys;
     keys := FocusScope {
         key-pressed(event) => {

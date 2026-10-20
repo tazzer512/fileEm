@@ -1,8 +1,9 @@
 // Properties of one or more items, in a window of its own (not modal). Folder sizes are counted
 // in the background and filled in as they come (see src/properties.rs and src/app.rs).
 
-import { Button, LineEdit, Palette, ScrollView } from "std-widgets.slint";
+import { Button, LineEdit, ScrollView } from "std-widgets.slint";
 import { FileIcon } from "icons.slint";
+import { Theme } from "theme.slint";
 
 export struct PropLine {
     label: string,
@@ -14,6 +15,7 @@ export struct PropLine {
 }
 
 export component PropertiesWindow inherits Window {
+    default-font-family: Theme.font;
     in property <string> window-title;
     in property <string> header;
     // FileIcon kind; -1 for several items
@@ -22,7 +24,7 @@ export component PropertiesWindow inherits Window {
     title: window-title;
     min-width: 440px;
     preferred-width: 480px;
-    background: Palette.background;
+    background: Theme.window;
     default-font-size: 13px;
 
     callback close-clicked();
@@ -51,7 +53,7 @@ export component PropertiesWindow inherits Window {
                     accessible-label: "Name";
                 }
             }
-            Rectangle { height: 1px; background: Palette.border; }
+            Rectangle { height: 1px; background: Theme.border; }
             GridLayout {
                 spacing-horizontal: 14px;
                 spacing-vertical: 8px;
@@ -60,12 +62,12 @@ export component PropertiesWindow inherits Window {
                         width: 90px;
                         min-height: 22px;
                         // the rule spans both columns
-                        if line.group-start: Rectangle { x: 0; y: -5px; height: 1px; width: root.width - 32px; background: Palette.border; }
+                        if line.group-start: Rectangle { x: 0; y: -5px; height: 1px; width: root.width - 32px; background: Theme.border; }
                         Text {
                             text: line.label;
                             x: 0;
                             vertical-alignment: center;
-                            color: Palette.foreground.with-alpha(0.65);
+                            color: Theme.muted;
                         }
                     }
                     Rectangle {

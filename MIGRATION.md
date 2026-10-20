@@ -12,7 +12,7 @@ OpenGL, ~32 MB with the software renderer).
 preview) done on branch `rust`, and the leftovers of stages 1–5 fixed except drag & drop with
 other applications (decided: not possible with Slint 1.18). The Java app in `src/` is still the
 complete, daily-use version; nothing was removed from it. Stage 7 (search, bookmarks,
-drives and eject) done; next stage 8, themes and the About box.
+drives and eject) and stage 8 (themes, About) done; next stage 9, packaging and cutover.
 
 ## How to work a stage
 
@@ -360,20 +360,44 @@ are the Java sources, as a size hint.
 
 - [x] The Java toolbar's buttons in its order and with its tooltips: back/forward/up/refresh,
   new folder, cut, copy, paste, rename, delete, properties, new tab, bookmark; on the right the
-  view menu (the active side's tab), preview, second side, hidden files. Icons from the MDI font
-  the Java app uses. Each does what its key does (`commands::tool`), on the active side. The
-  window's minimum width is 600 px so every button stays reachable (Java folds buttons into an
-  overflow menu instead). Theme and About buttons come with stage 8.
+  view menu (the active side's tab), preview, second side, hidden files, then (stage 8) the
+  theme menu, light / dark and About. Icons from the MDI font the Java app uses. Each does what
+  its key does (`commands::tool`), on the active side. The window can't get narrower than the
+  toolbar (`toolbar-min-width`, about 680 px) so every button stays reachable (Java folds
+  buttons into an overflow menu instead).
 - UI tests: every button clicked once (dialogs asked, copy/cut + paste, properties, new tab);
   the view menu changes only the active side's view.
 
-### Stage 8: themes and about
+### Stage 8: themes and about (done)
 
-- Toolbar: the theme menu and light/dark button, the About button (Java's right end).
-
-- `Theme` 160 + theme CSS (`ThemeTest` 6): map the five families to Slint styles
-  (fluent, cupertino, material, cosmic, …) plus our own palette globals; light/dark.
-- About box with version and build date (`AppInfo`; one version number for both builds).
+- [x] **Themes** (`src/theme.rs` toolkit-free, `src/app/theme.rs`, `ui/theme.slint`): the
+  Java families Classic, Windows 11, macOS, Adwaita (GNOME) and Aurora, each light and dark, as
+  tables of the Java theme files' colors (Classic: AtlantaFX Primer), corner radii and font
+  (Segoe UI Variable, SF Pro, Cantarell, Inter; the system's where missing). Every `.slint` file
+  draws with the `Theme` global (surfaces: window, toolbar, tab bar, active tab, list, tree,
+  status line; text, muted, borders, accent, selection with and without focus, hover, tree
+  current, danger); Aurora's gradients (window, tab bar, tree, the active side's bar, the
+  focused selection) are built in `theme.slint` from `ThemeFill` (Rust can't make gradient
+  brushes through Slint's public API). Globals belong to one window, so every window (main,
+  preview, search, bookmarks, properties, progress) gets the theme when created and on every
+  change; the std widgets get the matching light / dark scheme. Toolbar: the theme menu
+  (families, then Light / Dark, marks for the current ones), the light / dark button. Session
+  `theme.name` / `theme.dark` (the Java ids; unknown names are Classic; default Classic light).
+- [x] **About** (`src/about.rs`, `build.rs`): the toolbar's last button ("About fileEm
+  0.1.0"); a dialog "fileEm 0.1.0" with Version, Built (yyyy-mm-dd, `SOURCE_DATE_EPOCH` for
+  reproducible builds), Rust and Slint versions, and the system (Linux: the kernel release,
+  like Java's `os.version`) and architecture. One version number: the workspace's must equal the
+  pom's `app.version` (`AppInfoTest` ported). Escape now closes every OK-only dialog (as OK).
+- Tests: unit tests for ids, both modes of every family, text contrast on every surface (WCAG:
+  text 7, muted 3, selected 4.5), color math, the theme menu's marks, the About text and the
+  build info; UI scenarios: the theme menu switches family and mode in all six kinds of window
+  (and later windows start in it), the light / dark button, the session round trip, unknown
+  names; the About dialog and the toolbar at the window's smallest width. Snapshots of every
+  theme in both modes (`theme-<id>-<mode>`), a dark Properties window and the About box.
+- Differences: the std widgets (buttons, fields, check boxes, scroll bars, the menu popups) stay
+  Fluent and only follow light / dark: Slint picks a style at build time, and its accent can't
+  be themed. About is a dialog over the main window, not a separate window that stays open.
+  Texts without a color of their own take the std style's foreground (close to the theme's).
 
 ### Stage 9: packaging and cutover
 
