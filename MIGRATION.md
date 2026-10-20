@@ -96,8 +96,9 @@ are the Java sources, as a size hint.
 - [x] **Dialogs** (done: an overlay dialog in the main window (`dialog-*` properties,
   `app.rs` `Dialog`/`DialogSpec`) for confirm, name entry with validation and error lists;
   `ops::names` (rename never replaces, case-only renames, create folder/file) with tests;
-  Del/F8 Trash and Shift+Del delete after confirming, F2, F7/Ctrl+Shift+N. Still to do: new
-  text file (menu only in Java), tabs/bookmarks following a renamed folder (stage 3/7).)
+  Del/F8 Trash and Shift+Del delete after confirming, F2, F7/Ctrl+Shift+N. New text file came
+  with stage 2's menus, tabs following a renamed folder with stage 3; bookmarks following it
+  wait for stage 7.)
   Original notes: F2 rename (validate with `fs_util::validate_name`), F7/Ctrl+Shift+N new folder,
   Shift+Del with confirmation, error dialog for operation errors.
 - UI tests from `MainWindowUiTest`: clipboard, rename, new folder, delete, progress window
@@ -125,8 +126,8 @@ are the Java sources, as a size hint.
   known terminals with their folder flag), Show in file manager (FileManager1 D-Bus `ShowItems`
   with `'` escaped, else open the folder), launches recorded as "open/terminal/reveal <path>"
   under `FILEEM_NO_LAUNCH`.
-- Not yet (they need later stages): Open in new tab / other side, Copy/Move to other side
-  (stage 3); View submenu (stage 5); Search in folder, bookmarks (stage 7); Eject (stage 7).
+- Later stages added Open in new tab / other side, Copy/Move to other side (stage 3) and the
+  View submenu (stage 5). Not yet: Search in folder, bookmarks and Eject (stage 7).
   The tree outlines the right-clicked row while its menu is open (Java's `context-target`;
   added after 5b): Slint has no "menu closed" event, but a menu takes the keys while open and
   they come back however it closes, so the tree's right-click gives the window's key handler
@@ -159,7 +160,7 @@ are the Java sources, as a size hint.
 - [x] **Columns** (`columns.rs`): Name, Size, Type, Date modified/created/accessed, Extension,
   Attributes; header right-click chooses, the header's right edge drags the width, click sorts
   (Created and Extension sort too); `columns.<id>.visible/width` saved, `columns.order` read
-  (no reordering yet). Extra column texts are filled only while shown (attributes look up the
+  (and saved since columns can be dragged into another order, see below). Extra column texts are filled only while shown (attributes look up the
   owner).
 - [x] **Session**: all tabs of both sides with their selected tab, `dual`, `split.sides`, tree
   widths; Java's per-tab `.view`/`.size` keys are carried along unchanged. Missing tab folders
