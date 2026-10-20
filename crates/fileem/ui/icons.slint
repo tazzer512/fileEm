@@ -94,3 +94,45 @@ export component ToolButton {
         clicked => { root.clicked(); }
     }
 }
+
+// A button of the F-key bar: the key in bold accent, then what it does (the Java `fkey`).
+export component FunctionKey {
+    in property <string> key;
+    in property <string> label;
+    in property <bool> enabled: true;
+    callback clicked();
+    horizontal-stretch: 1;
+    min-width: 40px;
+    height: 24px;
+    accessible-role: button;
+    accessible-label: key + " " + label;
+    accessible-enabled: enabled;
+    accessible-action-default => { if (enabled) { clicked(); } }
+    Rectangle {
+        border-radius: 4px;
+        background: touch.pressed && enabled ? Palette.foreground.with-alpha(0.16)
+            : touch.has-hover && enabled ? Palette.foreground.with-alpha(0.08) : transparent;
+    }
+    HorizontalLayout {
+        alignment: center;
+        spacing: 5px;
+        padding-left: 4px;
+        padding-right: 4px;
+        opacity: enabled ? 1.0 : 0.4;
+        Text {
+            text: root.key;
+            font-weight: 700;
+            color: Palette.accent-background;
+            vertical-alignment: center;
+        }
+        Text {
+            text: root.label;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+    }
+    touch := TouchArea {
+        enabled: root.enabled;
+        clicked => { root.clicked(); }
+    }
+}

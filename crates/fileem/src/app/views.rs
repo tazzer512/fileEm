@@ -20,7 +20,8 @@ pub(super) fn grid_of(s: &Side) -> Option<Grid> {
     if mode == ViewMode::Details {
         return None;
     }
-    let list_width = if mode == ViewMode::List { grid::list_width(t.tab.rows().map(FileEntry::name)) } else { 0.0 };
+    let text = if s.measured_width > 0.0 { s.measured_width } else { s.rough_width };
+    let list_width = grid::list_width(text);
     Some(Grid::layout(mode, t.view.icon_px(), s.grid_size.0, s.grid_size.1, t.tab.len(), list_width))
 }
 
@@ -57,6 +58,24 @@ pub fn resize(app: &Shared, side: usize, direction: i32) {
 pub fn slider_moved(app: &Shared, side: usize, position: f32) {
     change_size(app, side, |v| v.set_slider(position as f64));
 }
+
+/// The slider was let go: a second time within a double-click's time resets the view's size.
+pub fn slider_released(app: &Shared, side: usize) {
+    let now = std::time::Instant::now();
+    let double = {
+        let mut a = app.borrow_mut();
+        let last = &mut a.sides[side].slider_released;
+        let double = last.is_some_and(|t| now.duration_since(t) < DOUBLE_CLICK);
+        *last = (!double).then_some(now);
+        double
+    };
+    if double {
+        change_size(app, side, |v| v.set_steps(0.0));
+    }
+}
+
+/// Slint's own double-click interval.
+const DOUBLE_CLICK: std::time::Duration = std::time::Duration::from_millis(500);
 
 fn change_size(app: &Shared, side: usize, change: impl FnOnce(&mut crate::view_mode::ViewState)) {
     let (before, after) = {
@@ -95,6 +114,22 @@ pub fn wheel(app: &Shared, side: usize, delta: f32) {
         s.tabs[s.active].view.mode.step(if up { -1 } else { 1 })
     };
     set_view(app, side, mode);
+}
+
+/// Slint measured the widest of `side`'s [`grid::names_to_measure`]: List's columns fit it.
+pub fn list_measured(app: &Shared, side: usize, width: f32) {
+    let list = {
+        let mut a = app.borrow_mut();
+        let s = &mut a.sides[side];
+        if (s.measured_width - width).abs() < 0.5 {
+            return;
+        }
+        s.measured_width = width;
+        s.tabs[s.active].view.mode == ViewMode::List
+    };
+    if list {
+        push_view(app, side);
+    }
 }
 
 /// Slint laid out the grid of `side` at this size.

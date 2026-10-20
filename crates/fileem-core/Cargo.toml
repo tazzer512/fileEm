@@ -17,6 +17,8 @@ zip = { version = "2", default-features = false, features = ["deflate"] }
 # thumbnails and previews: the common formats, and JPEG 2000 (pure Rust, decodes reduced resolutions)
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "bmp"] }
 hayro-jpeg2000 = { version = "0.4", default-features = false, features = ["std", "simd"] }
+# huge JPEG 2000 files are mapped instead of read: the decoder wants the codestream as one slice
+memmap2 = "0.9"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

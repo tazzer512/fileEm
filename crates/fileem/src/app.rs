@@ -83,6 +83,11 @@ pub struct Side {
     files: Rc<VecModel<FileRow>>,
     /// The Details list's model in the grid views.
     no_files: Rc<VecModel<FileRow>>,
+    /// The names Slint measures for List's column width (`grid::names_to_measure`, a line each),
+    /// the widest one's measured width (0 until measured) and its rough width (used until then).
+    measure_names: SharedString,
+    measured_width: f32,
+    rough_width: f32,
     /// The grid's slots (0, 1, …): only grows or shrinks, so Slint keeps the slots it built.
     slots: Rc<VecModel<i32>>,
     tree_rows: Rc<VecModel<TreeRow>>,
@@ -101,6 +106,8 @@ pub struct Side {
     grid_range: (usize, usize),
     /// Ctrl+wheel turned since the last view change.
     wheel: f32,
+    /// When the size slider was last let go (two quick ones are a double-click).
+    slider_released: Option<std::time::Instant>,
     /// A message shown in the status line instead of the counts (`set_status`).
     status_message: Option<String>,
 }
@@ -115,6 +122,9 @@ impl Side {
             tree_width: 240.0,
             files: Rc::new(VecModel::default()),
             no_files: Rc::new(VecModel::default()),
+            measure_names: SharedString::new(),
+            measured_width: 0.0,
+            rough_width: 0.0,
             slots: Rc::new(VecModel::default()),
             tree_rows: Rc::new(VecModel::default()),
             tab_rows: Rc::new(VecModel::default()),
@@ -129,6 +139,7 @@ impl Side {
             grid_size: (0.0, 0.0),
             grid_range: (0, 0),
             wheel: 0.0,
+            slider_released: None,
             status_message: None,
         }
     }
@@ -531,6 +542,8 @@ fn wire(ui: &AppWindow, app: &Shared) {
         nav::set_active_side(app, side as usize);
         views::slider_moved(app, side as usize, position);
     });
+    on!(on_size_slider_released, app => |side| views::slider_released(app, side as usize));
+    on!(on_list_measured, app => |side, width| views::list_measured(app, side as usize, width));
     on!(on_view_wheel, app => |side, delta| {
         nav::set_active_side(app, side as usize);
         views::wheel(app, side as usize, delta);
@@ -610,6 +623,9 @@ fn sync_files(app: &Shared, side: usize) {
             })
             .collect();
         s.files.set_vec(rows);
+        let names = crate::grid::names_to_measure((0..tab.len()).map(|r| tab.row(r).name()));
+        let rough = names.first().map_or(0.0, |n| crate::grid::rough_width(n));
+        let names: SharedString = names.iter().map(|n| n.replace(['\n', '\r'], " ")).collect::<Vec<_>>().join("\n").into();
         let crumbs: Vec<CrumbRow> = tab
             .dir()
             .map(address::crumbs)
@@ -618,6 +634,8 @@ fn sync_files(app: &Shared, side: usize) {
             .map(|c| CrumbRow { label: c.label.into(), drive: c.drive })
             .collect();
         s.crumbs.set_vec(crumbs);
+        a.sides[side].rough_width = rough;
+        a.sides[side].measure_names = names;
     }
     push_view(app, side);
     sync_window(app);
@@ -746,6 +764,7 @@ fn push_view(app: &Shared, side: usize) {
         sort_tooltip: format!("Sort by {}, {}", key.title(), if asc { "ascending" } else { "descending" }).into(),
         files: ModelRc::from(s.files.clone()),
         slots: ModelRc::from(s.slots.clone()),
+        measure_names: s.measure_names.clone(),
         list_files: ModelRc::from(if g.is_none() { s.files.clone() } else { s.no_files.clone() }),
         tree: ModelRc::from(s.tree_rows.clone()),
         tabs: ModelRc::from(s.tab_rows.clone()),

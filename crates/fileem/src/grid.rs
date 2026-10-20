@@ -11,8 +11,13 @@ use crate::view_mode::ViewMode;
 pub const PAD: f32 = 6.0;
 /// Room left for the scroll bar when the items overflow (fluent draws it over the content).
 pub const BAR: f32 = 14.0;
-/// Average width of a character of the 13 px UI font, to size List's columns without measuring.
+/// Average width of a character of the 13 px UI font, to pick the names to measure (and to size
+/// List's columns until they are measured).
 const CHAR_WIDTH: f32 = 7.0;
+/// List measures this many names, the widest by [`rough_width`]; not every name of a big folder.
+pub const MEASURED_NAMES: usize = 32;
+/// List's room around a name: icon (6 + 16), gap (8), right inset (6), and a little slack.
+const LIST_EXTRA: f32 = 38.0;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Grid {
@@ -39,10 +44,38 @@ pub enum Move {
     PageDown,
 }
 
-/// List's column width for these names: the longest one plus icon and padding, within limits.
-pub fn list_width<'a>(names: impl Iterator<Item = &'a str>) -> f32 {
-    let longest = names.map(|n| n.chars().count()).max().unwrap_or(0);
-    (longest as f32 * CHAR_WIDTH + 16.0 + 6.0 + 16.0).clamp(140.0, 420.0)
+/// A name's width in the UI font, roughly: narrow and wide letters, capitals and East Asian
+/// characters weigh differently, which is enough to find the names worth measuring.
+pub fn rough_width(name: &str) -> f32 {
+    let em: f32 = name
+        .chars()
+        .map(|c| match c {
+            'i' | 'l' | 'j' | 't' | 'f' | 'r' | 'I' | '!' | '.' | ',' | '\'' | '|' | ':' | ';' | ' ' => 0.5,
+            'm' | 'w' | 'M' | 'W' | '@' => 1.5,
+            c if c.is_uppercase() => 1.2,
+            c if u32::from(c) >= 0x2e80 => 2.0,
+            _ => 1.0,
+        })
+        .sum();
+    em * CHAR_WIDTH
+}
+
+/// The names List measures to size its columns: the [`MEASURED_NAMES`] roughly widest ones.
+pub fn names_to_measure<'a>(names: impl Iterator<Item = &'a str>) -> Vec<&'a str> {
+    let mut all: Vec<(f32, &str)> = names.map(|n| (rough_width(n), n)).collect();
+    let widest_first = |a: &(f32, &str), b: &(f32, &str)| b.0.total_cmp(&a.0).then_with(|| a.1.cmp(b.1));
+    if all.len() > MEASURED_NAMES {
+        all.select_nth_unstable_by(MEASURED_NAMES - 1, widest_first);
+        all.truncate(MEASURED_NAMES);
+    }
+    all.sort_by(widest_first);
+    all.into_iter().map(|(_, n)| n).collect()
+}
+
+/// List's column width for names whose widest one is `text_width` wide: plus icon and padding,
+/// within limits.
+pub fn list_width(text_width: f32) -> f32 {
+    (text_width + LIST_EXTRA).clamp(140.0, 420.0)
 }
 
 impl Grid {
@@ -235,8 +268,23 @@ mod tests {
         assert_eq!(list.index_at(PAD + 10.0, PAD + list.lanes as f32 * 24.0 + 2.0), None, "below the last lane");
         let content = grid(ViewMode::Content, 3);
         assert_eq!((content.cell_w, content.lanes), (600.0 - 2.0 * PAD, 1));
-        assert_eq!(list_width(["a"].into_iter()), 140.0);
-        assert_eq!(list_width(["x".repeat(200).as_str()].into_iter()), 420.0);
+        assert_eq!(list_width(7.0), 140.0);
+        assert_eq!(list_width(200.0), 238.0);
+        assert_eq!(list_width(1400.0), 420.0);
+    }
+
+    #[test]
+    fn list_measures_the_roughly_widest_names_only() {
+        assert!(rough_width("WWWW") > rough_width("iiiiiiii"), "wide letters count more than narrow ones");
+        assert!(rough_width("写真") > rough_width("ab"));
+        let mut names: Vec<String> = (0..100).map(|i| format!("document {i:03}")).collect();
+        names.push("iiiiiiiiiiiiiiiiiiii".into());
+        names.push("MMMMMMMMMMMMMMMM".into());
+        let picked = names_to_measure(names.iter().map(String::as_str));
+        assert_eq!(picked.len(), MEASURED_NAMES);
+        assert_eq!(picked[0], "MMMMMMMMMMMMMMMM", "widest first");
+        assert!(!picked.contains(&"iiiiiiiiiiiiiiiiiiii"), "more letters, but narrow ones");
+        assert_eq!(names_to_measure(["b", "a"].into_iter()), ["a", "b"], "a short list: all of it, in a stable order");
     }
 
     #[test]

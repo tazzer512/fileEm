@@ -6,6 +6,7 @@
 
 use std::io;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use image::metadata::Orientation;
 use image::{DynamicImage, ImageDecoder, ImageReader, RgbaImage};
@@ -52,13 +53,12 @@ impl Format {
     }
 
     /// Bigger files are not worth decoding for a thumbnail. Photoshop and raw previews read only a
-    /// part of the file and Netpbm streams, so even big ones are fine; JPEG 2000 needs the whole
-    /// codestream in memory.
+    /// part of the file, Netpbm streams and JPEG 2000 decodes a stored smaller resolution, so even
+    /// big ones are fine.
     pub fn max_file_size(self) -> u64 {
         match self {
             Format::Common => 40 << 20,
-            Format::Jpeg2000 => 256 << 20,
-            Format::Psd | Format::Raw | Format::Netpbm => 8 << 30,
+            Format::Psd | Format::Raw | Format::Netpbm | Format::Jpeg2000 => 8 << 30,
         }
     }
 }
@@ -108,24 +108,47 @@ impl Pixels {
 /// `Ok(None)` when it isn't an image we can show; errors only for files that can't be read.
 /// A decoder that panics on a damaged file gives `None` too.
 pub fn decode(path: &Path, max_side: u32) -> io::Result<Option<Pixels>> {
-    std::panic::catch_unwind(|| decode_any(path, max_side)).unwrap_or(Ok(None))
+    decode_until(path, max_side, &AtomicBool::new(false))
 }
 
-fn decode_any(path: &Path, max_side: u32) -> io::Result<Option<Pixels>> {
+/// [`decode`] that gives up with an [`io::ErrorKind::Interrupted`] error once `stop` is set (a
+/// thumbnail scrolled out of view). The readers check it between rows and steps; a third-party
+/// decoder already running (the `image` crate, JPEG 2000) finishes first.
+pub fn decode_until(path: &Path, max_side: u32, stop: &AtomicBool) -> io::Result<Option<Pixels>> {
+    std::panic::catch_unwind(|| decode_any(path, max_side, stop)).unwrap_or(Ok(None))
+}
+
+/// `Err(Interrupted)` once `stop` is set.
+pub(crate) fn check(stop: &AtomicBool) -> io::Result<()> {
+    if stop.load(Ordering::Relaxed) { Err(io::ErrorKind::Interrupted.into()) } else { Ok(()) }
+}
+
+fn decode_any(path: &Path, max_side: u32, stop: &AtomicBool) -> io::Result<Option<Pixels>> {
     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
     let max_side = max_side.max(1);
-    match Format::of(ext).unwrap_or(Format::Common) {
-        Format::Common => Ok(decode_common(path, max_side)),
-        Format::Psd => Ok(match psd::read(path, max_side)? {
+    check(stop)?;
+    let pixels = match Format::of(ext).unwrap_or(Format::Common) {
+        Format::Common => decode_common(path, max_side),
+        Format::Psd => match psd::read_until(path, max_side, stop)? {
             Some(psd::Preview::Pixels(p)) => Some(p),
-            Some(psd::Preview::Jpeg(jpeg)) => decode_jpeg(&jpeg, max_side, Orientation::NoTransforms),
+            Some(psd::Preview::Jpeg(jpeg)) => {
+                check(stop)?;
+                decode_jpeg(&jpeg, max_side, Orientation::NoTransforms)
+            }
             None => None,
-        }),
-        Format::Raw => Ok(raw::read(path, max_side)?
-            .and_then(|p| decode_jpeg(&p.jpeg, max_side, Orientation::from_exif(p.orientation).unwrap_or(Orientation::NoTransforms)))),
-        Format::Jpeg2000 => jpeg2000::read(path, max_side),
-        Format::Netpbm => netpbm::read(path, max_side),
-    }
+        },
+        Format::Raw => match raw::read(path, max_side)? {
+            Some(p) => {
+                check(stop)?;
+                decode_jpeg(&p.jpeg, max_side, Orientation::from_exif(p.orientation).unwrap_or(Orientation::NoTransforms))
+            }
+            None => None,
+        },
+        Format::Jpeg2000 => jpeg2000::read_until(path, max_side, stop)?,
+        Format::Netpbm => netpbm::read_until(path, max_side, stop)?,
+    };
+    check(stop)?;
+    Ok(pixels)
 }
 
 /// PNG, JPEG, GIF, BMP (by content, whatever the name says), turned upright per EXIF.

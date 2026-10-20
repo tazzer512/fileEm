@@ -9,8 +9,9 @@
 use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom};
 use std::path::Path;
+use std::sync::atomic::AtomicBool;
 
-use super::Pixels;
+use super::{Pixels, check};
 
 const RESOURCE_THUMBNAIL: u16 = 1036;
 const MAX_SIDE_PSD: u32 = 30_000;
@@ -30,7 +31,12 @@ pub fn is_psd(extension: &str) -> bool {
 /// A preview at most `max_side` pixels wide and high, or `None` when the file has none this
 /// reader can use. Errors only for read errors and files that aren't Photoshop documents.
 pub fn read(path: &Path, max_side: u32) -> io::Result<Option<Preview>> {
-    Parser { file: File::open(path)?, pos: 0, psb: false, channels: 0, width: 0, height: 0, depth: 0, mode: 0, palette: None, jpeg: None }
+    read_until(path, max_side, &AtomicBool::new(false))
+}
+
+/// [`read`] that stops with an `Interrupted` error once `stop` is set (checked every row).
+pub fn read_until(path: &Path, max_side: u32, stop: &AtomicBool) -> io::Result<Option<Preview>> {
+    Parser { file: File::open(path)?, pos: 0, psb: false, channels: 0, width: 0, height: 0, depth: 0, mode: 0, palette: None, jpeg: None, stop }
         .read(max_side.max(1))
 }
 
@@ -38,7 +44,7 @@ fn bad(what: &str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, what.to_string())
 }
 
-struct Parser {
+struct Parser<'a> {
     file: File,
     pos: u64,
     psb: bool,
@@ -49,9 +55,10 @@ struct Parser {
     mode: u16,
     palette: Option<Vec<u8>>,
     jpeg: Option<Vec<u8>>,
+    stop: &'a AtomicBool,
 }
 
-impl Parser {
+impl Parser<'_> {
     fn read(mut self, max_side: u32) -> io::Result<Option<Preview>> {
         if self.bytes(4)? != b"8BPS" {
             return Err(bad("Not a Photoshop file"));
@@ -85,7 +92,10 @@ impl Parser {
         self.pos += layers;
 
         // a broken composite falls back to the embedded thumbnail
-        let composite = self.composite(max_side).ok().flatten();
+        let composite = match self.composite(max_side) {
+            Err(e) if e.kind() == io::ErrorKind::Interrupted => return Err(e),
+            r => r.ok().flatten(),
+        };
         Ok(match (composite, self.jpeg.take()) {
             (Some(p), jpeg) if jpeg.is_none() || !uniform(&p.rgba) => Some(Preview::Pixels(p)),
             (_, Some(jpeg)) => Some(Preview::Jpeg(jpeg)),
@@ -157,6 +167,7 @@ impl Parser {
         let mut comp = vec![vec![0u8; ow]; used.len()];
         let mut row = vec![0u8; row_bytes];
         for y in 0..oh {
+            check(self.stop)?;
             let sy = (((y as f64 + 0.5) * h as f64 / oh as f64) as usize).min(h - 1);
             for (c, &channel) in used.iter().enumerate() {
                 let index = channel * h + sy;
@@ -424,6 +435,18 @@ mod tests {
         let mut huge = psd(&Psd { planes: &ones, ..Psd::default() });
         huge[14] = 0x7f; // height 2 billion
         assert!(read(&write(tmp.path(), "huge.psd", &huge), 10).is_err());
+    }
+
+    #[test]
+    fn a_set_stop_flag_interrupts_reading_the_composite() {
+        let tmp = tempfile::tempdir().unwrap();
+        let red = [vec![255], vec![0], vec![0]];
+        let f = write(tmp.path(), "red.psd", &psd(&Psd { planes: &red, ..Psd::default() }));
+        let err = read_until(&f, 10, &AtomicBool::new(true)).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::Interrupted, "not the JPEG fallback, not a damaged file");
+        assert!(read_until(&f, 10, &AtomicBool::new(false)).unwrap().is_some());
+        let decoded = crate::images::decode_until(&f, 10, &AtomicBool::new(true));
+        assert_eq!(decoded.unwrap_err().kind(), io::ErrorKind::Interrupted);
     }
 
     #[test]

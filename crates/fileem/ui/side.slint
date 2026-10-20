@@ -67,6 +67,8 @@ export struct SideView {
     list-files: [FileRow],
     // the grid's slots, numbered (src/grid.rs `slot_count`)
     slots: [int],
+    // List's column fits the widest of these names, a line each (src/grid.rs `names_to_measure`)
+    measure-names: string,
     tree: [TreeRow],
     tabs: [TabRow],
     crumbs: [CrumbRow],
@@ -169,6 +171,8 @@ export component SidePane {
     in property <length> columns-width: 800px;
     // the window's key handler has the focus (selection colors)
     in property <bool> keys-focused;
+    // Ctrl (Cmd) is held down (the window tracks it): Ctrl+wheel goes to the view, not the list
+    in-out property <bool> ctrl-held;
     in property <bool> dual;
     out property <length> row-height: 24px;
     // what a drag carries; the controller knows what was dragged (`drag-started`)
@@ -221,6 +225,9 @@ export component SidePane {
     // item size: side, -1 / +1; the slider's position (-1 … 1)
     callback size-step(int, int);
     callback size-slider-moved(int, float);
+    callback size-slider-released(int);
+    // the widest of `view.measure-names` in the items' font: List's column width
+    callback list-measured(int, length);
     // Ctrl+wheel: side, delta (up positive)
     callback view-wheel(int, length);
     // the grid's size, and the slots it shows (first, count)
@@ -228,6 +235,17 @@ export component SidePane {
     callback grid-range(int, int, int);
 
     property <bool> focused: keys-focused && view.active;
+
+    // measures List's names in the items' font (a text is as wide as its widest line)
+    Rectangle {
+        width: 0;
+        height: 0;
+        clip: true;
+        visible: false;
+        name-measure := Text { text: root.view.measure-names; }
+    }
+    property <length> widest-name: name-measure.preferred-width;
+    changed widest-name => { root.list-measured(root.side, self.widest-name); }
     property <bool> details: view.view-mode == 5;
     // the shown file view's scroll offsets and size
     property <length> scroll-x: details ? list.content-x : grid.content-x;
@@ -241,6 +259,49 @@ export component SidePane {
 
     // the row under the mouse in the area behind the list (rows' own touch areas cover only names)
     property <int> hover-row: bg-touch.has-hover && details ? list-row-at(bg-touch.mouse-y) : -1;
+
+    // a pointer event on the Details list's background (or its Ctrl layer) at `x`, `y`
+    function list-pointer(event: PointerEvent, x: length, y: length, at: Point) {
+        if (event.kind == PointerEventKind.down) {
+            root.activate(root.side);
+            root.focus-keys();
+        }
+        if (event.kind == PointerEventKind.down && event.button == PointerEventButton.left) {
+            root.box-press(x, y, event.modifiers.control || event.modifiers.meta, event.modifiers.shift);
+            if (root.list-row-at(y) >= 0) {
+                root.row-pressed(root.side, root.list-row-at(y), event.modifiers.control || event.modifiers.meta, event.modifiers.shift);
+            } else {
+                root.empty-pressed(root.side);
+            }
+        }
+        if (event.kind == PointerEventKind.up && event.button == PointerEventButton.left) {
+            root.box-release();
+        }
+        if (event.kind == PointerEventKind.down && event.button == PointerEventButton.right) {
+            root.row-menu(root.side, root.list-row-at(y));
+            root.show-menu(at.x + x, at.y + y);
+        }
+    }
+
+    function list-clicked(y: length) {
+        if (root.list-row-at(y) >= 0) {
+            root.row-released(root.side, root.list-row-at(y));
+        }
+    }
+
+    function list-double-clicked(y: length) {
+        if (root.list-row-at(y) >= 0) {
+            root.row-activated(root.side, root.list-row-at(y));
+        }
+    }
+
+    function list-scroll(event: PointerScrollEvent) -> EventResult {
+        if (event.modifiers.control || event.modifiers.meta) {
+            root.view-wheel(root.side, event.delta-y);
+            return accept;
+        }
+        return reject;
+    }
 
     pure function list-row-at(y: length) -> int {
         return y - list.content-y < 0 ? -1 : floor((y - list.content-y) / row-height) < view.files.length
@@ -795,46 +856,12 @@ export component SidePane {
                 // getting the mouse after its first row scrolled out of view (a row's own touch area
                 // would be gone, and the release with it).
                 bg-touch := TouchArea {
-                    pointer-event(event) => {
-                        if (event.kind == PointerEventKind.down) {
-                            root.activate(root.side);
-                            root.focus-keys();
-                        }
-                        if (event.kind == PointerEventKind.down && event.button == PointerEventButton.left) {
-                            root.box-press(self.mouse-x, self.mouse-y, event.modifiers.control || event.modifiers.meta, event.modifiers.shift);
-                            if (root.list-row-at(self.mouse-y) >= 0) {
-                                root.row-pressed(root.side, root.list-row-at(self.mouse-y), event.modifiers.control || event.modifiers.meta, event.modifiers.shift);
-                            } else {
-                                root.empty-pressed(root.side);
-                            }
-                        }
-                        if (event.kind == PointerEventKind.up && event.button == PointerEventButton.left) {
-                            root.box-release();
-                        }
-                        if (event.kind == PointerEventKind.down && event.button == PointerEventButton.right) {
-                            root.row-menu(root.side, root.list-row-at(self.mouse-y));
-                            root.show-menu(self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y);
-                        }
-                    }
+                    pointer-event(event) => { root.list-pointer(event, self.mouse-x, self.mouse-y, self.absolute-position); }
                     moved => { root.box-drag(self.mouse-x, self.mouse-y); }
-                    clicked => {
-                        if (root.list-row-at(self.mouse-y) >= 0) {
-                            root.row-released(root.side, root.list-row-at(self.mouse-y));
-                        }
-                    }
-                    double-clicked => {
-                        if (root.list-row-at(self.mouse-y) >= 0) {
-                            root.row-activated(root.side, root.list-row-at(self.mouse-y));
-                        }
-                    }
+                    clicked => { root.list-clicked(self.mouse-y); }
+                    double-clicked => { root.list-double-clicked(self.mouse-y); }
                     // reaches here only where the list has nothing to scroll; names take it always
-                    scroll-event(event) => {
-                        if (event.modifiers.control || event.modifiers.meta) {
-                            root.view-wheel(root.side, event.delta-y);
-                            return accept;
-                        }
-                        return reject;
-                    }
+                    scroll-event(event) => { return root.list-scroll(event); }
                 }
                 list := ListView {
                     // no sideways scroll bar under the grid views
@@ -925,6 +952,33 @@ export component SidePane {
                             }
                         }
                     }
+                }
+                // While Ctrl is held, this lies over the Details list and takes the wheel before the
+                // list scrolls (Ctrl+wheel changes the view anywhere over it, as in Explorer). Its
+                // presses do what the area behind the list does; a press in progress keeps it.
+                ctrl-touch := TouchArea {
+                    property <bool> grabbing;
+                    enabled: root.details && (root.ctrl-held || self.grabbing);
+                    pointer-event(event) => {
+                        if (event.kind == PointerEventKind.move && !event.modifiers.control && !event.modifiers.meta && !self.grabbing) {
+                            root.ctrl-held = false; // released while the window didn't see it
+                            return;
+                        }
+                        if (event.kind == PointerEventKind.down) {
+                            self.grabbing = true;
+                        }
+                        if (event.kind == PointerEventKind.up || event.kind == PointerEventKind.cancel) {
+                            self.grabbing = false;
+                        }
+                        if (event.kind == PointerEventKind.cancel) {
+                            root.box-release();
+                        }
+                        root.list-pointer(event, self.mouse-x, self.mouse-y, self.absolute-position);
+                    }
+                    moved => { root.box-drag(self.mouse-x, self.mouse-y); }
+                    clicked => { root.list-clicked(self.mouse-y); }
+                    double-clicked => { root.list-double-clicked(self.mouse-y); }
+                    scroll-event(event) => { return root.list-scroll(event); }
                 }
                 // ---- the grid views: only the slots in view exist, reused while scrolling ----
                 grid := ScrollView {
@@ -1141,7 +1195,11 @@ export component SidePane {
                             root.activate(root.side);
                             root.size-slider-moved(root.side, v);
                         }
-                        released => { root.focus-keys(); }
+                        // two quick ones: a double-click, back to the view's own size
+                        released => {
+                            root.size-slider-released(root.side);
+                            root.focus-keys();
+                        }
                     }
                     if root.view.resizable: ToolButton {
                         width: 22px;

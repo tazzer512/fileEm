@@ -1216,6 +1216,7 @@ dependencies = [
  "hayro-jpeg2000",
  "image",
  "libc",
+ "memmap2",
  "notify",
  "tempfile",
  "trash",

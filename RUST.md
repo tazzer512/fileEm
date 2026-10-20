@@ -68,8 +68,10 @@ crates/fileem/             the app
                            (Java Marquee, Dnd, MainWindow.drop)
   src/app/views.rs         view modes, item sizes, grid geometry, keys, thumbnails (Java FileTab views)
   src/view_mode.rs         the eight views, sizes and steps, session format (Java ViewMode)
-  src/grid.rs              grid layout: slots, lanes, hit tests, box hits, key moves (Java FileGrid)
-  src/thumbs.rs            thumbnail threads and LRU cache over fileem_core::images (Java Thumbnails)
+  src/grid.rs              grid layout: slots, lanes, hit tests, box hits, key moves, the names
+                           List measures for its column width (Java FileGrid)
+  src/thumbs.rs            thumbnail threads and LRU cache over fileem_core::images, stopping
+                           decodes no longer wanted (Java Thumbnails)
   src/tab.rs, tree.rs      tab (rows, filter, selection) and tree state, toolkit-free, unit-tested
   src/columns.rs           details columns: visible, widths, session (Java FileTable)
   src/address.rs           breadcrumbs and typed paths (Java AddressBar)
@@ -111,8 +113,8 @@ and `open_folder` help the view scenarios (`app::view_of`, `app::grid`, `app::ta
 - The tree shows a hidden folder while you are in it.
 - A session without `<side>.tabs` reads the consecutive `<side>.tab.N` keys.
 - Thumbnails of JPEGs (and the other common formats) are turned upright per EXIF, like raws.
-- JPEG 2000 is decoded with the pure-Rust `hayro-jpeg2000` (Java: jai-imageio); it needs the
-  whole file in memory, so thumbnails skip files over 256 MB.
+- JPEG 2000 is decoded with the pure-Rust `hayro-jpeg2000` (Java: jai-imageio); it wants the
+  codestream as one slice, so files over 256 MB are memory-mapped instead of read.
 
 ## Port status
 

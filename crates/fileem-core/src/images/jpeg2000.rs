@@ -3,12 +3,19 @@
 //! resolutions, each half the next; decoding the smallest one at least the asked size skips most
 //! of the work, so a thumbnail of a huge scan takes a fraction of the time of the whole picture.
 
+use std::fs::File;
 use std::io;
 use std::path::Path;
+use std::sync::atomic::AtomicBool;
 
 use hayro_jpeg2000::{ColorSpace, DecodeSettings, DecoderContext, Image};
 
-use super::{Format, Pixels};
+use super::{Pixels, check};
+
+/// Files up to this size are read into memory; bigger ones are mapped, so only the parts the
+/// decoder touches are loaded (a mapped file cut short while it decodes would crash the app, so
+/// the ordinary sizes take the safe way).
+const READ_LIMIT: u64 = 256 << 20;
 
 const EXTENSIONS: [&str; 6] = ["jp2", "j2k", "j2c", "jpc", "jpf", "jpx"];
 
@@ -19,10 +26,20 @@ pub fn is_jpeg2000(extension: &str) -> bool {
 /// Decodes `path` with its longer side at most `max_side` (never enlarged); `None` when it isn't
 /// a JPEG 2000 image or can't be decoded.
 pub fn read(path: &Path, max_side: u32) -> io::Result<Option<Pixels>> {
-    if std::fs::metadata(path)?.len() > Format::Jpeg2000.max_file_size() {
-        return Ok(None); // the decoder needs it all in memory
+    read_until(path, max_side, &AtomicBool::new(false))
+}
+
+/// [`read`] that gives up with an `Interrupted` error when `stop` is set before decoding starts.
+pub fn read_until(path: &Path, max_side: u32, stop: &AtomicBool) -> io::Result<Option<Pixels>> {
+    let file = File::open(path)?;
+    if file.metadata()?.len() > READ_LIMIT {
+        // SAFETY: read only; the decoder copes with any content (a panic is caught by decode)
+        let map = unsafe { memmap2::Mmap::map(&file)? };
+        check(stop)?;
+        return Ok(decode(&map, max_side.max(1)));
     }
     let data = std::fs::read(path)?;
+    check(stop)?;
     Ok(decode(&data, max_side.max(1)))
 }
 
@@ -79,7 +96,7 @@ mod tests {
     #[test]
     fn knows_the_extensions() {
         for ext in ["jp2", "j2k", "J2K", "j2c", "jpc", "jpf", "jpx"] {
-            assert_eq!(Format::of(ext), Some(Format::Jpeg2000), "{ext}");
+            assert_eq!(crate::images::Format::of(ext), Some(crate::images::Format::Jpeg2000), "{ext}");
             assert_eq!(crate::fs::file_types::category(&ext.to_lowercase(), false), crate::fs::Category::Image, "{ext}");
         }
         assert!(!is_jpeg2000("jpg") && !is_jpeg2000(""));
@@ -131,5 +148,23 @@ mod tests {
         assert_eq!(read(&write("cut.jp2", &whole[..60]), 100).unwrap(), None, "header only");
         let cut = write("half.jp2", &whole[..whole.len() / 2]);
         let _ = read(&cut, 100); // a cut off codestream: a picture or none, no panic
+    }
+
+    #[test]
+    fn files_over_the_read_limit_are_mapped_not_skipped() {
+        let tmp = tempfile::tempdir().unwrap();
+        let big = tmp.path().join("huge.jp2");
+        // the picture, then zeros up to past the limit (a sparse file: no disk space used)
+        std::fs::write(&big, std::fs::read(fixture("red-blue.jp2")).unwrap()).unwrap();
+        File::options().write(true).open(&big).unwrap().set_len(READ_LIMIT + 1).unwrap();
+        let p = read(&big, 60).unwrap().expect("decoded from the mapped file");
+        assert_eq!((p.width, p.height, p.full_width), (60, 40, 120));
+        assert_eq!(p.pixel(5, 20), [255, 0, 0, 255]);
+    }
+
+    #[test]
+    fn a_set_stop_flag_interrupts_before_decoding() {
+        let stop = AtomicBool::new(true);
+        assert_eq!(read_until(&fixture("big.jp2"), 64, &stop).unwrap_err().kind(), io::ErrorKind::Interrupted);
     }
 }

@@ -3,7 +3,7 @@
 // and draw.
 
 import { Button, LineEdit, ListView, Palette } from "std-widgets.slint";
-import { Icons, ToolButton } from "icons.slint";
+import { FunctionKey, Icons, ToolButton } from "icons.slint";
 import { SidePane, SideView, ColumnRow } from "side.slint";
 export { FileRow, TreeRow, TabRow, CrumbRow, ColumnRow, SideView } from "side.slint";
 export { ProgressWindow, OpRow } from "progress.slint";
@@ -38,6 +38,8 @@ export component AppWindow inherits Window {
     in property <length> name-width: 300px;
     in property <length> columns-width: 800px;
     in property <bool> show-hidden;
+    // Ctrl (Cmd) is held: tracked from key events, for Ctrl+wheel over a list that scrolls
+    in-out property <bool> ctrl-held;
     in property <bool> can-back;
     in property <bool> can-forward;
     in property <bool> can-up;
@@ -79,6 +81,8 @@ export component AppWindow inherits Window {
     callback sort-menu(int);
     callback size-step(int, int);
     callback size-slider-moved(int, float);
+    callback size-slider-released(int);
+    callback list-measured(int, length);
     callback view-wheel(int, length);
     callback grid-resized(int, length, length);
     callback grid-range(int, int, int);
@@ -138,7 +142,26 @@ export component AppWindow inherits Window {
         keys.focus();
     }
 
+    // an F-key bar button: does what its key does
+    function function-key(key: string) {
+        keys.focus();
+        root.key(key, false, false, false);
+    }
+
     keys := FocusScope {
+        // seen before the focused field gets them, wherever the focus is
+        capture-key-pressed(event) => {
+            if (event.text == Key.Control || event.text == Key.Meta) {
+                root.ctrl-held = true;
+            }
+            return EventResult.reject;
+        }
+        capture-key-released(event) => {
+            if (event.text == Key.Control || event.text == Key.Meta) {
+                root.ctrl-held = false;
+            }
+            return EventResult.reject;
+        }
         key-pressed(event) => {
             if (event.text == Key.Menu || (event.text == Key.F10 && event.modifiers.shift)) {
                 root.keyboard-menu();
@@ -218,6 +241,7 @@ export component AppWindow inherits Window {
                     name-width: root.name-width;
                     columns-width: root.columns-width;
                     keys-focused: keys.has-focus;
+                    ctrl-held <=> root.ctrl-held;
                     dual: root.dual;
                     drag-data: root.drag-data;
                     activate(i) => { root.activate(i); }
@@ -228,6 +252,8 @@ export component AppWindow inherits Window {
                     sort-menu(i) => { root.sort-menu(i); }
                     size-step(i, d) => { root.size-step(i, d); }
                     size-slider-moved(i, v) => { root.size-slider-moved(i, v); }
+                    size-slider-released(i) => { root.size-slider-released(i); }
+                    list-measured(i, w) => { root.list-measured(i, w); }
                     view-wheel(i, d) => { root.view-wheel(i, d); }
                     grid-resized(i, w, h) => { root.grid-resized(i, w, h); }
                     grid-range(i, first, count) => { root.grid-range(i, first, count); }
@@ -268,6 +294,26 @@ export component AppWindow inherits Window {
                             root.side-split = clamp((sides.split-x + self.mouse-x - self.pressed-x) / (sides.width - 5px), 0.2, 0.8);
                         }
                     }
+                }
+            }
+
+            // ---- the F-key bar: each button presses its key ----
+            Rectangle { height: 1px; background: Palette.border; }
+            Rectangle {
+                background: Palette.alternate-background;
+                HorizontalLayout {
+                    padding: 3px;
+                    padding-left: 6px;
+                    padding-right: 6px;
+                    spacing: 4px;
+                    FunctionKey { key: "F2"; label: "Rename"; clicked => { root.function-key(Key.F2); } }
+                    // copy and move go to the other side, so they need it shown
+                    FunctionKey { key: "F5"; label: "Copy"; enabled: root.dual; clicked => { root.function-key(Key.F5); } }
+                    FunctionKey { key: "F6"; label: "Move"; enabled: root.dual; clicked => { root.function-key(Key.F6); } }
+                    FunctionKey { key: "F7"; label: "New folder"; clicked => { root.function-key(Key.F7); } }
+                    FunctionKey { key: "F8"; label: "Delete"; clicked => { root.function-key(Key.F8); } }
+                    FunctionKey { key: "F9"; label: "Dual pane"; clicked => { root.function-key(Key.F9); } }
+                    FunctionKey { key: "Tab"; label: "Switch side"; clicked => { root.function-key(Key.Tab); } }
                 }
             }
         }

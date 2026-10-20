@@ -4,10 +4,11 @@
 //! changed file gets a new entry). Thumbnails load at a few fixed sizes ([`load_size`]) and the
 //! view scales them, so dragging the size slider doesn't decode every image again per pixel.
 //! Decoding is `fileem_core::images` (the common formats, Photoshop, camera raws, JPEG 2000 and
-//! Netpbm).
+//! Netpbm). A decode whose thumbnail is no longer wanted (scrolled out of view) is stopped.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::SystemTime;
 
@@ -54,16 +55,26 @@ impl Key {
 /// Decodes the image at `path` and shrinks it to fit `load × load` (never enlarges); `None` when
 /// it can't be read.
 pub fn decode(path: &Path, load: u32) -> Option<SharedPixelBuffer<Rgba8Pixel>> {
-    let p = images::decode(path, load).ok()??;
-    Some(SharedPixelBuffer::clone_from_slice(&p.rgba, p.width, p.height))
+    decode_until(path, load, &AtomicBool::new(false)).ok()?
+}
+
+/// [`decode`] that stops with an `Interrupted` error once `stop` is set.
+fn decode_until(path: &Path, load: u32, stop: &AtomicBool) -> std::io::Result<Option<SharedPixelBuffer<Rgba8Pixel>>> {
+    let p = match images::decode_until(path, load, stop) {
+        Err(e) if e.kind() == std::io::ErrorKind::Interrupted => return Err(e),
+        r => r.ok().flatten(),
+    };
+    Ok(p.map(|p| SharedPixelBuffer::clone_from_slice(&p.rgba, p.width, p.height)))
 }
 
 type Decoded = (Key, Option<SharedPixelBuffer<Rgba8Pixel>>);
+type Decoder = fn(&Path, u32, &AtomicBool) -> std::io::Result<Option<SharedPixelBuffer<Rgba8Pixel>>>;
 
 #[derive(Default)]
 struct Queue {
     wanted: VecDeque<Key>,
-    busy: HashSet<Key>,
+    /// Decodes running, each with the flag that stops it.
+    busy: HashMap<Key, Arc<AtomicBool>>,
     done: Vec<Decoded>,
     stop: bool,
 }
@@ -71,6 +82,7 @@ struct Queue {
 struct Workers {
     queue: Mutex<Queue>,
     wake: Condvar,
+    decode: Decoder,
     /// Called on a worker thread after each result (the window then collects them).
     notify: Box<dyn Fn() + Send + Sync>,
 }
@@ -90,13 +102,17 @@ pub struct Thumbnails {
 impl Thumbnails {
     /// `notify` runs on a decoder thread whenever a result is ready for [`Thumbnails::take_done`].
     pub fn new(notify: impl Fn() + Send + Sync + 'static) -> Thumbnails {
+        Thumbnails::with_decoder(notify, decode_until)
+    }
+
+    fn with_decoder(notify: impl Fn() + Send + Sync + 'static, decode: Decoder) -> Thumbnails {
         Thumbnails {
             cache: HashMap::new(),
             tick: 0,
             pixels: 0,
             budget: PIXEL_BUDGET,
             failed: HashSet::new(),
-            workers: Arc::new(Workers { queue: Mutex::new(Queue::default()), wake: Condvar::new(), notify: Box::new(notify) }),
+            workers: Arc::new(Workers { queue: Mutex::new(Queue::default()), wake: Condvar::new(), decode, notify: Box::new(notify) }),
             started: false,
         }
     }
@@ -111,14 +127,20 @@ impl Thumbnails {
         })
     }
 
-    /// Asks for these thumbnails, first ones first. Replaces the earlier wishes that haven't
-    /// started: only what the grids show now is decoded.
+    /// Asks for these thumbnails, first ones first. Replaces the earlier wishes: only what the
+    /// grids show now is decoded, and running decodes of thumbnails no longer asked for stop.
     pub fn want(&mut self, keys: Vec<Key>) {
         let mut q = self.workers.queue.lock().unwrap();
-        q.wanted = keys
-            .into_iter()
-            .filter(|k| !self.cache.contains_key(k) && !self.failed.contains(k) && !q.busy.contains(k))
-            .collect();
+        let asked: HashSet<&Key> = keys.iter().collect();
+        for (k, stop) in &q.busy {
+            if !asked.contains(k) {
+                stop.store(true, Ordering::Relaxed);
+            }
+        }
+        // a stopped decode that is wanted again starts over
+        let running = |k: &Key| q.busy.get(k).is_some_and(|stop| !stop.load(Ordering::Relaxed));
+        let wanted = keys.iter().filter(|k| !self.cache.contains_key(k) && !self.failed.contains(k) && !running(k)).cloned().collect();
+        q.wanted = wanted;
         let any = !q.wanted.is_empty();
         drop(q);
         if any {
@@ -198,17 +220,27 @@ fn work(w: &Workers) {
                     return;
                 }
                 if let Some(k) = q.wanted.pop_front() {
-                    q.busy.insert(k.clone());
-                    break k;
+                    let stop = Arc::new(AtomicBool::new(false));
+                    q.busy.insert(k.clone(), stop.clone());
+                    break (k, stop);
                 }
                 q = w.wake.wait(q).unwrap();
             }
         };
-        let pixels = decode(&key.path, key.load);
+        let (key, stop) = key;
+        let pixels = (w.decode)(&key.path, key.load, &stop);
+        let stopped = stop.load(Ordering::Relaxed);
         {
             let mut q = w.queue.lock().unwrap();
-            q.busy.remove(&key);
-            q.done.push((key, pixels));
+            if q.busy.get(&key).is_some_and(|s| Arc::ptr_eq(s, &stop)) {
+                q.busy.remove(&key);
+            }
+            match pixels {
+                // stopped: neither a thumbnail nor a failure; it is decoded again when wanted
+                _ if stopped => continue,
+                Err(_) => continue,
+                Ok(pixels) => q.done.push((key, pixels)),
+            }
         }
         (w.notify)();
     }
@@ -259,6 +291,8 @@ mod tests {
         }
         assert!(!ok("big.png"));
         assert!(ok("big.cr2"));
+        fs::File::create(tmp.path().join("scan.jpx")).unwrap().set_len(300 << 20).unwrap();
+        assert!(ok("scan.jpx"), "JPEG 2000 decodes a smaller stored resolution of a mapped file");
     }
 
     #[test]
@@ -313,5 +347,59 @@ mod tests {
         assert!(t.workers.queue.lock().unwrap().wanted.is_empty(), "a failure is not tried again");
         let newest = ready.last().unwrap().clone();
         assert!(t.get(&newest).is_some_and(|img| img.size().width == 96));
+    }
+
+    static SLOW_STARTS: AtomicUsize = AtomicUsize::new(0);
+
+    /// "slow" files decode until they are stopped; others give a 1 × 1 picture at once.
+    fn test_decoder(path: &Path, _load: u32, stop: &AtomicBool) -> std::io::Result<Option<SharedPixelBuffer<Rgba8Pixel>>> {
+        if path.to_string_lossy().contains("slow") {
+            SLOW_STARTS.fetch_add(1, Ordering::SeqCst);
+            let start = Instant::now();
+            while !stop.load(Ordering::Relaxed) {
+                assert!(start.elapsed() < Duration::from_secs(10), "never stopped");
+                std::thread::sleep(Duration::from_millis(2));
+            }
+            return Err(std::io::ErrorKind::Interrupted.into());
+        }
+        Ok(Some(SharedPixelBuffer::new(1, 1)))
+    }
+
+    #[test]
+    fn decodes_no_longer_wanted_stop_and_are_neither_shown_nor_remembered_as_failed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let key = |name: &str| {
+            let p = tmp.path().join(name);
+            png(&p, 2, 2);
+            Key::of(&FileEntry::read(&p), 96)
+        };
+        let (slow, other) = (key("slow.png"), key("other.png"));
+        let mut t = Thumbnails::with_decoder(|| {}, test_decoder);
+        let wait = |t: &Thumbnails, what: &str, done: &dyn Fn(&Queue) -> bool| {
+            let start = Instant::now();
+            while !done(&t.workers.queue.lock().unwrap()) {
+                assert!(start.elapsed() < Duration::from_secs(10), "timed out waiting for {what}");
+                std::thread::sleep(Duration::from_millis(2));
+            }
+        };
+        t.want(vec![slow.clone()]);
+        wait(&t, "the slow decode", &|q| q.busy.contains_key(&slow));
+        let running = t.workers.queue.lock().unwrap().busy[&slow].clone();
+        t.want(vec![other.clone()]); // scrolled away
+        assert!(running.load(Ordering::SeqCst), "the slow decode was told to stop");
+        wait(&t, "both to finish", &|q| q.busy.is_empty() && q.done.len() == 1);
+        assert_eq!(t.take_done(), vec![other.clone()]);
+        assert!(!t.failed.contains(&slow), "stopped is not failed");
+        assert!(t.get(&slow).is_none());
+
+        // wanted again: decoded again, and stopping while it is still asked for doesn't happen
+        let starts = SLOW_STARTS.load(Ordering::SeqCst);
+        t.want(vec![slow.clone()]);
+        wait(&t, "the second slow decode", &|q| q.busy.contains_key(&slow));
+        t.want(vec![slow.clone(), other.clone()]);
+        assert!(!t.workers.queue.lock().unwrap().busy[&slow].load(Ordering::SeqCst), "still wanted: keeps going");
+        assert_eq!(SLOW_STARTS.load(Ordering::SeqCst), starts + 1);
+        t.want(vec![]);
+        wait(&t, "the stop", &|q| q.busy.is_empty());
     }
 }

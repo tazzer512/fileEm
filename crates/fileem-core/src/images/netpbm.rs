@@ -5,8 +5,9 @@
 use std::fs::File;
 use std::io::{self, BufReader, Read};
 use std::path::Path;
+use std::sync::atomic::AtomicBool;
 
-use super::Pixels;
+use super::{Pixels, check};
 
 /// Larger sides are refused: a damaged header shouldn't make us allocate gigabytes.
 const MAX_SIDE: u32 = 1 << 18;
@@ -18,8 +19,16 @@ pub fn is_netpbm(extension: &str) -> bool {
 /// Decodes `path` with its longer side at most `max_side`; `None` when it isn't a valid
 /// (or is a cut off) Netpbm file.
 pub fn read(path: &Path, max_side: u32) -> io::Result<Option<Pixels>> {
+    read_until(path, max_side, &AtomicBool::new(false))
+}
+
+/// [`read`] that stops with an `Interrupted` error once `stop` is set (checked every row).
+pub fn read_until(path: &Path, max_side: u32, stop: &AtomicBool) -> io::Result<Option<Pixels>> {
     let mut input = Input { r: BufReader::with_capacity(1 << 16, File::open(path)?) };
-    Ok(decode(&mut input, max_side).ok().flatten())
+    match decode(&mut input, max_side, stop) {
+        Err(e) if e.kind() == io::ErrorKind::Interrupted => Err(e),
+        r => Ok(r.ok().flatten()),
+    }
 }
 
 struct Input<R: Read> {
@@ -76,7 +85,7 @@ impl<R: Read> Input<R> {
     }
 }
 
-fn decode<R: Read>(input: &mut Input<R>, max_side: u32) -> io::Result<Option<Pixels>> {
+fn decode<R: Read>(input: &mut Input<R>, max_side: u32, stop: &AtomicBool) -> io::Result<Option<Pixels>> {
     if input.byte()? != Some(b'P') {
         return Ok(None);
     }
@@ -105,6 +114,7 @@ fn decode<R: Read>(input: &mut Input<R>, max_side: u32) -> io::Result<Option<Pix
     let channels = channels as usize;
     let scale = |v: u32| if maxval == 255 { v.min(255) as u8 } else { (f64::from(v.min(maxval)) * 255.0 / f64::from(maxval)).round() as u8 };
     for y in 0..h {
+        check(stop)?;
         let keep = y % step == 0;
         if !text {
             input.r.read_exact(&mut row)?;
@@ -220,5 +230,14 @@ mod tests {
         assert_eq!((p.width, p.height, p.full_width, p.full_height), (128, 43, 900, 300));
         assert_eq!(p.pixel(3, 20), RED, "left is red");
         assert_eq!(p.pixel(124, 20), BLUE, "right is blue");
+    }
+
+    #[test]
+    fn a_set_stop_flag_interrupts_between_rows() {
+        let tmp = tempfile::tempdir().unwrap();
+        let f = write(tmp.path(), "a.ppm", "P6\n2 1\n255\n", &[255, 0, 0, 0, 0, 255]);
+        let err = read_until(&f, 100, &AtomicBool::new(true)).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::Interrupted, "not a damaged file");
+        assert!(read_until(&f, 100, &AtomicBool::new(false)).unwrap().is_some());
     }
 }

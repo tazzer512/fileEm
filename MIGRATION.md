@@ -159,8 +159,11 @@ are the Java sources, as a size hint.
 - [x] **Session**: all tabs of both sides with their selected tab, `dual`, `split.sides`, tree
   widths; Java's per-tab `.view`/`.size` keys are carried along unchanged. Missing tab folders
   walk up to an existing parent (as in Java). Renaming a folder moves the tabs inside it.
-- Not yet: the F-key bar at the bottom (Java has one with F5 Copy, F6 Move, …), dragging tabs or
-  columns to reorder them, per-tab view modes (stage 5).
+- [x] **F-key bar** (added after stage 5b): F2 Rename, F5 Copy, F6 Move (greyed out without the
+  second side), F7 New folder, F8 Delete, F9 Dual pane, Tab Switch side; each button sends its key
+  through the normal key handler (`function-key` in app.slint), then gives the keys back to the
+  list. F3 Preview joins it with stage 6.
+- Not yet: dragging tabs or columns to reorder them.
 
 ### Stage 4: drag & drop and selection box (done)
 
@@ -210,9 +213,12 @@ are the Java sources, as a size hint.
   started on a row lost its release once that row scrolled away (the box stayed armed and kept
   scrolling); rows now take presses only on icon + name, the rest goes to the list's fixed
   background area. Status messages ("Cannot open …") survive view updates.
-- Not yet: Ctrl+wheel over a Details list that can scroll works only on the names (the list's
-  scroll area takes the wheel elsewhere); double-click on the size slider doesn't reset it;
-  List's column width is estimated from the name lengths, not measured; JPEG thumbnails ignored EXIF
+- [x] Fixed after 5b: Ctrl+wheel works anywhere over a Details list that scrolls (a layer over
+  the list, enabled only while Ctrl is held, takes the wheel first; its presses do what the area
+  behind does); a double-click on the size slider resets the view's size (two `released` within
+  500 ms); List's column fits the widest name *measured* in the items' font (the 32 roughly
+  widest names, `grid::names_to_measure`, go to a hidden multi-line `Text`; its width comes back
+  through `list-measured`), no longer estimated from name lengths. JPEG thumbnails ignored EXIF
   orientation (as in Java; fixed in 5b).
 
 ### Stage 5b: image readers (done)
@@ -230,8 +236,13 @@ are the Java sources, as a size hint.
 - [x] UI test `photoshop_raw_jpeg2000_and_netpbm_files_show_thumbnails` (the Java PSD, raw and
   JPEG 2000/PPM thumbnail cases, with pixel checks).
 - Beyond Java: JPEG (and other common format) thumbnails follow their EXIF orientation.
-- Not yet: the preview half of these readers (stage 6); stopping a decode that is no longer
-  wanted (Java interrupts it; here a huge Netpbm or JPEG 2000 finishes first).
+- [x] Fixed after 5b: a decode whose thumbnail is no longer wanted (scrolled away) is stopped
+  (`images::decode_until` with a flag per job; Netpbm and Photoshop check it every row, the
+  others between steps; a stopped decode is neither shown nor remembered as failed). JPEG 2000
+  files over 256 MB are memory-mapped (`memmap2`) instead of skipped, so the size limit is 8 GB
+  like the other partial readers.
+- Not yet: the preview half of these readers (stage 6). A decoder of a third-party crate that is
+  already running (`image`, `hayro-jpeg2000`) can't be stopped halfway.
 
 ### Stage 6: preview window
 
@@ -344,5 +355,14 @@ are the Java sources, as a size hint.
   is the moment to give the keyboard focus back.
 - `release` used `panic = "abort"`; a panic in a third-party decoder (damaged files) would kill
   the app, so it unwinds now and `images::decode` catches it.
+- A `Flickable` takes every wheel event (`interactive` doesn't matter), after its children; to
+  catch Ctrl+wheel anywhere over a list, a `TouchArea` on top is enabled only while Ctrl is held.
+  The window's `FocusScope` sees Ctrl through `capture-key-pressed` / `capture-key-released`
+  even while a text field has the focus.
+- Slint's `Slider` calls `released` after every left click (not only after drags): two within
+  the double-click time make a double-click.
+- A `changed` handler on the `preferred-width` of a layout over a repeater did not fire again
+  when the repeater's model changed; a single `Text` with one name per line measures the widest
+  line reliably.
 - `notify`'s inotify backend reports opens and reads (`EventKind::Access`): filter them, or a
   watched folder refreshes itself every time it is listed.

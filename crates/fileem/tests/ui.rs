@@ -137,6 +137,14 @@ impl Fixture {
         self.click_at(&self.element(label));
     }
 
+    fn click_point(&self, position: LogicalPosition) {
+        let w = self.ui.window();
+        w.dispatch_event(WindowEvent::PointerMoved { position });
+        w.dispatch_event(WindowEvent::PointerPressed { position, button: PointerEventButton::Left });
+        w.dispatch_event(WindowEvent::PointerReleased { position, button: PointerEventButton::Left });
+        pump();
+    }
+
     fn right_click_at(&self, position: LogicalPosition) {
         let w = self.ui.window();
         w.dispatch_event(WindowEvent::PointerMoved { position });
@@ -352,6 +360,7 @@ fn ui() {
     f9_opens_the_second_side_and_tab_switches();
     f5_copies_and_f6_moves_to_the_other_side();
     copy_and_move_to_the_other_side_need_the_second_side();
+    the_f_key_bar_buttons_do_what_their_keys_do();
     the_filter_box_narrows_the_list_and_escape_clears_it();
     ctrl_l_edits_the_address_and_a_file_path_selects_the_file();
     crumbs_show_names_as_they_are_and_navigate();
@@ -375,6 +384,7 @@ fn ui() {
     the_sort_button_sorts_and_shows_the_direction();
     ctrl_shift_digits_and_ctrl_wheel_switch_the_view();
     size_controls_resize_within_limits_and_each_view_keeps_its_size();
+    list_columns_fit_the_widest_name_in_the_real_font();
     sizes_and_views_survive_the_session_and_new_tabs_inherit_the_view();
     clicking_in_the_grid_selects_like_explorer_and_double_click_opens();
     arrow_keys_follow_the_grid_layout();
@@ -1050,6 +1060,58 @@ fn copy_and_move_to_the_other_side_need_the_second_side() {
     assert!(f.menu_item("Copy to other side…  (F5)").is_some());
     f.key(Key::Escape);
     pump();
+
+    // the F-key bar's Copy and Move are greyed out too, until the second side shows
+    let enabled = |f: &Fixture, label: &str| f.element(label).accessible_enabled() == Some(true);
+    assert!(!enabled(&f, "F5 Copy") && !enabled(&f, "F6 Move"), "F-key bar buttons");
+    f.click("F5 Copy");
+    pump();
+    assert!(!dialog_open(&f), "a greyed out button does nothing");
+    f.key(Key::F9);
+    assert!(enabled(&f, "F5 Copy") && enabled(&f, "F6 Move"));
+    f.key(Key::F9);
+    assert!(!enabled(&f, "F5 Copy") && !enabled(&f, "F6 Move"), "greyed out again");
+}
+
+fn the_f_key_bar_buttons_do_what_their_keys_do() {
+    let f = open_window();
+    f.click("notes.txt");
+    let press = |label: &str| {
+        f.click(label);
+        pump();
+    };
+    press("F2 Rename");
+    assert_eq!(f.ui.get_dialog_title(), "Rename");
+    assert_eq!(f.ui.get_dialog_text(), "notes.txt");
+    f.key(Key::Escape);
+    press("F7 New folder");
+    assert_eq!(f.ui.get_dialog_title(), "New folder");
+    f.key(Key::Escape);
+    press("F8 Delete");
+    assert_eq!(f.ui.get_dialog_title(), "Move to Trash");
+    f.key(Key::Escape);
+    assert!(!dialog_open(&f) && f.dir.join("notes.txt").exists(), "cancelled, nothing trashed");
+
+    press("F9 Dual pane");
+    assert!(app::is_dual(&f.app));
+    assert_eq!(app::active_side(&f.app), 0);
+    press("Tab Switch side");
+    assert_eq!(app::active_side(&f.app), 1);
+    press("Tab Switch side");
+    assert_eq!(app::active_side(&f.app), 0);
+    f.click("notes.txt");
+    press("F5 Copy");
+    assert!(dialog_open(&f), "the target question");
+    assert!(f.ui.get_dialog_title().starts_with("Copy"), "{}", f.ui.get_dialog_title());
+    f.key(Key::Escape);
+    press("F6 Move");
+    assert!(f.ui.get_dialog_title().starts_with("Move"), "{}", f.ui.get_dialog_title());
+    f.key(Key::Escape);
+    press("F9 Dual pane");
+    assert!(!app::is_dual(&f.app));
+    f.key(Key::UpArrow);
+    assert_eq!(f.current().as_deref(), Some("big.bin"), "the list has the keys again: {:?}", f.current());
+    settle(&f);
 }
 
 fn the_filter_box_narrows_the_list_and_escape_clears_it() {
@@ -1484,6 +1546,59 @@ fn ctrl_shift_digits_and_ctrl_wheel_switch_the_view() {
     assert_eq!(view(&f), ViewMode::Details, "less than a notch");
     wheel(&f, f.on_name("notes.txt"), -20.0);
     assert_eq!(view(&f), ViewMode::Tiles);
+
+    // a Details list that scrolls takes the wheel itself, but not while Ctrl is held: anywhere
+    // over its rows (here the Size column, past the names) Ctrl+wheel still changes the view
+    set_view(&f, ViewMode::Details);
+    let many = f.dir.join("alpha");
+    for i in 0..80 {
+        fs::write(many.join(format!("file-{i:02}.txt")), "x").unwrap();
+    }
+    f.ui.invoke_address_entered(0, many.display().to_string().into());
+    wait_until(&f, "the long folder is listed", |f| f.names().len() == 81);
+    let row = f.list_row("file-03.txt");
+    let size_column = LogicalPosition::new(row.absolute_position().x + f.ui.get_name_width() + 30.0, row.absolute_position().y + 5.0);
+    wheel(&f, size_column, 40.0);
+    assert_eq!(view(&f), ViewMode::List, "Ctrl+wheel over the Size column of a list that scrolls");
+    set_view(&f, ViewMode::Details);
+    let w = f.ui.window();
+    let before = f.list_row("file-20.txt").absolute_position().y;
+    w.dispatch_event(WindowEvent::PointerMoved { position: size_column });
+    w.dispatch_event(WindowEvent::PointerScrolled { position: size_column, delta_x: 0.0, delta_y: -200.0 });
+    pump();
+    assert_eq!(view(&f), ViewMode::Details, "without Ctrl the wheel scrolls");
+    wait_until(&f, "the list scrolled", |f| f.list_row("file-20.txt").absolute_position().y < before);
+    // with Ctrl held, a click there still selects the row under it (the Ctrl layer passes it on)
+    let row = f.list_row("file-20.txt");
+    let at = LogicalPosition::new(row.absolute_position().x + f.ui.get_name_width() + 30.0, row.absolute_position().y + 5.0);
+    w.dispatch_event(WindowEvent::KeyPressed { text: Key::Control.into() });
+    f.click_point(at);
+    w.dispatch_event(WindowEvent::KeyReleased { text: Key::Control.into() });
+    pump();
+    assert!(f.selected().contains(&"file-20.txt".to_string()), "Ctrl+click toggles the row in: {:?}", f.selected());
+}
+
+fn list_columns_fit_the_widest_name_in_the_real_font() {
+    let f = open_window();
+    set_view(&f, ViewMode::List);
+    // the same letters to a rough estimate, different widths in the font: only measuring tells
+    let column = |f: &Fixture, name: &str| {
+        let dir = f.dir.join(format!("only-{}", name.len()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir(&dir).unwrap();
+        fs::write(dir.join(name), "x").unwrap();
+        fs::write(dir.join("a.txt"), "x").unwrap();
+        f.ui.invoke_address_entered(0, dir.display().to_string().into());
+        wait_until(f, "the folder is listed", |f| f.names().iter().any(|n| n == name));
+        pump();
+        f.view().cell_w
+    };
+    let wide = column(&f, &"W".repeat(24));
+    let narrow = column(&f, &"w".repeat(23));
+    assert!(wide > narrow + 30.0, "measured: {wide} for W, {narrow} for w");
+    assert!(narrow > 140.0 && wide < 420.0, "within the limits: {narrow}, {wide}");
+    let short = column(&f, "b.txt");
+    assert_eq!(short, 140.0, "short names: the narrowest column");
 }
 
 fn size_controls_resize_within_limits_and_each_view_keeps_its_size() {
@@ -1512,6 +1627,21 @@ fn size_controls_resize_within_limits_and_each_view_keeps_its_size() {
     assert_eq!(icon_px(&f), 16);
     f.ui.invoke_size_slider_moved(0, 0.02);
     assert_eq!(icon_px(&f), 96, "near the middle snaps to the default");
+    assert_eq!(f.view().size_slider, 0.0);
+
+    // a double-click on the slider goes back to the default; single clicks (and slow ones) move it
+    let slider = f.element("Item size");
+    f.click_at(&slider);
+    pump();
+    let moved = icon_px(&f);
+    assert_ne!(moved, 96, "a click on the track moves the slider there");
+    std::thread::sleep(std::time::Duration::from_millis(600));
+    f.click_at(&slider);
+    pump();
+    assert_eq!(icon_px(&f), moved, "two slow clicks are no double-click");
+    f.click_at(&slider);
+    pump();
+    assert_eq!(icon_px(&f), 96, "double-click: the default size");
     assert_eq!(f.view().size_slider, 0.0);
 
     // keys, and each view keeps its own size
