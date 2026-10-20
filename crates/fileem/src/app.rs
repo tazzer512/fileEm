@@ -7,11 +7,13 @@
 //! - `keys`: the keyboard
 //! - `dnd`: mouse selection (box) and drag & drop
 //! - `views`: view modes, item sizes, the grid and its thumbnails
+//! - `preview`: the preview of the selected file, docked or in its own window
 
 mod commands;
 mod dnd;
 mod keys;
 mod nav;
+mod preview;
 mod views;
 
 use std::cell::RefCell;
@@ -181,6 +183,7 @@ pub struct App {
     late_press: Option<(usize, usize)>,
     drag: dnd::Drag,
     thumbs: Thumbnails,
+    preview: preview::Preview,
 }
 
 pub type Shared = Rc<RefCell<App>>;
@@ -277,6 +280,7 @@ pub fn install(ui: &AppWindow, session: Rc<Session>, start: Option<PathBuf>) -> 
         properties: Vec::new(),
         late_press: None,
         drag: dnd::Drag::default(),
+        preview: preview::Preview::default(),
         thumbs: Thumbnails::new({
             let ui = ui.as_weak();
             move || {
@@ -329,6 +333,7 @@ pub fn install(ui: &AppWindow, session: Rc<Session>, start: Option<PathBuf>) -> 
         sync_files(&app, s);
     }
     sync_window(&app);
+    preview::restore(&app);
     for (id, dir) in opening {
         // a folder from last time may be gone: its nearest existing parent then
         nav::go_with(&app, id, dir, Nav::Go, true);
@@ -378,6 +383,17 @@ pub fn collect_session(app: &Shared) {
             }
         }
     }
+    drop(a);
+    preview::save(app);
+}
+
+/// The preview for tests: (on, docked, shown file's name, zoom, fitting) and its own window.
+pub fn preview_state(app: &Shared) -> (bool, bool, Option<String>, f64, bool) {
+    preview::state(app)
+}
+
+pub fn preview_window(app: &Shared) -> Option<crate::PreviewWindow> {
+    preview::window(app)
 }
 
 pub fn session(app: &Shared) -> Rc<Session> {
@@ -482,6 +498,12 @@ fn wire(ui: &AppWindow, app: &Shared) {
     });
     on!(on_menu_closed, app => | | commands::menu_closed(app));
     on!(on_terminate, app => | | commands::terminate(app));
+    on!(on_toggle_preview, app => | | preview::toggle(app));
+    on!(on_preview_zoom, app => |direction| preview::zoom(app, direction));
+    on!(on_preview_fit, app => | | preview::fit(app));
+    on!(on_preview_actual, app => | | preview::actual(app));
+    on!(on_preview_dock, app => | | preview::toggle_dock(app));
+    on!(on_preview_resized, app => |width, height| preview::resized(app, width, height));
     on!(on_sort_by, app => |side, col| {
         nav::set_active_side(app, side as usize);
         if let Some(key) = ColumnId::from_index(col as usize).and_then(ColumnId::sort_key) {
@@ -805,6 +827,12 @@ fn push_view(app: &Shared, side: usize) {
         ui.set_left(view);
     } else {
         ui.set_right(view);
+    }
+    // the preview follows the active tab's selection
+    let active = side == a.active;
+    drop(a);
+    if active {
+        preview::selection_changed(app);
     }
 }
 

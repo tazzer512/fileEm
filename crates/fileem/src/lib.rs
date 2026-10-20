@@ -12,6 +12,7 @@ pub mod grid;
 pub mod menu;
 pub mod ops_ui;
 pub mod progress;
+pub mod preview;
 pub mod properties;
 pub mod shell;
 pub mod signals;

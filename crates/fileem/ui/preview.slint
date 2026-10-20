@@ -1,0 +1,218 @@
+// The preview (Java PreviewWindow): the selected file's image or text with zoom and pan, or a
+// message. One pane, shown docked in the main window or in a window of its own; Rust
+// (src/app/preview.rs) loads the content and keeps the zoom, the pane draws it and pans.
+
+import { Palette, ScrollView } from "std-widgets.slint";
+import { Icons, ToolButton } from "icons.slint";
+
+export struct PreviewView {
+    title: string,
+    // 0: a message, 1: an image, 2: text
+    mode: int,
+    message: string,
+    image: image,
+    // the image's size on screen: its pixels times the zoom
+    image-w: length,
+    image-h: length,
+    text: string,
+    font-size: length,
+    // zoom and pan buttons (not for messages)
+    tools: bool,
+    docked: bool,
+    // changes with new content: back to the top left
+    top-seq: int,
+}
+
+component PanButtons {
+    in property <bool> enabled;
+    callback pan(int, int);
+    HorizontalLayout {
+        spacing: 2px;
+        ToolButton { icon: Icons.pan-left; tooltip: "Pan left"; enabled: root.enabled; clicked => { root.pan(-1, 0); } }
+        ToolButton { icon: Icons.pan-right; tooltip: "Pan right"; enabled: root.enabled; clicked => { root.pan(1, 0); } }
+        ToolButton { icon: Icons.pan-up; tooltip: "Pan up"; enabled: root.enabled; clicked => { root.pan(0, -1); } }
+        ToolButton { icon: Icons.pan-down; tooltip: "Pan down"; enabled: root.enabled; clicked => { root.pan(0, 1); } }
+    }
+}
+
+export component PreviewPane {
+    in property <PreviewView> view;
+    // +1 zoom in, -1 zoom out
+    callback zoom(int);
+    callback fit();
+    callback actual();
+    callback dock();
+    callback close();
+    // the space the content is shown in
+    callback resized(length, length);
+    accessible-role: groupbox;
+    accessible-label: "Preview";
+    min-width: 200px;
+
+    // docked, the pane is narrow: two rows of buttons (from its width would be a binding loop)
+    property <bool> narrow: root.view.docked;
+    property <int> top-seq: view.top-seq;
+    changed top-seq => {
+        scroll.content-x = 0;
+        scroll.content-y = 0;
+    }
+
+    // a quarter of the visible part in each direction
+    function pan(dx: int, dy: int) {
+        scroll.content-x = clamp(scroll.content-x - dx * scroll.visible-width / 4, min(0px, scroll.visible-width - scroll.content-width), 0px);
+        scroll.content-y = clamp(scroll.content-y - dy * scroll.visible-height / 4, min(0px, scroll.visible-height - scroll.content-height), 0px);
+    }
+
+    Rectangle { background: Palette.background; }
+    VerticalLayout {
+        HorizontalLayout {
+            padding-top: 4px;
+            padding-bottom: 4px;
+            padding-left: 8px;
+            padding-right: 6px;
+            spacing: 2px;
+            Text {
+                text: root.view.title;
+                font-weight: 700;
+                overflow: elide;
+                vertical-alignment: center;
+                horizontal-stretch: 1;
+            }
+            ToolButton {
+                icon: root.view.docked ? Icons.dock-window : Icons.dock-right;
+                tooltip: root.view.docked ? "Float in its own window" : "Dock in the main window";
+                clicked => { root.dock(); }
+            }
+            // a floating window closes like a window
+            if root.view.docked: ToolButton {
+                icon: Icons.close;
+                tooltip: "Close the preview (F3)";
+                clicked => { root.close(); }
+            }
+        }
+        Rectangle { height: 1px; background: Palette.border; }
+        Rectangle {
+            vertical-stretch: 1;
+            scroll := ScrollView {
+                visible: root.view.mode != 0;
+                // at least the visible size, so a smaller image sits in the middle
+                content-width: root.view.mode == 1 ? max(root.view.image-w, self.visible-width)
+                    : root.view.mode == 2 ? max(text.preferred-width + 20px, self.visible-width) : self.visible-width;
+                content-height: root.view.mode == 1 ? max(root.view.image-h, self.visible-height)
+                    : root.view.mode == 2 ? max(text.preferred-height + 16px, self.visible-height) : self.visible-height;
+                init => { root.resized(self.visible-width, self.visible-height); }
+                changed visible-width => { root.resized(self.visible-width, self.visible-height); }
+                changed visible-height => { root.resized(self.visible-width, self.visible-height); }
+                // Ctrl+wheel zooms, like the file views (children get the wheel before the scroll view)
+                TouchArea {
+                    width: scroll.content-width;
+                    height: scroll.content-height;
+                    scroll-event(event) => {
+                        if ((event.modifiers.control || event.modifiers.meta) && event.delta-y != 0) {
+                            root.zoom(event.delta-y > 0 ? 1 : -1);
+                            return accept;
+                        }
+                        return reject;
+                    }
+                }
+                Image {
+                    visible: root.view.mode == 1;
+                    x: (scroll.content-width - root.view.image-w) / 2;
+                    y: (scroll.content-height - root.view.image-h) / 2;
+                    width: root.view.image-w;
+                    height: root.view.image-h;
+                    source: root.view.image;
+                    accessible-role: image;
+                    accessible-label: "Previewed image";
+                }
+                text := Text {
+                    visible: root.view.mode == 2;
+                    x: 10px;
+                    y: 8px;
+                    text: root.view.mode == 2 ? root.view.text : "";
+                    font-family: "monospace";
+                    font-size: root.view.font-size;
+                    color: Palette.foreground;
+                }
+            }
+            if root.view.mode == 0: Text {
+                x: 12px;
+                width: parent.width - 24px;
+                text: root.view.message;
+                wrap: word-wrap;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+                color: Palette.foreground.with-alpha(0.6);
+            }
+        }
+        Rectangle { height: 1px; background: Palette.border; }
+        // zoom, then pan; docked, the pan buttons go to a second row
+        HorizontalLayout {
+            alignment: center;
+            padding: 4px;
+            spacing: 2px;
+            ToolButton { icon: Icons.zoom-out; tooltip: "Zoom out"; enabled: root.view.tools; clicked => { root.zoom(-1); } }
+            ToolButton { icon: Icons.zoom-in; tooltip: "Zoom in"; enabled: root.view.tools; clicked => { root.zoom(1); } }
+            ToolButton { icon: Icons.fit; tooltip: "Fit to window"; enabled: root.view.tools; clicked => { root.fit(); } }
+            ToolButton { icon: Icons.actual-size; tooltip: "Actual size (100%)"; enabled: root.view.tools; clicked => { root.actual(); } }
+            if !root.narrow: Rectangle { width: 12px; }
+            if !root.narrow: PanButtons {
+                enabled: root.view.tools;
+                pan(dx, dy) => { root.pan(dx, dy); }
+            }
+        }
+        if root.narrow: HorizontalLayout {
+            alignment: center;
+            padding: 4px;
+            padding-top: 0px;
+            PanButtons {
+                enabled: root.view.tools;
+                pan(dx, dy) => { root.pan(dx, dy); }
+            }
+        }
+    }
+}
+
+// The preview floating in a window of its own. Keys it doesn't use go to the main window's
+// handler, so arrow keys still move through the files.
+export component PreviewWindow inherits Window {
+    in property <PreviewView> view;
+    callback zoom(int);
+    callback fit();
+    callback actual();
+    callback dock();
+    // closing it, Escape or F3: the preview goes off
+    callback switch-off();
+    callback resized(length, length);
+    callback key(string, bool, bool, bool) -> bool;
+    title: root.view.title == "" ? "Preview" : root.view.title + " — Preview";
+    preferred-width: 560px;
+    preferred-height: 480px;
+    // all the buttons in one row
+    min-width: 330px;
+    min-height: 200px;
+    forward-focus: keys;
+    keys := FocusScope {
+        key-pressed(event) => {
+            if (event.text == Key.Escape || event.text == Key.F3) {
+                root.switch-off();
+                return accept;
+            }
+            if (root.key(event.text, event.modifiers.control || event.modifiers.meta, event.modifiers.alt, event.modifiers.shift)) {
+                return accept;
+            }
+            return reject;
+        }
+        PreviewPane {
+            width: parent.width;
+            height: parent.height;
+            view: root.view;
+            zoom(d) => { root.zoom(d); }
+            fit => { root.fit(); }
+            actual => { root.actual(); }
+            dock => { root.dock(); }
+            close => { root.switch-off(); }
+            resized(w, h) => { root.resized(w, h); }
+        }
+    }
+}

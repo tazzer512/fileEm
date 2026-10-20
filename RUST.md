@@ -45,7 +45,8 @@ Cargo.toml                 workspace (release: LTO, stripped, panics unwind: a d
 crates/fileem-core/        no UI: everything that touches the file system
   src/util/                natural_order, formats, fs_util, os, eta       (Java util)
   src/fs/                  entry (FileEntry), file_types, listing, places,
-                           trash, watcher, measure (folder sizes)         (Java fs)
+                           trash, watcher, measure (folder sizes),
+                           preview (kinds, text reading)                  (Java fs)
   src/ops/                 file_operation (+ tests.rs: port of FileOperationTest), names
                            (rename / create, never replacing)
   src/session.rs           session.properties shared with the Java app (Java Session)
@@ -59,7 +60,8 @@ crates/fileem/             the app
   ui/side.slint            one side: tree, tab bar, address + view/sort buttons + filter,
                            columns, list or grid, status with item size
   ui/grid.slint            one item of the grid views (draws only)
-  ui/icons.slint           shared icons and the tool button
+  ui/preview.slint         the preview pane (docked) and its own window (draws, pans)
+  ui/icons.slint           shared icons, the tool button and the F-key bar's buttons
   src/app.rs               controller: state, session, wiring, models (Java MainWindow)
   src/app/nav.rs           listings per tab, watching, trees, tabs, sides (Java ExplorerSide/FileTab)
   src/app/commands.rs      operations, clipboard, dialogs, menus, properties
@@ -67,6 +69,8 @@ crates/fileem/             the app
   src/app/dnd.rs           selection box, drag & drop inside the window, Move/Copy question
                            (Java Marquee, Dnd, MainWindow.drop)
   src/app/views.rs         view modes, item sizes, grid geometry, keys, thumbnails (Java FileTab views)
+  src/app/preview.rs       the preview: loading, settle delay, docking, session (Java PreviewWindow)
+  src/preview.rs           the preview's zoom and fit, toolkit-free (Java PreviewWindow zoom)
   src/view_mode.rs         the eight views, sizes and steps, session format (Java ViewMode)
   src/grid.rs              grid layout: slots, lanes, hit tests, box hits, key moves, the names
                            List measures for its column width (Java FileGrid)

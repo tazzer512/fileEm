@@ -1,5 +1,5 @@
 //! Visual checks without a desktop (`cargo test -p fileem --test snapshots -- --ignored`): renders
-//! the main window (also with both sides, and in the grid views), a dialog and a right-click menu open, the progress window with a conflict
+//! the main window (also with both sides, and in the grid views), the preview (floating and docked), a dialog and a right-click menu open, the progress window with a conflict
 //! question and a Properties window, in the
 //! headless backend's software renderer, to `target/snapshots/*.ppm`. Look at them after UI
 //! changes; they are not compared automatically.
@@ -110,6 +110,22 @@ fn snapshots() {
         save(ui.window(), name);
     }
     app::run_command(&a, fileem::menu::Command::SetView(ViewMode::Details));
+
+    // the preview: an image in its own window, then text docked
+    ui.invoke_row_pressed(0, 3, false, false);
+    ui.invoke_row_released(0, 3);
+    ui.invoke_toggle_preview();
+    let w = app::preview_window(&a).unwrap();
+    w.window().set_size(slint::LogicalSize::new(560.0, 480.0));
+    pump_until("the image", || w.get_view().mode == 1);
+    save(w.window(), "preview-image");
+    ui.invoke_preview_dock();
+    ui.invoke_row_pressed(0, 2, false, false);
+    ui.invoke_row_released(0, 2);
+    pump_until("the text", || ui.get_preview().mode == 2);
+    save(ui.window(), "preview-docked");
+    ui.invoke_toggle_preview();
+    ui.invoke_preview_dock();
 
     // a right-click menu on a file, and its Properties window
     ui.invoke_row_pressed(0, 1, false, false);

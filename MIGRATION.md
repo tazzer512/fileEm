@@ -8,9 +8,11 @@ rules (tests, integrity, conventions) that apply to both versions.
 executable with a much smaller memory footprint (measured: Java ~360 MB, Rust ~105 MB with
 OpenGL, ~32 MB with the software renderer).
 
-**Status (2026-10-20)**: stages 0–5 (5a view modes and thumbnails, 5b image readers) done on
-branch `rust`. The Java app in `src/` is still the complete, daily-use version; nothing was
-removed from it. Next: stage 6 (preview window).
+**Status (2026-10-21)**: stages 0–6 (5a view modes and thumbnails, 5b image readers, 6 the
+preview) done on branch `rust`, and the leftovers of stages 1–5 fixed except drag & drop with
+other applications (decided: not possible with Slint 1.18). The Java app in `src/` is still the
+complete, daily-use version; nothing was removed from it. Next: stage 7 (search, bookmarks,
+volumes, eject).
 
 ## How to work a stage
 
@@ -255,11 +257,31 @@ are the Java sources, as a size hint.
 - Not yet: the preview half of these readers (stage 6). A decoder of a third-party crate that is
   already running (`image`, `hayro-jpeg2000`) can't be stopped halfway.
 
-### Stage 6: preview window
+### Stage 6: preview window (done)
 
-- `PreviewWindow` 645, `Preview` 126 (`PreviewTest` 4): F3, text (encoding sniffing, 256 KB),
-  images with zoom/fit/pan, docking into the main window, settle delay (120 ms) and cancelling
-  stale loads; session `preview.*`.
+- [x] `fileem_core::fs::preview` (`Preview`, `PreviewTest` ported): kinds by name, text read
+  up to 256 KB with binary sniffing, UTF-8 then Latin-1, BOM dropped, a character cut by the
+  limit dropped; `image_side` (4096 px for the common formats and raws, 2048 for Photoshop,
+  JPEG 2000 and Netpbm, as in Java).
+- [x] `src/preview.rs` (zoom, fit never enlarges, limits) and `src/app/preview.rs` (the Java
+  `PreviewWindow`): F3, the toolbar toggle, the F-key bar's F3; the active tab's focused
+  selected row (else the first selected) after a 120 ms settle; every load bumps a generation
+  and stops the previous one (`images::decode_until`); messages for folders, binary files,
+  images without a preview (raw without an embedded JPEG, Photoshop, damaged files) and read
+  errors; long text says it was cut. Images: all `fileem_core::images` formats, upright.
+- [x] `ui/preview.slint`: one `PreviewPane` (title, dock / close buttons, image or text in a
+  scroll view, zoom and pan buttons, Ctrl+wheel zooms) shown docked right of the sides (divider,
+  `split.preview`) or in `PreviewWindow` (Escape and F3 switch it off, closing it too; other
+  keys go to the main window's handler, so arrows still move through the files). Both draw the
+  same `PreviewView`.
+- [x] Session: `preview.enabled`, `preview.docked`, `preview.width/height/x/y` (position where
+  the platform reports one; Wayland doesn't), `split.preview`.
+- UI tests: on/off (F3, toolbar, F-key bar, Escape, closing), image zoom/fit/pan/Ctrl+wheel,
+  text (zoom = font, unknown files sniffed, binary, folder, long files), quick selection,
+  Photoshop / raw upright / no embedded preview / JPEG 2000 / PPM / damaged, docking, session.
+- Differences: showing the floating window doesn't hand the keyboard back to the main window
+  (Slint can't activate a window); instead the preview window passes keys on. Docked, the pan
+  buttons take a second row (Java wraps by width; from the width here is a binding loop).
 
 ### Stage 7: search, bookmarks, volumes, eject
 
@@ -384,5 +406,9 @@ are the Java sources, as a size hint.
   `take_snapshot` works there (drag images); it costs nothing until something is rendered.
 - A test that sends signals to its own process needs a binary of its own (`harness = false`):
   the test harness's threads don't block them, and the default action ends the process.
+- `ComponentHandle::show()`/`hide()` run change handlers of other windows, which may call back
+  into the controller: never call them while holding the app's `RefCell` borrow.
+- A `Window`'s own `close` callback shadows the builtin `close()`; and an element id equal to an
+  enum value (`image`) breaks `accessible-role: image`.
 - `notify`'s inotify backend reports opens and reads (`EventKind::Access`): filter them, or a
   watched folder refreshes itself every time it is listed.

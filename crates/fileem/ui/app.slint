@@ -5,8 +5,10 @@
 import { Button, LineEdit, ListView, Palette } from "std-widgets.slint";
 import { FunctionKey, Icons, ToolButton } from "icons.slint";
 import { SidePane, SideView, ColumnRow } from "side.slint";
+import { PreviewPane, PreviewView } from "preview.slint";
 export { FileRow, TreeRow, TabRow, CrumbRow, ColumnRow, SideView } from "side.slint";
 export { ProgressWindow, OpRow } from "progress.slint";
+export { PreviewWindow, PreviewView } from "preview.slint";
 export { PropertiesWindow, PropLine } from "properties.slint";
 
 // One item of a right-click menu (src/menu.rs); `id` is handed back to `menu-activated`.
@@ -160,6 +162,18 @@ export component AppWindow inherits Window {
         }
     }
     callback menu-closed();
+    // the preview (src/app/preview.rs): what it shows, whether it is docked here (and on), the
+    // docked pane's share of the width
+    in property <PreviewView> preview;
+    in property <bool> preview-on;
+    in property <bool> preview-docked;
+    in-out property <float> preview-split: 0.7;
+    callback toggle-preview();
+    callback preview-zoom(int);
+    callback preview-fit();
+    callback preview-actual();
+    callback preview-dock();
+    callback preview-resized(length, length);
     // a termination signal: save and stop operations (main.rs quits afterwards)
     callback terminate();
 
@@ -223,6 +237,12 @@ export component AppWindow inherits Window {
                     }
                     Rectangle { horizontal-stretch: 1; }
                     ToolButton {
+                        icon: Icons.preview;
+                        tooltip: "Preview (F3)";
+                        checked: root.preview-on;
+                        clicked => { root.toggle-preview(); }
+                    }
+                    ToolButton {
                         icon: Icons.split;
                         tooltip: "Second side (F9)";
                         checked: root.dual;
@@ -238,83 +258,116 @@ export component AppWindow inherits Window {
             }
             Rectangle { height: 1px; background: Palette.border; }
 
-            // ---- the sides ----
-            // placed by hand, not by a layout: their widths follow the divider
-            sides := Rectangle {
-                property <length> split-x: (self.width - 5px) * root.side-split;
-                // both always exist (the right one hidden without the second side): showing it
-                // must not rebuild the left one, which would lose its scroll positions
-                for s in 2: SidePane {
-                    side: s;
-                    visible: s == 0 || root.dual;
-                    x: s == 0 ? 0px : root.dual ? sides.split-x + 5px : sides.width;
+            // the sides, and the docked preview on their right
+            main-area := Rectangle {
+                property <length> split-x: (self.width - 5px) * root.preview-split;
+                // ---- the sides ----
+                // placed by hand, not by a layout: their widths follow the divider
+                sides := Rectangle {
+                    x: 0px;
                     y: 0px;
-                    width: !root.dual ? (s == 0 ? sides.width : 0px) : s == 0 ? sides.split-x : sides.width - sides.split-x - 5px;
-                    height: s == 0 || root.dual ? sides.height : 0px;
-                    view: s == 0 ? root.left : root.right;
-                    columns: root.columns;
-                    name-width: root.name-width;
-                    columns-width: root.columns-width;
-                    keys-focused: keys.has-focus;
-                    ctrl-held <=> root.ctrl-held;
-                    dual: root.dual;
-                    drag-data: root.drag-data;
-                    drag-image: root.drag-image;
-                    activate(i) => { root.activate(i); }
-                    row-released(i, r) => { root.row-released(i, r); }
-                    box-start(i, c, sh) => { root.box-start(i, c, sh); }
-                    box-moved(i, ax, ay, mx, my) => { root.box-moved(i, ax, ay, mx, my); }
-                    view-menu(i) => { root.view-menu(i); }
-                    sort-menu(i) => { root.sort-menu(i); }
-                    size-step(i, d) => { root.size-step(i, d); }
-                    size-slider-moved(i, v) => { root.size-slider-moved(i, v); }
-                    size-slider-released(i) => { root.size-slider-released(i); }
-                    tab-moved(i, from, gap) => { root.tab-moved(i, from, gap); }
-                    column-moved(c, gap) => { root.column-moved(c, gap); }
-                    list-measured(i, w) => { root.list-measured(i, w); }
-                    view-wheel(i, d) => { root.view-wheel(i, d); }
-                    grid-resized(i, w, h) => { root.grid-resized(i, w, h); }
-                    grid-range(i, first, count) => { root.grid-range(i, first, count); }
-                    box-ended(i, drawn) => { root.box-ended(i, drawn); }
-                    drag-started(i, kind, r, x, y, w, h) => { root.drag-started(i, kind, r, x, y, w, h); }
-                    drop-check(i, kind, r) => { return root.drop-check(i, kind, r); }
-                    dropped(i, kind, r) => { root.dropped(i, kind, r); }
-                    focus-keys => { keys.focus(); }
-                    show-menu(x, y) => { root.show-menu(x, y); }
-                    tree-resized(i, w) => { root.tree-resized(i, w); }
-                    row-pressed(i, r, c, sh) => { root.row-pressed(i, r, c, sh); }
-                    row-activated(i, r) => { root.row-activated(i, r); }
-                    row-menu(i, r) => { root.row-menu(i, r); }
-                    empty-pressed(i) => { root.empty-pressed(i); }
-                    tree-clicked(i, r) => { root.tree-clicked(i, r); }
-                    tree-toggled(i, r) => { root.tree-toggled(i, r); }
-                    tree-menu(i, r) => { return root.tree-menu(i, r); }
-                    sort-by(i, c) => { root.sort-by(i, c); }
-                    header-menu(i) => { root.header-menu(i); }
-                    column-resized(c, w) => { root.column-resized(c, w); }
-                    tab-clicked(i, t) => { root.tab-clicked(i, t); }
-                    tab-closed(i, t) => { root.tab-closed(i, t); }
-                    tab-new(i) => { root.tab-new(i); }
-                    tab-menu(i, t) => { root.tab-menu(i, t); }
-                    crumb-clicked(i, c) => { root.crumb-clicked(i, c); }
-                    address-entered(i, text) => { root.address-entered(i, text); }
-                    filter-edited(i, text) => { root.filter-edited(i, text); }
-                }
-                // the divider between the sides
-                if root.dual: Rectangle {
-                    x: sides.split-x;
-                    width: 5px;
-                    background: side-splitter.has-hover || side-splitter.pressed ? Palette.accent-background.with-alpha(0.3) : Palette.alternate-background;
-                    Rectangle { x: 2px; width: 1px; background: Palette.border; }
-                    side-splitter := TouchArea {
-                        mouse-cursor: col-resize;
-                        moved => {
-                            root.side-split = clamp((sides.split-x + self.mouse-x - self.pressed-x) / (sides.width - 5px), 0.2, 0.8);
+                    width: root.preview-docked ? main-area.split-x : main-area.width;
+                    height: main-area.height;
+                    property <length> split-x: (self.width - 5px) * root.side-split;
+                    // both always exist (the right one hidden without the second side): showing it
+                    // must not rebuild the left one, which would lose its scroll positions
+                    for s in 2: SidePane {
+                        side: s;
+                        visible: s == 0 || root.dual;
+                        x: s == 0 ? 0px : root.dual ? sides.split-x + 5px : sides.width;
+                        y: 0px;
+                        width: !root.dual ? (s == 0 ? sides.width : 0px) : s == 0 ? sides.split-x : sides.width - sides.split-x - 5px;
+                        height: s == 0 || root.dual ? sides.height : 0px;
+                        view: s == 0 ? root.left : root.right;
+                        columns: root.columns;
+                        name-width: root.name-width;
+                        columns-width: root.columns-width;
+                        keys-focused: keys.has-focus;
+                        ctrl-held <=> root.ctrl-held;
+                        dual: root.dual;
+                        drag-data: root.drag-data;
+                        drag-image: root.drag-image;
+                        activate(i) => { root.activate(i); }
+                        row-released(i, r) => { root.row-released(i, r); }
+                        box-start(i, c, sh) => { root.box-start(i, c, sh); }
+                        box-moved(i, ax, ay, mx, my) => { root.box-moved(i, ax, ay, mx, my); }
+                        view-menu(i) => { root.view-menu(i); }
+                        sort-menu(i) => { root.sort-menu(i); }
+                        size-step(i, d) => { root.size-step(i, d); }
+                        size-slider-moved(i, v) => { root.size-slider-moved(i, v); }
+                        size-slider-released(i) => { root.size-slider-released(i); }
+                        tab-moved(i, from, gap) => { root.tab-moved(i, from, gap); }
+                        column-moved(c, gap) => { root.column-moved(c, gap); }
+                        list-measured(i, w) => { root.list-measured(i, w); }
+                        view-wheel(i, d) => { root.view-wheel(i, d); }
+                        grid-resized(i, w, h) => { root.grid-resized(i, w, h); }
+                        grid-range(i, first, count) => { root.grid-range(i, first, count); }
+                        box-ended(i, drawn) => { root.box-ended(i, drawn); }
+                        drag-started(i, kind, r, x, y, w, h) => { root.drag-started(i, kind, r, x, y, w, h); }
+                        drop-check(i, kind, r) => { return root.drop-check(i, kind, r); }
+                        dropped(i, kind, r) => { root.dropped(i, kind, r); }
+                        focus-keys => { keys.focus(); }
+                        show-menu(x, y) => { root.show-menu(x, y); }
+                        tree-resized(i, w) => { root.tree-resized(i, w); }
+                        row-pressed(i, r, c, sh) => { root.row-pressed(i, r, c, sh); }
+                        row-activated(i, r) => { root.row-activated(i, r); }
+                        row-menu(i, r) => { root.row-menu(i, r); }
+                        empty-pressed(i) => { root.empty-pressed(i); }
+                        tree-clicked(i, r) => { root.tree-clicked(i, r); }
+                        tree-toggled(i, r) => { root.tree-toggled(i, r); }
+                        tree-menu(i, r) => { return root.tree-menu(i, r); }
+                        sort-by(i, c) => { root.sort-by(i, c); }
+                        header-menu(i) => { root.header-menu(i); }
+                        column-resized(c, w) => { root.column-resized(c, w); }
+                        tab-clicked(i, t) => { root.tab-clicked(i, t); }
+                        tab-closed(i, t) => { root.tab-closed(i, t); }
+                        tab-new(i) => { root.tab-new(i); }
+                        tab-menu(i, t) => { root.tab-menu(i, t); }
+                        crumb-clicked(i, c) => { root.crumb-clicked(i, c); }
+                        address-entered(i, text) => { root.address-entered(i, text); }
+                        filter-edited(i, text) => { root.filter-edited(i, text); }
+                    }
+                    // the divider between the sides
+                    if root.dual: Rectangle {
+                        x: sides.split-x;
+                        width: 5px;
+                        background: side-splitter.has-hover || side-splitter.pressed ? Palette.accent-background.with-alpha(0.3) : Palette.alternate-background;
+                        Rectangle { x: 2px; width: 1px; background: Palette.border; }
+                        side-splitter := TouchArea {
+                            mouse-cursor: col-resize;
+                            moved => {
+                                root.side-split = clamp((sides.split-x + self.mouse-x - self.pressed-x) / (sides.width - 5px), 0.2, 0.8);
+                            }
                         }
                     }
                 }
-            }
 
+                if root.preview-docked: Rectangle {
+                    x: main-area.split-x;
+                    width: 5px;
+                    background: preview-splitter.has-hover || preview-splitter.pressed ? Palette.accent-background.with-alpha(0.3) : Palette.alternate-background;
+                    Rectangle { x: 2px; width: 1px; background: Palette.border; }
+                    preview-splitter := TouchArea {
+                        mouse-cursor: col-resize;
+                        moved => {
+                            root.preview-split = clamp((main-area.split-x + self.mouse-x - self.pressed-x) / (main-area.width - 5px), 0.3, 0.9);
+                        }
+                    }
+                }
+                if root.preview-docked: PreviewPane {
+                    x: main-area.split-x + 5px;
+                    y: 0px;
+                    width: main-area.width - main-area.split-x - 5px;
+                    height: main-area.height;
+                    view: root.preview;
+                    zoom(d) => { root.preview-zoom(d); }
+                    fit => { root.preview-fit(); }
+                    actual => { root.preview-actual(); }
+                    dock => { root.preview-dock(); }
+                    close => { root.toggle-preview(); }
+                    resized(w, h) => { root.preview-resized(w, h); }
+                }
+            }
             // ---- the F-key bar: each button presses its key ----
             Rectangle { height: 1px; background: Palette.border; }
             Rectangle {
@@ -325,6 +378,7 @@ export component AppWindow inherits Window {
                     padding-right: 6px;
                     spacing: 4px;
                     FunctionKey { key: "F2"; label: "Rename"; clicked => { root.function-key(Key.F2); } }
+                    FunctionKey { key: "F3"; label: "Preview"; clicked => { root.function-key(Key.F3); } }
                     // copy and move go to the other side, so they need it shown
                     FunctionKey { key: "F5"; label: "Copy"; enabled: root.dual; clicked => { root.function-key(Key.F5); } }
                     FunctionKey { key: "F6"; label: "Move"; enabled: root.dual; clicked => { root.function-key(Key.F6); } }

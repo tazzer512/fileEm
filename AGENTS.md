@@ -30,11 +30,15 @@ remove or break it.
   `tree.rs`, `menu.rs`, `columns.rs`, `address.rs`, `properties.rs`, `view_mode.rs`, `grid.rs`,
   `thumbs.rs`) gets unit tests; UI behavior gets a scenario in `crates/fileem/tests/ui.rs`.
   Visual checks: `cargo test -p fileem --test snapshots -- --ignored`.
-- Image decoding (thumbnails, and the preview from stage 6 on) is `fileem_core::images`: one
+- Image decoding (thumbnails and the preview) is `fileem_core::images`: one
   `decode(path, max_side)` for common formats (`image` crate, EXIF orientation applied), PSD,
   camera raw, JPEG 2000 (`hayro-jpeg2000`) and Netpbm; never enlarged, `Ok(None)` for what it
   can't show. Test files are built by `images::fixtures` (feature `fixtures`, enabled for the
   UI tests) plus the OpenJPEG files in `crates/fileem-core/testdata/jpeg2000`.
+- The preview is `src/app/preview.rs` (loading, docking, session) over `src/preview.rs` (zoom)
+  and `fileem_core::fs::preview` (kinds, text); `ui/preview.slint` has one pane used both docked
+  and in `PreviewWindow`. Tests read it through `app::preview_state` / `app::preview_window` and
+  the window's `preview` property.
 - The release profile keeps `panic = "unwind"` on purpose (+2 MB): `images::decode` catches a
   decoder's panic on a damaged file, so it costs one thumbnail instead of the app. Don't switch
   back to `abort`.

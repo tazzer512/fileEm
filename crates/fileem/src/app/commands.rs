@@ -533,6 +533,7 @@ pub fn properties_windows(app: &Shared) -> Vec<PropertiesWindow> {
 
 /// Closes the windows that belong to this one (the main window is closing).
 pub fn close_windows(app: &Shared) {
+    super::preview::hide_window(app);
     let ids: Vec<u64> = app.borrow().properties.iter().map(|(i, ..)| *i).collect();
     for id in ids {
         close_properties(app, id);

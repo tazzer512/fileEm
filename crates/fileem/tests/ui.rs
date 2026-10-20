@@ -401,6 +401,14 @@ fn ui() {
     grid_menus_target_the_item_or_the_folder_and_type_ahead_works();
     images_show_as_thumbnails_in_the_big_icon_views();
     photoshop_raw_jpeg2000_and_netpbm_files_show_thumbnails();
+    // the preview (stage 6)
+    the_preview_is_switched_on_and_off_with_f3_the_toolbar_or_by_closing_it();
+    an_image_preview_zooms_fits_and_pans();
+    text_files_show_their_text_and_zoom_changes_the_font();
+    quick_selection_changes_only_load_the_last_one();
+    photoshop_raw_jpeg2000_and_netpbm_files_are_previewed();
+    the_preview_docks_into_the_main_window_and_floats_again();
+    the_preview_is_remembered_in_the_session();
 }
 
 fn lists_folders_first_with_status_and_no_hidden_files() {
@@ -1958,4 +1966,304 @@ fn photoshop_raw_jpeg2000_and_netpbm_files_show_thumbnails() {
     settle(&f);
     assert!(thumb(&f, "broken.jp2").is_none(), "a broken file keeps its icon");
     assert!(thumb(&f, "plain.txt").is_none());
+}
+
+// ---- the preview (stage 6) ----
+
+fn preview_on(f: &Fixture) {
+    if !app::preview_state(&f.app).0 {
+        f.key(Key::F3);
+    }
+    pump();
+}
+
+fn preview_floating(f: &Fixture) -> bool {
+    app::preview_window(&f.app).is_some_and(|w| w.window().is_visible())
+}
+
+/// A button of the preview (the floating window's, or the docked pane's).
+fn preview_button(f: &Fixture, label: &str) -> ElementHandle {
+    let found = match app::preview_window(&f.app).filter(|w| w.window().is_visible()) {
+        Some(w) => ElementHandle::find_by_accessible_label(&w, label).find(|e| e.accessible_role() == Some(i_slint_backend_testing::AccessibleRole::Button)),
+        None => ElementHandle::find_by_accessible_label(&f.ui, label).find(|e| e.accessible_role() == Some(i_slint_backend_testing::AccessibleRole::Button)),
+    };
+    found.unwrap_or_else(|| panic!("no preview button {label:?}"))
+}
+
+fn press_preview(f: &Fixture, label: &str) {
+    preview_button(f, label).invoke_accessible_default_action();
+    pump();
+}
+
+fn zoom_of(f: &Fixture) -> f64 {
+    app::preview_state(&f.app).3
+}
+
+/// Selects `name` alone in the list (the preview follows the selection).
+fn select_only(f: &Fixture, name: &str) {
+    f.click_at(&f.list_row(name));
+    pump();
+}
+
+/// A test folder with these files in it, opened.
+fn open_with_files(f: &Fixture, name: &str, files: &[(&str, &[u8])]) -> PathBuf {
+    let dir = f.dir.join(name);
+    fs::create_dir(&dir).unwrap();
+    for (n, data) in files {
+        fs::write(dir.join(n), data).unwrap();
+    }
+    f.ui.invoke_address_entered(0, dir.display().to_string().into());
+    wait_until(f, "the folder", |f| f.names().len() == files.len());
+    dir
+}
+
+fn the_preview_is_switched_on_and_off_with_f3_the_toolbar_or_by_closing_it() {
+    let f = open_window();
+    assert!(!app::preview_state(&f.app).0 && !preview_floating(&f), "off by default");
+    f.key(Key::F3);
+    assert!(preview_floating(&f), "F3 shows it");
+    assert!(f.ui.get_preview_on(), "the toolbar button follows");
+    f.key(Key::F3);
+    assert!(!preview_floating(&f) && !f.ui.get_preview_on(), "F3 hides it");
+    f.click("Preview (F3)");
+    pump();
+    assert!(preview_floating(&f), "the toolbar button shows it");
+    // Escape in its window, and closing the window, switch it off
+    let w = app::preview_window(&f.app).unwrap();
+    w.window().dispatch_event(WindowEvent::KeyPressed { text: Key::Escape.into() });
+    w.window().dispatch_event(WindowEvent::KeyReleased { text: Key::Escape.into() });
+    pump();
+    assert!(!app::preview_state(&f.app).0 && !preview_floating(&f), "Escape");
+    f.click("F3 Preview");
+    pump();
+    assert!(preview_floating(&f), "the F-key bar");
+    w.window().dispatch_event(WindowEvent::CloseRequested);
+    pump();
+    assert!(!app::preview_state(&f.app).0 && !f.ui.get_preview_on(), "closing switches it off");
+    // keys the preview window doesn't use go to the files
+    f.key(Key::F3);
+    w.window().dispatch_event(WindowEvent::KeyPressed { text: Key::Home.into() });
+    pump();
+    assert_eq!(f.current().as_deref(), Some("alpha"), "Home in the preview window moves in the list");
+    f.key(Key::F3);
+}
+
+fn an_image_preview_zooms_fits_and_pans() {
+    let f = open_window();
+    let mut png = Vec::new();
+    image::RgbImage::from_pixel(2000, 1500, image::Rgb([30, 120, 200]))
+        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .unwrap();
+    open_with_files(&f, "previmg", &[("big.png", &png), ("a.txt", b"x")]);
+    preview_on(&f);
+    select_only(&f, "big.png");
+    wait_until(&f, "the image", |f| f.ui.get_preview().mode == 1);
+    let v = f.ui.get_preview();
+    assert_eq!((v.image.size().width, v.image.size().height), (2000, 1500), "decoded at its size");
+    assert_eq!(v.title, "big.png");
+    let (_, _, shown, zoom, fitting) = app::preview_state(&f.app);
+    assert_eq!(shown.as_deref(), Some("big.png"));
+    assert!(fitting && zoom < 1.0, "starts fitted to the window: {zoom}");
+    assert!(v.image_w <= 560.0 && (v.image_w / v.image_h - 4.0 / 3.0).abs() < 0.01, "the whole image, same shape: {} × {}", v.image_w, v.image_h);
+
+    press_preview(&f, "Actual size (100%)");
+    assert_eq!(zoom_of(&f), 1.0);
+    assert_eq!(f.ui.get_preview().image_w, 2000.0);
+    press_preview(&f, "Zoom in");
+    assert_eq!(zoom_of(&f), 1.25);
+    press_preview(&f, "Zoom out");
+    press_preview(&f, "Zoom out");
+    assert!((zoom_of(&f) - 0.8).abs() < 1e-9);
+
+    press_preview(&f, "Actual size (100%)");
+    let w = app::preview_window(&f.app).unwrap();
+    let image_at = || ElementHandle::find_by_accessible_label(&w, "Previewed image").next().unwrap().absolute_position();
+    let start = image_at();
+    press_preview(&f, "Pan right");
+    press_preview(&f, "Pan down");
+    let moved = image_at();
+    assert!(moved.x < start.x && moved.y < start.y, "panned: {start:?} → {moved:?}");
+    press_preview(&f, "Pan left");
+    assert!(image_at().x > moved.x, "panned back left");
+    press_preview(&f, "Fit to window");
+    let (_, _, _, zoom, fitting) = app::preview_state(&f.app);
+    assert!(fitting && zoom < 1.0);
+
+    // Ctrl+wheel zooms
+    let at = LogicalPosition::new(image_at().x + 50.0, image_at().y + 50.0);
+    w.window().dispatch_event(WindowEvent::KeyPressed { text: Key::Control.into() });
+    w.window().dispatch_event(WindowEvent::PointerMoved { position: at });
+    w.window().dispatch_event(WindowEvent::PointerScrolled { position: at, delta_x: 0.0, delta_y: 40.0 });
+    w.window().dispatch_event(WindowEvent::KeyReleased { text: Key::Control.into() });
+    pump();
+    assert!((zoom_of(&f) - zoom * 1.25).abs() < 1e-9, "Ctrl+wheel up zooms in");
+    f.key(Key::F3);
+}
+
+fn text_files_show_their_text_and_zoom_changes_the_font() {
+    let f = open_window();
+    let dir = open_with_files(&f, "prevtxt", &[("notes.md", b"# Title\nsome notes"), ("data.bin", &[0, 1, 2, 3]), ("README", b"plain text without an extension")]);
+    fs::create_dir(dir.join("sub")).unwrap();
+    wait_until(&f, "sub listed", |f| f.names().len() == 4);
+    preview_on(&f);
+    select_only(&f, "notes.md");
+    wait_until(&f, "the text", |f| f.ui.get_preview().text == "# Title\nsome notes");
+    assert_eq!(f.ui.get_preview().font_size, 13.0);
+    press_preview(&f, "Zoom in");
+    assert_eq!(zoom_of(&f), 1.25);
+    assert_eq!(f.ui.get_preview().font_size, 16.25, "zoom scales the font");
+    press_preview(&f, "Fit to window");
+    assert_eq!(zoom_of(&f), 1.0, "fit: the normal size for text");
+
+    select_only(&f, "README");
+    wait_until(&f, "unknown files are checked for text", |f| f.ui.get_preview().text == "plain text without an extension");
+    select_only(&f, "data.bin");
+    wait_until(&f, "binary: no preview", |f| f.ui.get_preview().mode == 0 && f.ui.get_preview().message.contains("No preview available"));
+    assert!(f.ui.get_preview().message.starts_with("data.bin\nBIN Application\n4 bytes"), "{}", f.ui.get_preview().message);
+    assert!(!preview_button(&f, "Zoom in").accessible_enabled().unwrap_or(true), "no zooming a message");
+    select_only(&f, "sub");
+    wait_until(&f, "folder", |f| f.ui.get_preview().message == "sub\nFolder");
+
+    // long files: the start, and a note
+    fs::write(dir.join("long.txt"), "x".repeat(300 * 1024)).unwrap();
+    wait_until(&f, "listed", |f| f.names().len() == 5);
+    select_only(&f, "long.txt");
+    wait_until(&f, "the start of it", |f| f.ui.get_preview().mode == 2);
+    assert!(f.ui.get_preview().text.ends_with("… (only the first 256 KB is shown)"), "a note");
+    f.ui.window().dispatch_event(WindowEvent::KeyPressed { text: Key::Control.into() });
+    f.key("a");
+    f.ui.window().dispatch_event(WindowEvent::KeyReleased { text: Key::Control.into() });
+    pump();
+    settle(&f);
+    assert_eq!(app::preview_state(&f.app).2.as_deref(), Some("long.txt"), "the focused one of several selected");
+    f.key(Key::F3);
+}
+
+fn quick_selection_changes_only_load_the_last_one() {
+    let f = open_window();
+    open_with_files(&f, "prevquick", &[("one.txt", b"one"), ("two.txt", b"two"), ("three.txt", b"three")]);
+    preview_on(&f);
+    // arrow keys through the folder, faster than the settle time
+    f.key(Key::Home);
+    f.key(Key::DownArrow);
+    f.key(Key::DownArrow);
+    wait_until(&f, "the last one", |f| f.ui.get_preview().text == "two");
+    assert_eq!(f.current().as_deref(), Some("two.txt"));
+    settle(&f);
+    assert_eq!(f.ui.get_preview().title, "two.txt");
+    f.key(Key::F3);
+}
+
+fn photoshop_raw_jpeg2000_and_netpbm_files_are_previewed() {
+    use fileem_core::images::fixtures;
+    let f = open_window();
+    let planes = [vec![1, 2, 3], vec![4, 5, 6], vec![7, 8, 9]];
+    let psd = fixtures::psd(&fixtures::Psd { width: 3, height: 1, planes: &planes, ..fixtures::Psd::default() });
+    let cr2 = fixtures::cr2(&fixtures::jpeg(60, 40), &fixtures::jpeg(16, 12), 6);
+    let core = Path::new(env!("CARGO_MANIFEST_DIR")).join("../fileem-core/testdata/jpeg2000");
+    let j2k = fs::read(core.join("red-blue.j2k")).unwrap();
+    let dng = fixtures::tiff(false, 42, &[fixtures::Ifd::new().short(0x103, 1)]);
+    open_with_files(
+        &f,
+        "previmages",
+        &[
+            ("art.psd", &psd),
+            ("IMG_1.CR2", &cr2),
+            ("hdr.dng", &dng),
+            ("red-blue.j2k", &j2k),
+            ("broken.jp2", b"not an image"),
+            ("pixels.ppm", b"P6 2 1 255\n\x00\xff\x00\xff\xff\xff"),
+        ],
+    );
+    preview_on(&f);
+    let pixel = |f: &Fixture, x: usize, y: usize| {
+        let b = f.ui.get_preview().image.to_rgba8().unwrap();
+        let p = b.as_slice()[y * b.width() as usize + x];
+        [p.r, p.g, p.b, p.a]
+    };
+    let image = |f: &Fixture, name: &str| {
+        select_only(f, name);
+        wait_until(f, name, |f| f.ui.get_preview().title == name && f.ui.get_preview().mode != 0);
+        let size = f.ui.get_preview().image.size();
+        (size.width, size.height)
+    };
+    assert_eq!(image(&f, "art.psd"), (3, 1));
+    // the camera's JPEG turned upright (orientation 6: 90° clockwise): its red left half is on top
+    assert_eq!(image(&f, "IMG_1.CR2"), (40, 60));
+    assert!(pixel(&f, 20, 5)[0] > 200 && pixel(&f, 20, 55)[0] < 60, "top red, bottom black");
+    assert_eq!(image(&f, "red-blue.j2k"), (120, 80));
+    assert_eq!(pixel(&f, 10, 40), [255, 0, 0, 255], "left is red");
+    assert_eq!(pixel(&f, 110, 40), [0, 0, 255, 255], "right is blue");
+    assert_eq!(image(&f, "pixels.ppm"), (2, 1));
+    assert_eq!(pixel(&f, 0, 0), [0, 255, 0, 255]);
+    assert_eq!(pixel(&f, 1, 0), [255, 255, 255, 255]);
+
+    let message = |f: &Fixture, name: &str, says: &str| {
+        select_only(f, name);
+        wait_until(f, says, |f| f.ui.get_preview().title == name && f.ui.get_preview().message.contains(says));
+    };
+    message(&f, "hdr.dng", "no embedded preview");
+    message(&f, "broken.jp2", "Cannot show this image.");
+    f.key(Key::F3);
+}
+
+fn the_preview_docks_into_the_main_window_and_floats_again() {
+    let f = open_window();
+    open_with_files(&f, "prevdock", &[("notes.txt", b"docked text")]);
+    preview_on(&f);
+    let w = app::preview_window(&f.app).unwrap();
+    let close = |e: &ElementHandle| e.accessible_role() == Some(i_slint_backend_testing::AccessibleRole::Button);
+    assert!(ElementHandle::find_by_accessible_label(&w, "Close the preview (F3)").find(close).is_none(), "a floating window closes like a window");
+
+    press_preview(&f, "Dock in the main window");
+    assert!(f.ui.get_preview_docked() && !preview_floating(&f), "docked");
+    assert!(app::preview_state(&f.app).1);
+    select_only(&f, "notes.txt");
+    wait_until(&f, "previews while docked", |f| f.ui.get_preview().text == "docked text");
+    assert!(f.list_row("notes.txt").absolute_position().x < 1100.0 * 0.7, "the files make room");
+
+    f.key(Key::F3);
+    assert!(!f.ui.get_preview_docked() && !app::preview_state(&f.app).0, "F3 hides the docked pane");
+    f.key(Key::F3);
+    assert!(f.ui.get_preview_docked() && !preview_floating(&f), "and shows it docked again");
+    wait_until(&f, "the text again", |f| f.ui.get_preview().text == "docked text");
+
+    press_preview(&f, "Float in its own window");
+    assert!(preview_floating(&f) && !f.ui.get_preview_docked(), "floating again");
+    press_preview(&f, "Dock in the main window");
+    assert!(f.ui.get_preview_docked());
+    press_preview(&f, "Close the preview (F3)");
+    assert!(!f.ui.get_preview_docked() && !app::preview_state(&f.app).0, "the close button switches it off");
+}
+
+fn the_preview_is_remembered_in_the_session() {
+    let f = open_window();
+    preview_on(&f);
+    press_preview(&f, "Dock in the main window");
+    f.ui.set_preview_split(0.6);
+    app::collect_session(&f.app);
+    let s = app::session(&f.app);
+    assert!(s.get_bool("preview.enabled", false) && s.get_bool("preview.docked", false));
+    assert!((s.get_f64("split.preview", 0.0) - 0.6).abs() < 0.01);
+    let saved: Vec<(&str, String)> = ["preview.enabled", "preview.docked", "split.preview"].into_iter().map(|k| (k, s.get(k).unwrap())).collect();
+    drop(f);
+
+    let f = open_window_with(
+        |s, _| {
+            for (k, v) in &saved {
+                s.put(k, v);
+            }
+        },
+        true,
+    );
+    assert!(f.ui.get_preview_docked() && app::preview_state(&f.app).0, "restored docked");
+    assert!((f.ui.get_preview_split() - 0.6).abs() < 0.01);
+    assert!(!preview_floating(&f));
+    press_preview(&f, "Float in its own window");
+    assert!(preview_floating(&f));
+    let w = app::preview_window(&f.app).unwrap();
+    w.window().set_size(slint::LogicalSize::new(700.0, 500.0));
+    app::collect_session(&f.app);
+    assert_eq!(app::session(&f.app).get_int("preview.width", 0), 700);
+    f.key(Key::F3);
 }
