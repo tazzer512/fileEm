@@ -4,12 +4,19 @@ description = "fileEm's toolkit-free core: listing, file types, formatting and f
 version.workspace = true
 edition.workspace = true
 
+[features]
+# test files (JPEGs, camera raws, Photoshop documents) for the UI tests
+fixtures = []
+
 [dependencies]
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 filetime = "0.2"
 fs4 = { version = "0.13", features = ["sync"] }
 notify = { version = "8", default-features = false, features = ["macos_fsevent"] }
 zip = { version = "2", default-features = false, features = ["deflate"] }
+# thumbnails and previews: the common formats, and JPEG 2000 (pure Rust, decodes reduced resolutions)
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "bmp"] }
+hayro-jpeg2000 = { version = "0.4", default-features = false, features = ["std", "simd"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

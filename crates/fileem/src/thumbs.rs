@@ -3,8 +3,8 @@
 //! Kept in an LRU cache bounded by pixel count, keyed by file, size, date and load size (a
 //! changed file gets a new entry). Thumbnails load at a few fixed sizes ([`load_size`]) and the
 //! view scales them, so dragging the size slider doesn't decode every image again per pixel.
-//!
-//! Not yet: Photoshop, camera raw, JPEG 2000 and Netpbm files (their readers come with stage 5b).
+//! Decoding is `fileem_core::images` (the common formats, Photoshop, camera raws, JPEG 2000 and
+//! Netpbm).
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
@@ -12,22 +12,18 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::time::SystemTime;
 
 use fileem_core::fs::FileEntry;
+use fileem_core::images::{self, Format};
 use slint::{Image, Rgba8Pixel, SharedPixelBuffer};
 
 use crate::view_mode::MAX_ICON;
 
-/// Formats decoded here (the ones JavaFX decodes in the Java app).
-const SUPPORTED: [&str; 5] = ["png", "jpg", "jpeg", "gif", "bmp"];
-/// Bigger files are not worth decoding just for a thumbnail.
-const MAX_FILE_SIZE: u64 = 40 << 20;
 /// About 32 MB of decoded RGBA pixels.
 const PIXEL_BUDGET: u64 = 8 << 20;
 const WORKERS: usize = 2;
 
+/// Whether `e` is an image file of a size worth decoding for a thumbnail.
 pub fn supports(e: &FileEntry) -> bool {
-    !e.is_dir()
-        && e.size().is_some_and(|s| s > 0 && s <= MAX_FILE_SIZE)
-        && SUPPORTED.contains(&e.extension().to_ascii_lowercase().as_str())
+    !e.is_dir() && Format::of(e.extension()).is_some_and(|f| e.size().is_some_and(|s| s > 0 && s <= f.max_file_size()))
 }
 
 /// The size a thumbnail for `px` pixels is loaded at: the next multiple of 32, at least 48.
@@ -58,10 +54,8 @@ impl Key {
 /// Decodes the image at `path` and shrinks it to fit `load × load` (never enlarges); `None` when
 /// it can't be read.
 pub fn decode(path: &Path, load: u32) -> Option<SharedPixelBuffer<Rgba8Pixel>> {
-    let img = image::ImageReader::open(path).ok()?.with_guessed_format().ok()?.decode().ok()?;
-    let img = if img.width() > load || img.height() > load { img.thumbnail(load, load) } else { img };
-    let rgba = img.to_rgba8();
-    Some(SharedPixelBuffer::clone_from_slice(rgba.as_raw(), rgba.width(), rgba.height()))
+    let p = images::decode(path, load).ok()??;
+    Some(SharedPixelBuffer::clone_from_slice(&p.rgba, p.width, p.height))
 }
 
 type Decoded = (Key, Option<SharedPixelBuffer<Rgba8Pixel>>);
@@ -255,6 +249,16 @@ mod tests {
         assert!(!ok("empty.png"));
         assert!(!ok("notes.txt"));
         assert!(!ok("pics.png"), "a folder");
+        for name in ["art.psd", "IMG_1.CR2", "scan.jp2", "pixels.ppm"] {
+            fs::write(tmp.path().join(name), "x").unwrap();
+            assert!(ok(name), "{name}: our own readers");
+        }
+        // big files: the common formats decode all of it, raw previews read only a part
+        for name in ["big.png", "big.cr2"] {
+            fs::File::create(tmp.path().join(name)).unwrap().set_len(41 << 20).unwrap();
+        }
+        assert!(!ok("big.png"));
+        assert!(ok("big.cr2"));
     }
 
     #[test]

@@ -27,7 +27,9 @@ remove or break it.
   `MIGRATION.md`); "stage done" never means "feature-complete".
 - The Rust controller keeps all state (`crates/fileem/src/app.rs` + `app/`: `nav`, `commands`,
   `keys`, `dnd`, `views`); `.slint` files only
-  lay out and draw. Toolkit-free logic (`tab.rs`, `tree.rs`, `menu.rs`, `columns.rs`,
+  lay out and draw. Image decoding (thumbnails, later the preview) is `fileem_core::images`
+  (common formats, PSD, camera raw, JPEG 2000 via `hayro-jpeg2000`, Netpbm); its test files
+  are in `images::fixtures` (feature `fixtures` for the UI tests). Toolkit-free logic (`tab.rs`, `tree.rs`, `menu.rs`, `columns.rs`,
   `address.rs`, `properties.rs`, `view_mode.rs`, `grid.rs`, `thumbs.rs`) gets unit tests; UI behavior gets a scenario in
   `crates/fileem/tests/ui.rs`. Visual checks: `cargo test -p fileem --test snapshots -- --ignored`.
 

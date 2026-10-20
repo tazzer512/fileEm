@@ -382,6 +382,7 @@ fn ui() {
     a_file_dragged_onto_a_folder_in_the_grid_asks_then_moves();
     grid_menus_target_the_item_or_the_folder_and_type_ahead_works();
     images_show_as_thumbnails_in_the_big_icon_views();
+    photoshop_raw_jpeg2000_and_netpbm_files_show_thumbnails();
 }
 
 fn lists_folders_first_with_status_and_no_hidden_files() {
@@ -1678,4 +1679,49 @@ fn images_show_as_thumbnails_in_the_big_icon_views() {
     let listed = f.names();
     settle(&f);
     assert_eq!(f.names(), listed);
+}
+
+/// The Java tests `photoshopFilesShowAPreviewInTheIconViews`, `cameraRawFilesShowAPreviewInTheIconViews`
+/// and the thumbnail half of `jpeg2000AndPpmImagesArePreviewedAndShowAsThumbnails`.
+fn photoshop_raw_jpeg2000_and_netpbm_files_show_thumbnails() {
+    use fileem_core::images::fixtures;
+    let f = open_window();
+    let dir = f.dir.join("own");
+    fs::create_dir(&dir).unwrap();
+    // a 2 × 2 raw RGB Photoshop file: red
+    let planes = [vec![255; 4], vec![0; 4], vec![0; 4]];
+    fs::write(dir.join("art.psd"), fixtures::psd(&fixtures::Psd { width: 2, height: 2, planes: &planes, ..fixtures::Psd::default() })).unwrap();
+    fs::write(dir.join("IMG_2.CR2"), fixtures::cr2(&fixtures::jpeg(200, 150), &fixtures::jpeg(40, 30), 1)).unwrap();
+    let core = Path::new(env!("CARGO_MANIFEST_DIR")).join("../fileem-core/testdata/jpeg2000");
+    fs::copy(core.join("red-blue.j2k"), dir.join("red-blue.j2k")).unwrap();
+    // a 2 × 1 PPM: green then white
+    fs::write(dir.join("pixels.ppm"), b"P6 2 1 255\n\x00\xff\x00\xff\xff\xff").unwrap();
+    fs::write(dir.join("broken.jp2"), "not an image").unwrap();
+    fs::write(dir.join("plain.txt"), "x").unwrap();
+    f.ui.invoke_address_entered(0, dir.display().to_string().into());
+    wait_until(&f, "listed", |f| f.names().len() == 6);
+    set_view(&f, ViewMode::LargeIcons);
+    let thumb = |f: &Fixture, name: &str| {
+        let row = f.rows().into_iter().find(|r| r.name == name).unwrap();
+        row.thumb.to_rgba8().filter(|b| b.width() > 0)
+    };
+    let pixel = |b: &slint::SharedPixelBuffer<slint::Rgba8Pixel>, x: usize, y: usize| {
+        let p = b.as_slice()[y * b.width() as usize + x];
+        [p.r, p.g, p.b, p.a]
+    };
+    for name in ["art.psd", "IMG_2.CR2", "red-blue.j2k", "pixels.ppm"] {
+        wait_until(&f, name, |f| thumb(f, name).is_some());
+    }
+    assert_eq!(pixel(&thumb(&f, "art.psd").unwrap(), 1, 1), [255, 0, 0, 255], "the Photoshop file is red");
+    let raw = thumb(&f, "IMG_2.CR2").unwrap();
+    assert_eq!((raw.width(), raw.height()), (96, 72), "the raw's preview (not its tiny thumbnail), loaded at 96 px");
+    let j2k = thumb(&f, "red-blue.j2k").unwrap();
+    assert_eq!((j2k.width(), j2k.height()), (96, 64), "120 × 80, shrunk");
+    assert_eq!(pixel(&j2k, 10, 32), [255, 0, 0, 255], "left is red");
+    assert_eq!(pixel(&j2k, 86, 32), [0, 0, 255, 255], "right is blue");
+    let ppm = thumb(&f, "pixels.ppm").unwrap();
+    assert_eq!((pixel(&ppm, 0, 0), pixel(&ppm, 1, 0)), ([0, 255, 0, 255], [255, 255, 255, 255]));
+    settle(&f);
+    assert!(thumb(&f, "broken.jp2").is_none(), "a broken file keeps its icon");
+    assert!(thumb(&f, "plain.txt").is_none());
 }

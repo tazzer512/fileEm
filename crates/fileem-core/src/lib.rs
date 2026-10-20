@@ -4,6 +4,7 @@
 //! calls into this one, so its behavior can be tested without a window.
 
 pub mod fs;
+pub mod images;
 pub mod ops;
 pub mod session;
 pub mod util;

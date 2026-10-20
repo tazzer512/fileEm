@@ -22,14 +22,15 @@ slint = { version = "1", default-features = false, features = [
 ] }
 
 clipboard-rs = { version = "0.3", default-features = false }
-# thumbnails: the formats the Java app shows (Slint uses the same crate)
-image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "bmp"] }
 
 [build-dependencies]
 slint-build = "1"
 
 [dev-dependencies]
 tempfile = "3"
+# test images, and fileem-core's test files (camera raws, Photoshop documents)
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+fileem-core = { path = "../fileem-core", features = ["fixtures"] }
 i-slint-backend-testing = { version = "=1.18.1", features = ["renderer-software"] }
 # where the open menu popups sit (the testing backend reports positions inside a popup); same pin
 i-slint-core = "=1.18.1"

@@ -8,9 +8,9 @@ rules (tests, integrity, conventions) that apply to both versions.
 executable with a much smaller memory footprint (measured: Java ~360 MB, Rust ~105 MB with
 OpenGL, ~32 MB with the software renderer).
 
-**Status (2026-10-20)**: stages 0–4 and 5a (view modes, thumbnails of common formats) done on
+**Status (2026-10-20)**: stages 0–5 (5a view modes and thumbnails, 5b image readers) done on
 branch `rust`. The Java app in `src/` is still the complete, daily-use version; nothing was
-removed from it. Next: stage 5b (PSD, camera raw, JPEG 2000 and Netpbm readers).
+removed from it. Next: stage 6 (preview window).
 
 ## How to work a stage
 
@@ -212,18 +212,26 @@ are the Java sources, as a size hint.
   background area. Status messages ("Cannot open …") survive view updates.
 - Not yet: Ctrl+wheel over a Details list that can scroll works only on the names (the list's
   scroll area takes the wheel elsewhere); double-click on the size slider doesn't reset it;
-  List's column width is estimated from the name lengths, not measured; JPEG thumbnails ignore
-  EXIF orientation (as in Java).
+  List's column width is estimated from the name lengths, not measured; JPEG thumbnails ignored EXIF
+  orientation (as in Java; fixed in 5b).
 
-### Stage 5b: image readers
+### Stage 5b: image readers (done)
 
-- Readers to port into core: `PsdReader` 327 (`PsdReaderTest` 10), `RawReader` 550 + `RawImages`
-  (`RawReaderTest` 8, `RawFixtures`), `NetpbmReader` 160, JPEG 2000 (`ImageIoReader` 218,
-  `ImageIoReaderTest` 9): pick `jpeg2k`/OpenJPEG or a pure-Rust decoder; keep resolution-level
-  decoding for speed. Copy the test fixtures from `src/test/resources`. They plug into
-  `thumbs::decode` (and the preview of stage 6). UI tests: `photoshopFilesShowAPreviewInTheIconViews`,
-  `cameraRawFilesShowAPreviewInTheIconViews`, the thumbnail half of
-  `jpeg2000AndPpmImagesArePreviewedAndShowAsThumbnails`.
+- [x] `fileem_core::images`: `Format::of` (by extension) and `decode(path, max_side)` → RGBA
+  `Pixels` (+ full size), upright, never enlarged, `None` for what it can't show (a panicking
+  decoder included: release builds unwind now). Ported with their Java tests: `psd` (PsdReader:
+  modes, depths, RLE/raw, PSB, JPEG fallback, damaged files), `raw` (RawReader: CR2/NEF/RW2/RAF/CR3,
+  choice by size, orientation, damaged files; `fixtures` ports RawFixtures), `netpbm`
+  (NetpbmReader: P1–P6, 16-bit, hostile headers), `jpeg2000` (ImageIoReader's JPEG 2000 half with
+  the pure-Rust `hayro-jpeg2000`; its `target_resolution` decodes the smallest stored level at
+  least the asked size, like `J2KImageReadParam.setResolution`; same OpenJPEG fixtures in
+  `crates/fileem-core/testdata`). Thumbnails use it (`thumbs::supports` per format: 40 MB for
+  the common formats, 256 MB for JPEG 2000, 8 GB for the partial readers).
+- [x] UI test `photoshop_raw_jpeg2000_and_netpbm_files_show_thumbnails` (the Java PSD, raw and
+  JPEG 2000/PPM thumbnail cases, with pixel checks).
+- Beyond Java: JPEG (and other common format) thumbnails follow their EXIF orientation.
+- Not yet: the preview half of these readers (stage 6); stopping a decode that is no longer
+  wanted (Java interrupts it; here a huge Netpbm or JPEG 2000 finishes first).
 
 ### Stage 6: preview window
 
@@ -334,5 +342,7 @@ are the Java sources, as a size hint.
   a scrollable list can't.
 - `Slider.changed` fires only for the user's moves, not for `value` set from code; `released`
   is the moment to give the keyboard focus back.
+- `release` used `panic = "abort"`; a panic in a third-party decoder (damaged files) would kill
+  the app, so it unwinds now and `images::decode` catches it.
 - `notify`'s inotify backend reports opens and reads (`EventKind::Access`): filter them, or a
   watched folder refreshes itself every time it is listed.

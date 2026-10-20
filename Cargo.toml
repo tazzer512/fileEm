@@ -7,8 +7,9 @@ version = "0.1.0"
 edition = "2021"
 
 [profile.release]
-# One small native executable: link-time optimisation, no unwinding tables, stripped symbols.
+# One small native executable: link-time optimisation, stripped symbols.
 lto = true
 codegen-units = 1
-panic = "abort"
+# unwinding, so a decoder that panics on a damaged file costs one thumbnail, not the app
+panic = "unwind"
 strip = true

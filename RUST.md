@@ -12,7 +12,7 @@ Same machine (Linux, Wayland), resident memory of a running app showing a folder
 | | Memory (RSS) | Shipped as |
 |---|---|---|
 | Java (jpackage) | ~360 MB | 84 MB folder with a bundled runtime |
-| Rust, OpenGL renderer (default) | ~105 MB | one 17 MB executable |
+| Rust, OpenGL renderer (default) | ~105 MB | one 20 MB executable |
 | Rust, software renderer (`SLINT_BACKEND=winit-software`) | ~32 MB | same executable |
 
 Most of the OpenGL figure is the GPU driver. Whether to make the software renderer the default
@@ -40,7 +40,8 @@ the real Trash or launches programs (`FILEEM_NO_LAUNCH` records opens in `shell:
 ## Layout
 
 ```
-Cargo.toml                 workspace (release: LTO, stripped, panic=abort)
+Cargo.toml                 workspace (release: LTO, stripped, panics unwind: a decoder
+                           that panics on a damaged file costs one thumbnail)
 crates/fileem-core/        no UI: everything that touches the file system
   src/util/                natural_order, formats, fs_util, os, eta       (Java util)
   src/fs/                  entry (FileEntry), file_types, listing, places,
@@ -48,6 +49,11 @@ crates/fileem-core/        no UI: everything that touches the file system
   src/ops/                 file_operation (+ tests.rs: port of FileOperationTest), names
                            (rename / create, never replacing)
   src/session.rs           session.properties shared with the Java app (Java Session)
+  src/images/              image decoding for thumbnails/preview: mod (formats, decode, shrink,
+                           EXIF orientation), psd, raw, jpeg2000 (hayro-jpeg2000), netpbm;
+                           fixtures (test files; also for the UI tests via feature `fixtures`)
+                           (Java PsdReader, RawReader, ImageIoReader, NetpbmReader, RawImages)
+  testdata/jpeg2000/       JPEG 2000 test files (made with OpenJPEG; same as the Java tests')
 crates/fileem/             the app
   ui/app.slint             main window: toolbar, one or two sides, menu, dialogs (layout only)
   ui/side.slint            one side: tree, tab bar, address + view/sort buttons + filter,
@@ -63,7 +69,7 @@ crates/fileem/             the app
   src/app/views.rs         view modes, item sizes, grid geometry, keys, thumbnails (Java FileTab views)
   src/view_mode.rs         the eight views, sizes and steps, session format (Java ViewMode)
   src/grid.rs              grid layout: slots, lanes, hit tests, box hits, key moves (Java FileGrid)
-  src/thumbs.rs            thumbnail decoding threads and LRU cache (Java Thumbnails)
+  src/thumbs.rs            thumbnail threads and LRU cache over fileem_core::images (Java Thumbnails)
   src/tab.rs, tree.rs      tab (rows, filter, selection) and tree state, toolkit-free, unit-tested
   src/columns.rs           details columns: visible, widths, session (Java FileTable)
   src/address.rs           breadcrumbs and typed paths (Java AddressBar)
@@ -104,6 +110,9 @@ and `open_folder` help the view scenarios (`app::view_of`, `app::grid`, `app::ta
 - Folder-into-itself checks resolve links in both paths (Java resolved only the target's).
 - The tree shows a hidden folder while you are in it.
 - A session without `<side>.tabs` reads the consecutive `<side>.tab.N` keys.
+- Thumbnails of JPEGs (and the other common formats) are turned upright per EXIF, like raws.
+- JPEG 2000 is decoded with the pure-Rust `hayro-jpeg2000` (Java: jai-imageio); it needs the
+  whole file in memory, so thumbnails skip files over 256 MB.
 
 ## Port status
 
