@@ -538,6 +538,7 @@ fn wire(ui: &AppWindow, app: &Shared) {
     on!(on_toggle_hidden, app => | | nav::toggle_hidden(app));
     on!(on_toggle_dual, app => | | nav::toggle_dual(app));
     on!(on_toggle_bookmark, app => | | bookmarks::toggle(app));
+    on!(on_tool, app => |name| commands::tool(app, &name));
     on!(on_activate, app => |side| nav::set_active_side(app, side as usize));
     on!(on_tree_resized, app => |side, width| {
         app.borrow_mut().sides[side as usize].tree_width = width;

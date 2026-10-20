@@ -78,6 +78,21 @@ fn launch(app: &Shared, title: &str, start: impl FnOnce() -> std::io::Result<()>
 // ---- operations ----
 
 /// Asks, then moves the selection to the Trash or deletes it, with a row in the progress window.
+/// A toolbar button: what its key does, on the active tab's selection.
+pub fn tool(app: &Shared, name: &str) {
+    match name {
+        "new-folder" => new_folder(app),
+        "cut" => clipboard_put(app, true),
+        "copy" => clipboard_put(app, false),
+        "paste" => paste(app),
+        "rename" => rename_selection(app),
+        "delete" => delete_selection(app, false),
+        "properties" => properties_of_selection(app),
+        "new-tab" => super::nav::new_tab_here(app),
+        _ => {}
+    }
+}
+
 pub fn delete_selection(app: &Shared, permanent: bool) {
     let paths = app.borrow().tab().selected_paths();
     delete(app, paths, permanent);

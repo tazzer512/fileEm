@@ -356,7 +356,20 @@ are the Java sources, as a size hint.
   volume name (Java asks the file store; that needs `GetVolumeInformationW`), and the Windows
   and macOS code paths are untested (no such machine here; the Java ones are untested too).
 
+### Toolbar (done)
+
+- [x] The Java toolbar's buttons in its order and with its tooltips: back/forward/up/refresh,
+  new folder, cut, copy, paste, rename, delete, properties, new tab, bookmark; on the right the
+  view menu (the active side's tab), preview, second side, hidden files. Icons from the MDI font
+  the Java app uses. Each does what its key does (`commands::tool`), on the active side. The
+  window's minimum width is 600 px so every button stays reachable (Java folds buttons into an
+  overflow menu instead). Theme and About buttons come with stage 8.
+- UI tests: every button clicked once (dialogs asked, copy/cut + paste, properties, new tab);
+  the view menu changes only the active side's view.
+
 ### Stage 8: themes and about
+
+- Toolbar: the theme menu and light/dark button, the About button (Java's right end).
 
 - `Theme` 160 + theme CSS (`ThemeTest` 6): map the five families to Slint styles
   (fluent, cupertino, material, cosmic, …) plus our own palette globals; light/dark.

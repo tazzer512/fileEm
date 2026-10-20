@@ -336,6 +336,15 @@ pub fn switch_side(app: &Shared) {
 // ---- tabs ----
 
 /// Opens a tab for `dir` at the end of `side`'s tabs (selected with `select`); returns its id.
+/// Ctrl+T, the toolbar: a new tab on the active side, on the folder shown.
+pub fn new_tab_here(app: &Shared) {
+    let (side, dir) = {
+        let a = app.borrow();
+        (a.active, a.tab().dir().map(Path::to_path_buf))
+    };
+    new_tab(app, side, dir.unwrap_or_else(fileem_core::util::os::home), true);
+}
+
 pub fn new_tab(app: &Shared, side: usize, dir: PathBuf, select: bool) -> u64 {
     let id = {
         let mut a = app.borrow_mut();

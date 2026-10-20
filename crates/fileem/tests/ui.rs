@@ -284,6 +284,13 @@ impl Fixture {
         self.release(to);
     }
 
+    /// A button of the main toolbar (a tab's bar may have one with the same tooltip).
+    fn tool(&self, label: &str) -> ElementHandle {
+        ElementHandle::find_by_accessible_label(&self.ui, label)
+            .find(|e| e.accessible_role() == Some(i_slint_backend_testing::AccessibleRole::Button) && e.absolute_position().y < 42.0)
+            .unwrap_or_else(|| panic!("no toolbar button {label:?}"))
+    }
+
     fn double_click(&self, label: &str) {
         let e = self.element(label);
         self.click_at(&e);
@@ -397,6 +404,8 @@ fn ui() {
         showing_the_second_side_keeps_the_left_scroll_position;
         // view modes (stage 5)
         the_view_button_and_menus_switch_views_and_keep_the_selection;
+        the_toolbar_buttons_do_what_their_keys_do;
+        the_toolbar_view_menu_switches_the_active_sides_view;
         the_sort_button_sorts_and_shows_the_direction;
         ctrl_shift_digits_and_ctrl_wheel_switch_the_view;
         size_controls_resize_within_limits_and_each_view_keeps_its_size;
@@ -1627,7 +1636,11 @@ fn grid_names(f: &Fixture) -> Vec<String> {
 fn the_view_button_and_menus_switch_views_and_keep_the_selection() {
     let f = open_window();
     f.click("notes.txt");
-    f.click("View (Ctrl+Shift+1…8, Ctrl+wheel)");
+    let tab_button = ElementHandle::find_by_accessible_label(&f.ui, "View (Ctrl+Shift+1…8, Ctrl+wheel)")
+        .find(|e| e.absolute_position().y > 42.0)
+        .expect("the tab's view button");
+    f.click_at(&tab_button);
+    pump();
     for title in ["Extra large icons  (Ctrl+Shift+1)", "Details  (Ctrl+Shift+6)", "Content  (Ctrl+Shift+8)"] {
         assert!(f.menu_item(title).is_some(), "{title}");
     }
@@ -1651,6 +1664,73 @@ fn the_view_button_and_menus_switch_views_and_keep_the_selection() {
     assert!(f.menu_item("Content  (Ctrl+Shift+8)").is_some());
     f.pick("Small icons  (Ctrl+Shift+4)");
     assert_eq!(view(&f), ViewMode::SmallIcons);
+}
+
+fn the_toolbar_buttons_do_what_their_keys_do() {
+    let f = open_window();
+    let press = |label: &str| {
+        f.click_at(&f.tool(label));
+        pump();
+    };
+    // new folder, rename and delete ask first (cancelled here)
+    press("New folder (F7)");
+    assert_eq!(f.ui.get_dialog_title(), "New folder");
+    f.key(Key::Escape);
+    f.click("notes.txt");
+    press("Rename (F2)");
+    assert_eq!((f.ui.get_dialog_title().as_str(), f.ui.get_dialog_text().as_str()), ("Rename", "notes.txt"));
+    f.key(Key::Escape);
+    press("Delete (Del)");
+    assert_eq!(f.ui.get_dialog_title(), "Move to Trash");
+    f.key(Key::Escape);
+    assert!(!dialog_open(&f));
+
+    // copy and paste, cut and paste
+    press("Copy (Ctrl+C)");
+    f.double_click("alpha");
+    wait_until(&f, "alpha", |f| f.address() == f.dir.join("alpha"));
+    press("Paste (Ctrl+V)");
+    wait_until(&f, "the pasted copy", |f| f.names() == ["inside.txt", "notes.txt"]);
+    assert!(f.dir.join("notes.txt").exists(), "a copy keeps the original");
+    f.click("inside.txt");
+    press("Cut (Ctrl+X)");
+    assert!(f.dir.join("alpha/inside.txt").exists(), "cutting alone moves nothing");
+    f.key(Key::Backspace);
+    wait_until(&f, "back up", |f| f.address() == f.dir);
+    f.double_click("beta");
+    wait_until(&f, "beta", |f| f.address() == f.dir.join("beta"));
+    press("Paste (Ctrl+V)");
+    wait_until(&f, "the moved file", |f| f.names() == ["inside.txt"]);
+    assert!(!f.dir.join("alpha/inside.txt").exists());
+
+    // properties of the selection
+    f.click("inside.txt");
+    press("Properties (Alt+Enter)");
+    wait_until(&f, "the properties window", |f| app::properties_windows(&f.app).len() == 1);
+    assert_eq!(app::properties_windows(&f.app)[0].get_window_title(), "inside.txt Properties");
+    app::close_windows(&f.app);
+
+    // a new tab on the folder shown
+    press("New tab (Ctrl+T)");
+    wait_until(&f, "a second tab", |f| app::tabs(&f.app, 0).0.len() == 2);
+    assert_eq!(app::tabs(&f.app, 0).1, 1, "the new tab is selected");
+    assert_eq!(tab_dirs(&f, 0), [f.dir.join("beta"), f.dir.join("beta")]);
+    settle(&f);
+}
+
+fn the_toolbar_view_menu_switches_the_active_sides_view() {
+    let f = open_window();
+    f.key(Key::F9);
+    f.ui.invoke_address_entered(1, f.dir.join("alpha").display().to_string().into());
+    wait_until(&f, "the right side in alpha", |f| f.ui.get_right().address == f.dir.join("alpha").display().to_string());
+    assert_eq!(app::active_side(&f.app), 1);
+    f.click_at(&f.tool("View (Ctrl+Shift+1…8, Ctrl+wheel)"));
+    pump();
+    assert!(f.menu_item("Content  (Ctrl+Shift+8)").is_some(), "the view menu is open");
+    f.pick("Tiles  (Ctrl+Shift+7)");
+    assert_eq!(app::view_of(&f.app, 1).0, ViewMode::Tiles, "the active side changes");
+    assert_eq!(view(&f), ViewMode::Details, "the other side keeps its view");
+    assert_eq!(f.ui.get_right().view_mode, ViewMode::Tiles.index() as i32, "the tab's button shows it");
 }
 
 fn the_sort_button_sorts_and_shows_the_direction() {

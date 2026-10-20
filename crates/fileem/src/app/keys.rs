@@ -25,11 +25,7 @@ pub fn key(app: &Shared, text: &str, ctrl: bool, alt: bool, shift: bool) -> bool
     } else if ctrl && !alt && (c == '-' || c == '_') {
         views::resize(app, side, -1);
     } else if letter('t') {
-        let (side, dir) = {
-            let a = app.borrow();
-            (a.active, a.tab().dir().map(Path::to_path_buf))
-        };
-        nav::new_tab(app, side, dir.unwrap_or_else(fileem_core::util::os::home), true);
+        nav::new_tab_here(app);
     } else if letter('w') {
         let (side, index) = (app.borrow().active, app.borrow().side().active);
         nav::close_tab(app, side, index);

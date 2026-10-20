@@ -3,7 +3,7 @@
 // and draw.
 
 import { Button, LineEdit, ListView, Palette } from "std-widgets.slint";
-import { FunctionKey, Icons, MenuRow, ToolButton } from "icons.slint";
+import { FunctionKey, Icons, MenuRow, ToolButton, ToolSeparator } from "icons.slint";
 export { MenuRow } from "icons.slint";
 export { SearchWindow, SearchRow } from "search.slint";
 export { BookmarksWindow, BookmarkRow } from "bookmarks.slint";
@@ -20,7 +20,8 @@ export component AppWindow inherits Window {
     title: window-title;
     preferred-width: 1100px;
     preferred-height: 700px;
-    min-width: 480px;
+    // every toolbar button stays reachable
+    min-width: 600px;
     min-height: 320px;
     background: Palette.background;
     default-font-size: 13px;
@@ -52,6 +53,9 @@ export component AppWindow inherits Window {
     callback toggle-hidden();
     callback toggle-dual();
     callback toggle-bookmark();
+    // a toolbar button that does what a key does: "new-folder", "cut", "copy", "paste",
+    // "rename", "delete", "properties", "new-tab"
+    callback tool(string);
     // ---- from the sides (first argument: 0 left, 1 right) ----
     callback activate(int);
     callback tree-resized(int, length);
@@ -236,6 +240,16 @@ export component AppWindow inherits Window {
                         tooltip: "Refresh (Ctrl+R)";
                         clicked => { root.refresh(); }
                     }
+                    ToolSeparator { }
+                    ToolButton { icon: Icons.folder-plus; tooltip: "New folder (F7)"; clicked => { root.tool("new-folder"); } }
+                    ToolButton { icon: Icons.cut; tooltip: "Cut (Ctrl+X)"; clicked => { root.tool("cut"); } }
+                    ToolButton { icon: Icons.copy; tooltip: "Copy (Ctrl+C)"; clicked => { root.tool("copy"); } }
+                    ToolButton { icon: Icons.paste; tooltip: "Paste (Ctrl+V)"; clicked => { root.tool("paste"); } }
+                    ToolButton { icon: Icons.rename; tooltip: "Rename (F2)"; clicked => { root.tool("rename"); } }
+                    ToolButton { icon: Icons.delete; tooltip: "Delete (Del)"; clicked => { root.tool("delete"); } }
+                    ToolButton { icon: Icons.properties; tooltip: "Properties (Alt+Enter)"; clicked => { root.tool("properties"); } }
+                    ToolSeparator { }
+                    ToolButton { icon: Icons.tab-plus; tooltip: "New tab (Ctrl+T)"; clicked => { root.tool("new-tab"); } }
                     ToolButton {
                         icon: root.bookmarked ? Icons.bookmark : Icons.bookmark-outline;
                         tooltip: root.bookmarked ? "Remove bookmark (Ctrl+D)" : "Bookmark this folder (Ctrl+D)";
@@ -243,6 +257,14 @@ export component AppWindow inherits Window {
                         clicked => { root.toggle-bookmark(); }
                     }
                     Rectangle { horizontal-stretch: 1; }
+                    ToolButton {
+                        icon: Icons.view-menu;
+                        tooltip: "View (Ctrl+Shift+1…8, Ctrl+wheel)";
+                        clicked => {
+                            root.view-menu(root.active-side);
+                            root.show-menu(self.absolute-position.x, self.absolute-position.y + self.height);
+                        }
+                    }
                     ToolButton {
                         icon: Icons.preview;
                         tooltip: "Preview (F3)";
