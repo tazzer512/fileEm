@@ -82,6 +82,8 @@ export component AppWindow inherits Window {
     callback size-step(int, int);
     callback size-slider-moved(int, float);
     callback size-slider-released(int);
+    callback tab-moved(int, int, int);
+    callback column-moved(int, int);
     callback list-measured(int, length);
     callback view-wheel(int, length);
     callback grid-resized(int, length, length);
@@ -90,7 +92,8 @@ export component AppWindow inherits Window {
     callback thumbs-ready();
     // ---- drag & drop inside the window (see SidePane) ----
     in property <data-transfer> drag-data;
-    callback drag-started(int, int, int);
+    in property <image> drag-image;
+    callback drag-started(int, int, int, length, length, length, length);
     callback drop-check(int, int, int) -> int;
     callback dropped(int, int, int);
     // the directory watcher saw changes in a tab's folder (token: which watch)
@@ -147,6 +150,18 @@ export component AppWindow inherits Window {
         keys.focus();
         root.key(key, false, false, false);
     }
+
+    // A menu takes the keys while it is open; they come back however it closes. Slint tells
+    // nothing else about a menu closing.
+    property <bool> keys-focus: keys.has-focus;
+    changed keys-focus => {
+        if (self.keys-focus) {
+            root.menu-closed();
+        }
+    }
+    callback menu-closed();
+    // a termination signal: save and stop operations (main.rs quits afterwards)
+    callback terminate();
 
     keys := FocusScope {
         // seen before the focused field gets them, wherever the focus is
@@ -244,6 +259,7 @@ export component AppWindow inherits Window {
                     ctrl-held <=> root.ctrl-held;
                     dual: root.dual;
                     drag-data: root.drag-data;
+                    drag-image: root.drag-image;
                     activate(i) => { root.activate(i); }
                     row-released(i, r) => { root.row-released(i, r); }
                     box-start(i, c, sh) => { root.box-start(i, c, sh); }
@@ -253,12 +269,14 @@ export component AppWindow inherits Window {
                     size-step(i, d) => { root.size-step(i, d); }
                     size-slider-moved(i, v) => { root.size-slider-moved(i, v); }
                     size-slider-released(i) => { root.size-slider-released(i); }
+                    tab-moved(i, from, gap) => { root.tab-moved(i, from, gap); }
+                    column-moved(c, gap) => { root.column-moved(c, gap); }
                     list-measured(i, w) => { root.list-measured(i, w); }
                     view-wheel(i, d) => { root.view-wheel(i, d); }
                     grid-resized(i, w, h) => { root.grid-resized(i, w, h); }
                     grid-range(i, first, count) => { root.grid-range(i, first, count); }
                     box-ended(i, drawn) => { root.box-ended(i, drawn); }
-                    drag-started(i, kind, r) => { root.drag-started(i, kind, r); }
+                    drag-started(i, kind, r, x, y, w, h) => { root.drag-started(i, kind, r, x, y, w, h); }
                     drop-check(i, kind, r) => { return root.drop-check(i, kind, r); }
                     dropped(i, kind, r) => { root.dropped(i, kind, r); }
                     focus-keys => { keys.focus(); }

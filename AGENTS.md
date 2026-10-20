@@ -39,7 +39,10 @@ remove or break it.
   decoder's panic on a damaged file, so it costs one thumbnail instead of the app. Don't switch
   back to `abort`.
 - UI tests read thumbnails at the view's load size (Large icons load at 96 px), not the
-  icon size shown; check pixels through `thumb.to_rgba8()`.
+  icon size shown; check pixels through `thumb.to_rgba8()`. They run with the software
+  renderer, so `take_snapshot` (drag images) works headless.
+- Slint `changed` handlers run between event-loop iterations, never in the middle of an event:
+  don't read a value a handler maintains in the release of a drag (see MIGRATION.md's lessons).
 
 ## Tests are mandatory
 

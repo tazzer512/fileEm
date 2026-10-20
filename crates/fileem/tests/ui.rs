@@ -317,7 +317,13 @@ fn settle(f: &Fixture) {
 #[test]
 fn ui() {
     std::env::set_var("FILEEM_NO_LAUNCH", "1");
-    i_slint_backend_testing::init_integration_test_with_system_time();
+    // the testing backend with a real rasterizer: drags take a snapshot for their picture
+    slint::platform::set_platform(Box::new(i_slint_backend_testing::TestingBackend::new(i_slint_backend_testing::TestingBackendOptions {
+        mock_time: false,
+        threading: true,
+        renderer_name: Some("software".into()),
+    })))
+    .unwrap();
 
     // each scenario gets a fresh window and folder
     lists_folders_first_with_status_and_no_hidden_files();
@@ -344,6 +350,7 @@ fn ui() {
     a_slow_operation_gets_a_row_that_pauses_and_cancels();
     operation_errors_are_listed_afterwards();
     closing_with_operations_running_asks_first();
+    a_termination_signal_saves_and_stops_operations();
     copy_and_paste_into_a_subfolder();
     cut_and_paste_moves_once();
     pasting_into_the_same_folder_makes_a_copy();
@@ -357,6 +364,7 @@ fn ui() {
     paste_into_a_folder_from_its_menu();
     ctrl_t_opens_and_ctrl_w_closes_tabs_but_never_the_last();
     the_tab_bar_switches_adds_and_closes_tabs();
+    tabs_and_columns_are_dragged_into_another_order();
     f9_opens_the_second_side_and_tab_switches();
     f5_copies_and_f6_moves_to_the_other_side();
     copy_and_move_to_the_other_side_need_the_second_side();
@@ -805,6 +813,22 @@ fn closing_with_operations_running_asks_first() {
     assert!(app::close_requested(&f.app), "nothing running: closes right away");
 }
 
+/// What logging out or `kill` does (main.rs runs it for SIGTERM, SIGHUP and SIGINT, then quits).
+fn a_termination_signal_saves_and_stops_operations() {
+    let f = open_window();
+    let h = blocking_copy(&f);
+    f.chord(&[Key::Control], "h");
+    let file = app::session(&f.app).file().to_path_buf();
+    assert!(!Session::load(&file).get_bool("showHidden", false), "not saved yet");
+    f.ui.invoke_terminate();
+    assert!(h.is_cancelled() && h.is_done(), "cancelled and waited for");
+    assert!(Session::load(&file).get_bool("showHidden", false), "saved");
+    assert!(!dialog_open(&f), "no question: there is nobody to answer it");
+    assert_eq!(fs::read_to_string(f.dir.join("alpha/notes.txt")).unwrap(), "old", "the existing file is intact");
+    assert!(no_temp_files(&f.dir.join("alpha")));
+    settle(&f);
+}
+
 // ---- clipboard ----
 
 fn copy_and_paste_into_a_subfolder() {
@@ -891,6 +915,26 @@ fn right_click_in_the_tree_opens_a_menu_without_navigating() {
     wait_until(&f, "the tree marks the current folder", |f| f.tree().iter().any(|r| r.current));
     settle(&f);
     f.scroll_tree_to_top();
+    // the right-clicked row is outlined while its menu is open, however the menu closes
+    let home_row = f.tree().iter().position(|r| r.name == "Home").unwrap() as i32;
+    f.right_click(&f.tree_row("Home"));
+    settle(&f);
+    assert_eq!(f.view().tree_menu_row, home_row, "outlined");
+    f.key(Key::Escape);
+    wait_until(&f, "Escape: no outline", |f| f.view().tree_menu_row == -1);
+    f.right_click(&f.tree_row("Home"));
+    settle(&f);
+    assert_eq!(f.view().tree_menu_row, home_row);
+    f.click_point(LogicalPosition::new(700.0, 650.0));
+    wait_until(&f, "a click elsewhere: no outline", |f| f.view().tree_menu_row == -1);
+    // the address field had the keys: they come to the list for the menu, and so does the outline's end
+    f.chord(&[Key::Control], "l");
+    pump();
+    f.right_click(&f.tree_row("Home"));
+    settle(&f);
+    assert_eq!(f.view().tree_menu_row, home_row);
+    f.key(Key::Escape);
+    wait_until(&f, "no outline", |f| f.view().tree_menu_row == -1);
     f.right_click(&f.tree_row("Home"));
     settle(&f);
     assert_eq!(f.address(), f.dir, "a right-click doesn't navigate");
@@ -900,6 +944,7 @@ fn right_click_in_the_tree_opens_a_menu_without_navigating() {
     let wanted = format!("terminal {}", home.display());
     wait_until(&f, "the terminal request", |_| shell::launched().contains(&wanted));
     assert_eq!(f.address(), f.dir);
+    wait_until(&f, "picked: no outline", |f| f.view().tree_menu_row == -1);
 }
 
 fn alt_enter_and_the_menu_show_properties() {
@@ -1003,6 +1048,57 @@ fn the_tab_bar_switches_adds_and_closes_tabs() {
     f.pick("Close other tabs");
     wait_until(&f, "one tab", |f| app::tabs(&f.app, 0).0.len() == 1);
     assert_eq!(f.address(), f.dir);
+}
+
+fn tabs_and_columns_are_dragged_into_another_order() {
+    let f = open_window();
+    for (i, name) in ["alpha", "beta"].into_iter().enumerate() {
+        f.chord(&[Key::Control], "t");
+        wait_until(&f, "a new tab", |f| app::tabs(&f.app, 0).0.len() == i + 2);
+        f.ui.invoke_address_entered(0, f.dir.join(name).display().to_string().into());
+        wait_until(&f, name, |f| f.address() == f.dir.join(name));
+    }
+    let titles = |f: &Fixture| f.view().tabs.iter().map(|t| t.title.to_string()).collect::<Vec<_>>();
+    assert_eq!(titles(&f), ["files", "alpha", "beta"]);
+    let at = |e: &ElementHandle, fx: f32| {
+        let (p, s) = (e.absolute_position(), e.size());
+        LogicalPosition::new(p.x + s.width * fx, p.y + s.height / 2.0)
+    };
+
+    // beta onto the left half of files: the front; the shown tab stays shown
+    f.drag_drop(at(&f.tab_button("beta", 0), 0.5), at(&f.tab_button("files", 0), 0.25));
+    assert_eq!(titles(&f), ["beta", "files", "alpha"]);
+    assert_eq!(app::tabs(&f.app, 0).1, 0, "beta is still the shown tab");
+    assert_eq!(f.address(), f.dir.join("beta"));
+    // files far past the last tab: the end
+    let end = at(&f.tab_button("alpha", 0), 0.5);
+    f.drag_drop(at(&f.tab_button("files", 0), 0.5), LogicalPosition::new(end.x + 400.0, end.y));
+    assert_eq!(titles(&f), ["beta", "alpha", "files"]);
+    assert_eq!(tab_dirs(&f, 0), [f.dir.join("beta"), f.dir.join("alpha"), f.dir.clone()]);
+    // a press that hardly moves is a click: it selects, nothing moves
+    let alpha = at(&f.tab_button("alpha", 0), 0.5);
+    f.drag_drop(alpha, LogicalPosition::new(alpha.x + 3.0, alpha.y));
+    assert_eq!(titles(&f), ["beta", "alpha", "files"]);
+    wait_until(&f, "alpha shown", |f| f.address() == f.dir.join("alpha"));
+
+    // columns: Date modified onto the left half of Size goes right after Name; the order is saved
+    let header = |f: &Fixture, title: &str| {
+        ElementHandle::find_by_accessible_label(&f.ui, title)
+            .find(|e| e.accessible_role() == Some(i_slint_backend_testing::AccessibleRole::Button) && e.size().width > 0.0)
+            .unwrap_or_else(|| panic!("no header {title:?}"))
+    };
+    let columns = |f: &Fixture| f.ui.get_columns().iter().map(|c| c.title.to_string()).collect::<Vec<_>>();
+    assert_eq!(columns(&f), ["Size", "Type", "Date modified"]);
+    let sort = f.view().sort_column;
+    f.drag_drop(at(&header(&f, "Date modified"), 0.5), at(&header(&f, "Size"), 0.2));
+    assert_eq!(columns(&f), ["Date modified", "Size", "Type"]);
+    assert_eq!(f.view().sort_column, sort, "a drag doesn't sort");
+    f.drag_drop(at(&header(&f, "Size"), 0.5), at(&header(&f, "Name"), 0.5));
+    assert_eq!(columns(&f), ["Size", "Date modified", "Type"], "dropped on Name: right after it");
+    f.drag_drop(at(&header(&f, "Size"), 0.5), LogicalPosition::new(1090.0, at(&header(&f, "Size"), 0.5).y));
+    assert_eq!(columns(&f), ["Date modified", "Type", "Size"], "past the last: the end");
+    app::collect_session(&f.app);
+    assert!(app::session(&f.app).get("columns.order").unwrap().starts_with("name,modified,type,size,"));
 }
 
 fn f9_opens_the_second_side_and_tab_switches() {
@@ -1242,7 +1338,15 @@ fn answer_drop(f: &Fixture, button: &str) {
 fn dragging_a_file_onto_a_folder_row_asks_then_moves() {
     let f = open_window();
     f.click("notes.txt");
-    f.drag_drop(f.on_name("notes.txt"), f.center(&f.list_row("alpha")));
+    // while dragging, the row's icon and name follow the mouse
+    f.drag_to(f.on_name("notes.txt"), f.center(&f.list_row("alpha")), &[]);
+    pump();
+    let picture = f.ui.get_drag_image();
+    let size = picture.size();
+    assert!(size.height == 24 && size.width > 60 && size.width < 200, "the row's icon and name: {size:?}");
+    let px = picture.to_rgba8().unwrap();
+    assert!(px.as_slice().iter().any(|p| p.a > 0 && p.a < 255), "faded");
+    f.release(f.center(&f.list_row("alpha")));
     wait_until(&f, "the question", dialog_open);
     assert!(f.ui.get_dialog_message().contains("Move \u{201c}notes.txt\u{201d} to \u{201c}alpha\u{201d}?"), "{}", f.ui.get_dialog_message());
     answer_drop(&f, "Move");

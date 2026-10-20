@@ -8,6 +8,16 @@ use fileem_core::fs::listing::{self, SortKey};
 use fileem_core::fs::FileEntry;
 use fileem_core::util::{formats, fs_util};
 
+/// Where an item at `from` ends up when it is dropped into `gap` (0: before the first item, `n`:
+/// after the last); `None` when that leaves it where it is.
+pub fn reordered(from: usize, gap: usize) -> Option<usize> {
+    if gap == from || gap == from + 1 {
+        None
+    } else {
+        Some(if gap > from { gap - 1 } else { gap })
+    }
+}
+
 /// How a finished listing changes the history.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Nav {
@@ -424,6 +434,17 @@ impl Tab {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_dragged_item_lands_in_the_gap_it_was_dropped_into() {
+        // a b c d: gaps 0 … 4
+        assert_eq!(reordered(0, 0), None, "before itself");
+        assert_eq!(reordered(0, 1), None, "after itself");
+        assert_eq!(reordered(0, 4), Some(3), "a to the end");
+        assert_eq!(reordered(3, 0), Some(0), "d to the front");
+        assert_eq!(reordered(1, 3), Some(2), "b between c and d");
+        assert_eq!(reordered(2, 1), Some(1), "c between a and b");
+    }
     use std::fs;
     use std::sync::atomic::AtomicBool;
 

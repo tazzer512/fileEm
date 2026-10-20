@@ -59,8 +59,11 @@ are the Java sources, as a size hint.
   reader/writer, checked against real `Properties.load`; restore of hidden, sort, tree width,
   window size/maximized and the selected tab's folder with nearest-parent fallback; 2 s
   autosave + save on close. Only keys the Rust app knows are written, so other tabs, columns,
-  theme etc. survive for the Java app. Not ported: the JVM shutdown hook (SIGTERM/logout save);
-  the 2 s autosave covers most of it.) Original notes: (`Session` 153, `Autosave` 74; `SessionTest` 8): same file and keys
+  theme etc. survive for the Java app. The JVM shutdown hook's part came later: SIGTERM,
+  SIGHUP and SIGINT save the session, cancel operations and wait up to 3 s for their cleanup,
+  then quit (`signals.rs`: blocked in `main` before any thread starts, one thread `sigwait`s; a
+  hung UI thread or a second signal still ends the process after 5 s). Unix only; on Windows
+  the 2 s autosave covers a logout.) Original notes: (`Session` 153, `Autosave` 74; `SessionTest` 8): same file and keys
   in `OsUtil.configDir()` (`window.*`, `left.*`, `columns.*`, `sort.*`, `showHidden`, …) so
   both versions share settings during the transition; atomic writes, change-only, background
   save every 2 s, save on close. Core: `session.rs`.
@@ -124,8 +127,10 @@ are the Java sources, as a size hint.
   under `FILEEM_NO_LAUNCH`.
 - Not yet (they need later stages): Open in new tab / other side, Copy/Move to other side
   (stage 3); View submenu (stage 5); Search in folder, bookmarks (stage 7); Eject (stage 7).
-  The tree doesn't outline the right-clicked row (Java's `context-target`): Slint gives no
-  "menu closed" event to remove the outline again.
+  The tree outlines the right-clicked row while its menu is open (Java's `context-target`;
+  added after 5b): Slint has no "menu closed" event, but a menu takes the keys while open and
+  they come back however it closes, so the tree's right-click gives the window's key handler
+  the focus first and the outline ends when it has it again (`menu-closed`).
 - Not ported from Java: "Open with…" never existed there either (the plan's old note).
 
 ### Stage 3: tabs, dual pane, address bar, filter (done)
@@ -163,7 +168,10 @@ are the Java sources, as a size hint.
   second side), F7 New folder, F8 Delete, F9 Dual pane, Tab Switch side; each button sends its key
   through the normal key handler (`function-key` in app.slint), then gives the keys back to the
   list. F3 Preview joins it with stage 6.
-- Not yet: dragging tabs or columns to reorder them.
+- [x] **Reordering** (added after 5b): tabs and columns are dragged to another place (a left
+  press moved 6 px; an accent line marks the gap; `tab::reordered`, `Columns::move_to_gap`);
+  the shown tab stays shown, the column order is saved in `columns.order`. Name stays the
+  first column (the rows draw icon and name there; Java could move it too).
 
 ### Stage 4: drag & drop and selection box (done)
 
@@ -188,8 +196,10 @@ are the Java sources, as a size hint.
   ignores dropped files. The clipboard works with other file managers instead. Revisit when Slint
   adds native drag (tracking issue slint-ui/slint#1967); `DataTransfer::set_file_paths` is
   already there, so the payload would carry the paths then.
-- Not yet: the drag image (Slint draws none unless `drag-image` is set), drag & drop in the
-  other view modes (stage 5).
+- [x] **Drag image** (added after 5b): the dragged row's icon and name (a grid item, a tree
+  row) follow the mouse, faded: at the drag's start the window is snapshot and the item's
+  rectangle cut out (`dnd::show_drag_image`), like Java's snapshot of the cell. Drag & drop in
+  the other views came with stage 5.
 
 ### Stage 5a: view modes and thumbnails (done)
 
@@ -364,5 +374,14 @@ are the Java sources, as a size hint.
 - A `changed` handler on the `preferred-width` of a layout over a repeater did not fire again
   when the repeater's model changed; a single `Text` with one name per line measures the widest
   line reliably.
+- `changed` handlers run between event-loop iterations, not while an event is dispatched: a
+  release right after a move can't rely on a value a handler keeps up to date. The tab and
+  column drags let the element under the mouse compute the gap from the last position when the
+  release is handled, and copy a value into a `let` before changing what it depends on (a
+  binding re-evaluates at once).
+- The UI tests run on the testing backend with the software renderer (like the snapshots), so
+  `take_snapshot` works there (drag images); it costs nothing until something is rendered.
+- A test that sends signals to its own process needs a binary of its own (`harness = false`):
+  the test harness's threads don't block them, and the default action ends the process.
 - `notify`'s inotify backend reports opens and reads (`EventKind::Access`): filter them, or a
   watched folder refreshes itself every time it is listed.

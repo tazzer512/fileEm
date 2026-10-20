@@ -10,6 +10,8 @@ use fileem_core::session::Session;
 use slint::ComponentHandle;
 
 fn main() -> Result<(), slint::PlatformError> {
+    // before any thread starts: they all inherit the blocked termination signals
+    let signals = fileem::signals::block();
     let start = std::env::args_os().nth(1).map(std::path::PathBuf::from);
     let session = Rc::new(Session::load_default());
     let ui = AppWindow::new()?;
@@ -27,6 +29,19 @@ fn main() -> Result<(), slint::PlatformError> {
     } else {
         Some(autosave(&ui, &app))
     };
+    // logout, kill, Ctrl+C: save and stop operations first
+    let weak = ui.as_weak();
+    let waiting = signals.and_then(|s| {
+        s.wait_in_background(std::time::Duration::from_secs(5), move || {
+            let _ = weak.upgrade_in_event_loop(|ui| {
+                ui.invoke_terminate();
+                let _ = slint::quit_event_loop();
+            });
+        })
+    });
+    if let Err(e) = waiting {
+        eprintln!("fileem: termination signals: {e}");
+    }
     ui.run()
 }
 

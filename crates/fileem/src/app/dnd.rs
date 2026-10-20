@@ -3,12 +3,14 @@
 //!
 //! Drags to and from other applications are not possible yet: Slint 1.18's winit backend only
 //! drags inside the window. The clipboard (Ctrl+C / Ctrl+V) works with other file managers.
+//! The dragged item's picture follows the mouse (`show_drag_image`).
 
 use std::path::PathBuf;
 use std::time::Duration;
 
 use fileem_core::ops::Kind;
 use fileem_core::util::fs_util;
+use slint::ComponentHandle;
 
 use super::commands::{self, describe, Dialog, DialogSpec};
 use super::{nav, sync_selection, views, Shared};
@@ -98,6 +100,42 @@ pub fn drag_started(app: &Shared, side: usize, area: i32, row: usize) {
     a.drag = Drag { sources, last_check: None };
 }
 
+/// The dragged item's picture under the mouse: the part of the window it sits in (`rect`, window
+/// coordinates), faded a little, like the Java app's snapshot of the row. Needs a renderer that
+/// can take snapshots (both of ours can); without one there is no picture.
+pub fn show_drag_image(app: &Shared, rect: (f32, f32, f32, f32)) {
+    let Some(ui) = app.borrow().ui.upgrade() else { return };
+    let window = ui.window();
+    let image = window.take_snapshot().ok().and_then(|shot| {
+        let scale = window.scale_factor();
+        let px = |v: f32| (v * scale).round().max(0.0) as u32;
+        let (rgba, w, h) = drag_picture(shot.as_bytes(), shot.width(), shot.height(), (px(rect.0), px(rect.1), px(rect.2), px(rect.3)))?;
+        // drawn at one image pixel per logical pixel
+        let (lw, lh) = (((w as f32 / scale).round() as u32).max(1), ((h as f32 / scale).round() as u32).max(1));
+        let rgba = if (lw, lh) == (w, h) { rgba } else { fileem_core::images::shrink(&rgba, w, h, lw, lh) };
+        Some(slint::Image::from_rgba8(slint::SharedPixelBuffer::clone_from_slice(&rgba, lw, lh)))
+    });
+    ui.set_drag_image(image.unwrap_or_default());
+}
+
+/// `rect` (x, y, width, height) cut out of RGBA pixels `width × height` wide and made 75 %
+/// opaque; `None` when it lies outside.
+pub fn drag_picture(rgba: &[u8], width: u32, height: u32, rect: (u32, u32, u32, u32)) -> Option<(Vec<u8>, u32, u32)> {
+    let (x0, y0) = (rect.0.min(width), rect.1.min(height));
+    let (x1, y1) = (rect.0.saturating_add(rect.2).min(width), rect.1.saturating_add(rect.3).min(height));
+    if x1 <= x0 || y1 <= y0 {
+        return None;
+    }
+    let mut out = Vec::with_capacity(((x1 - x0) * (y1 - y0) * 4) as usize);
+    for y in y0..y1 {
+        let row = &rgba[((y * width + x0) * 4) as usize..((y * width + x1) * 4) as usize];
+        for px in row.as_chunks::<4>().0 {
+            out.extend([px[0], px[1], px[2], (u16::from(px[3]) * 3 / 4) as u8]);
+        }
+    }
+    Some((out, x1 - x0, y1 - y0))
+}
+
 /// The folder a drop at `row` of `area` would go into, and the row to mark for it (-1: none).
 fn target(app: &Shared, side: usize, area: i32, row: i32) -> Option<(PathBuf, i32)> {
     let a = app.borrow();
@@ -165,5 +203,24 @@ pub fn copy_instead(app: &Shared) {
     commands::close_dialog(app);
     if let Dialog::Drop { sources, target } = dialog {
         commands::run_operation(app, Kind::Copy, sources, Some(target));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_drag_picture_is_the_rectangle_cut_out_and_faded() {
+        // 3 × 2 pixels, each with its index as red
+        let rgba: Vec<u8> = (0..6u8).flat_map(|i| [i, 0, 0, 255]).collect();
+        let (px, w, h) = drag_picture(&rgba, 3, 2, (1, 0, 2, 2)).unwrap();
+        assert_eq!((w, h), (2, 2));
+        assert_eq!(px.chunks(4).map(|p| p[0]).collect::<Vec<_>>(), [1, 2, 4, 5]);
+        assert!(px.chunks(4).all(|p| p[3] == 191), "75 % opaque");
+        let (_, w, h) = drag_picture(&rgba, 3, 2, (2, 1, 10, 10)).unwrap();
+        assert_eq!((w, h), (1, 1), "clipped to the window");
+        assert_eq!(drag_picture(&rgba, 3, 2, (5, 0, 2, 2)), None, "outside");
+        assert_eq!(drag_picture(&rgba, 3, 2, (0, 0, 0, 2)), None, "empty");
     }
 }

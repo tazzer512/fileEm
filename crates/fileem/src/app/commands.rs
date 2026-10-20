@@ -16,7 +16,7 @@ use fileem_core::ops::{names, Handle, Kind, State};
 use fileem_core::util::{fs_util, os};
 
 use super::nav::{self, refresh_selecting};
-use super::{icon_of, push_columns, set_status, sync_files, sync_selection, views, Shared};
+use super::{icon_of, push_columns, push_view, set_status, sync_files, sync_selection, views, Shared};
 use crate::address;
 use crate::bg;
 use crate::clipboard::FileClipboard;
@@ -270,7 +270,19 @@ pub fn tree_menu(app: &Shared, side: usize, row: usize) -> bool {
     let Some((path, kind)) = node.and_then(|n| n.path.map(|p| (p, n.kind))) else { return false };
     let st = menu_state(app);
     set_menu(app, menu::tree_menu(&path, kind, &st));
+    app.borrow_mut().sides[side].tree_menu_row = row as i32;
+    push_view(app, side);
     true
+}
+
+/// A menu closed (the window's keys came back): the tree row it was for is no longer outlined.
+pub fn menu_closed(app: &Shared) {
+    for side in 0..2 {
+        let outlined = std::mem::replace(&mut app.borrow_mut().sides[side].tree_menu_row, -1) >= 0;
+        if outlined {
+            push_view(app, side);
+        }
+    }
 }
 
 pub fn header_menu(app: &Shared) {
@@ -730,6 +742,17 @@ pub fn close_requested(app: &Shared) -> bool {
     );
     open_dialog(app, Dialog::Quit, spec);
     false
+}
+
+/// A termination signal (logout, `kill`): saves the session, cancels every operation and waits
+/// up to 3 s for their cleanup (as the Java app's shutdown hook), closes the other windows. The
+/// caller quits.
+pub fn terminate(app: &Shared) {
+    super::collect_session(app);
+    app.borrow().session.save();
+    let handles = app.borrow().ops.running();
+    OpsUi::cancel_all_and_wait(&handles, Duration::from_secs(3));
+    close_windows(app);
 }
 
 /// Cancels every operation, waits (off the UI thread) until their cleanup is done, then quits.

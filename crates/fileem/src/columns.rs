@@ -1,6 +1,7 @@
 //! The details view's columns (the Java `FileTable` columns): which are shown, their widths and
 //! order, saved in the session as `columns.<id>.visible`, `columns.<id>.width` and
-//! `columns.order` (the order is only read: there is no reordering yet, and Java's stays as it is).
+//! `columns.order` (same format as Java). Name always comes first here; the others are dragged
+//! into any order.
 
 use fileem_core::fs::listing::SortKey;
 use fileem_core::session::Session;
@@ -133,6 +134,7 @@ impl Columns {
     }
 
     pub fn save(&self, s: &Session) {
+        s.put("columns.order", self.cols.iter().map(|c| c.id.id()).collect::<Vec<_>>().join(","));
         for col in &self.cols {
             let id = col.id.id();
             s.put(&format!("columns.{id}.width"), col.width.round() as i64);
@@ -177,6 +179,31 @@ impl Columns {
         }
     }
 
+    /// The visible columns after Name, as the header shows them.
+    pub fn shown_after_name(&self) -> Vec<ColumnId> {
+        self.visible().map(|c| c.id).filter(|&id| id != ColumnId::Name).collect()
+    }
+
+    /// Moves `id` into `gap` among [`Columns::shown_after_name`] (0: right after Name); hidden
+    /// columns keep their places. Returns whether anything moved.
+    pub fn move_to_gap(&mut self, id: ColumnId, gap: usize) -> bool {
+        let mut shown = self.shown_after_name();
+        let Some(from) = shown.iter().position(|&c| c == id) else { return false };
+        let Some(to) = crate::tab::reordered(from, gap.min(shown.len())) else { return false };
+        shown.remove(from);
+        shown.insert(to, id);
+        let at = self.cols.iter().position(|c| c.id == id).unwrap();
+        let col = self.cols.remove(at);
+        let index_of = |cols: &[Column], id: ColumnId| cols.iter().position(|c| c.id == id).unwrap();
+        let at = match (shown.get(to + 1), to.checked_sub(1).map(|i| shown[i])) {
+            (Some(&next), _) => index_of(&self.cols, next),
+            (None, Some(prev)) => index_of(&self.cols, prev) + 1,
+            (None, None) => self.cols.len(),
+        };
+        self.cols.insert(at, col);
+        true
+    }
+
     pub fn set_width(&mut self, id: ColumnId, width: f32) {
         if let Some(c) = self.cols.iter_mut().find(|c| c.id == id) {
             c.width = width.max(MIN_WIDTH);
@@ -209,11 +236,35 @@ mod tests {
         c.toggle(ColumnId::Name);
         c.set_width(ColumnId::Type, 10.0);
         c.save(&s);
-        assert_eq!(s.get("columns.order").as_deref(), Some("name,modified,size,type,created,accessed,extension,attributes"), "order untouched");
+        assert_eq!(s.get("columns.order").as_deref(), Some("name,modified,size,type,created,accessed,extension,attributes"), "order kept");
         let back = Columns::restore(&s);
         assert_eq!(ids(&back), ["name", "modified", "type", "attributes"], "name can't be hidden");
         assert_eq!(back.all().iter().find(|c| c.id == ColumnId::Type).unwrap().width, MIN_WIDTH);
         assert_eq!(back, c);
+    }
+
+    #[test]
+    fn dragged_columns_move_among_the_shown_ones_and_the_order_is_saved() {
+        let mut c = Columns::default(); // name size type modified; hidden: created accessed extension attributes
+        assert!(c.move_to_gap(ColumnId::Modified, 0));
+        assert_eq!(ids(&c), ["name", "modified", "size", "type"]);
+        assert!(c.move_to_gap(ColumnId::Modified, 3));
+        assert_eq!(ids(&c), ["name", "size", "type", "modified"], "back to the end");
+        assert!(!c.move_to_gap(ColumnId::Size, 1), "dropped where it is");
+        assert!(!c.move_to_gap(ColumnId::Name, 2), "Name stays first");
+        assert!(!c.move_to_gap(ColumnId::Created, 0), "hidden columns aren't in the header");
+        c.toggle(ColumnId::Extension);
+        assert!(c.move_to_gap(ColumnId::Extension, 1));
+        assert_eq!(ids(&c), ["name", "size", "extension", "type", "modified"]);
+        c.toggle(ColumnId::Extension);
+        c.toggle(ColumnId::Extension);
+        assert_eq!(ids(&c), ["name", "size", "extension", "type", "modified"], "hidden and shown again: same place");
+
+        let tmp = tempfile::tempdir().unwrap();
+        let s = Session::load(&tmp.path().join("s.properties"));
+        c.save(&s);
+        assert_eq!(Columns::restore(&s), c);
+        assert!(s.get("columns.order").unwrap().starts_with("name,size,extension,type,"));
     }
 
     #[test]

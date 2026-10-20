@@ -101,6 +101,8 @@ pub struct Side {
     filter_seq: i32,
     tree_row: i32,
     tree_seq: i32,
+    /// The tree row whose menu is open (outlined), -1 for none.
+    tree_menu_row: i32,
     /// The grid's size, as Slint laid it out, and the slots it shows (first, count).
     grid_size: (f32, f32),
     grid_range: (usize, usize),
@@ -136,6 +138,7 @@ impl Side {
             filter_seq: 0,
             tree_row: -1,
             tree_seq: 0,
+            tree_menu_row: -1,
             grid_size: (0.0, 0.0),
             grid_range: (0, 0),
             wheel: 0.0,
@@ -452,7 +455,10 @@ fn wire(ui: &AppWindow, app: &Shared) {
     on!(on_box_start, app => |side, ctrl, shift| dnd::box_start(app, side as usize, ctrl, shift));
     on!(on_box_moved, app => |side, ax, ay, mx, my| dnd::box_moved(app, side as usize, (ax, ay), (mx, my)));
     on!(on_box_ended, app => |side, drawn| dnd::box_ended(app, side as usize, drawn));
-    on!(on_drag_started, app => |side, area, row| dnd::drag_started(app, side as usize, area, row as usize));
+    on!(on_drag_started, app => |side, area, row, x, y, w, h| {
+        dnd::drag_started(app, side as usize, area, row as usize);
+        dnd::show_drag_image(app, (x, y, w, h));
+    });
     on!(on_drop_check, app => |side, area, row| dnd::drop_check(app, side as usize, area, row));
     on!(on_dropped, app => |side, area, row| dnd::dropped(app, side as usize, area, row));
     on!(on_row_activated, app => |side, row| {
@@ -474,6 +480,8 @@ fn wire(ui: &AppWindow, app: &Shared) {
         nav::set_active_side(app, side as usize);
         commands::tree_menu(app, side as usize, row as usize)
     });
+    on!(on_menu_closed, app => | | commands::menu_closed(app));
+    on!(on_terminate, app => | | commands::terminate(app));
     on!(on_sort_by, app => |side, col| {
         nav::set_active_side(app, side as usize);
         if let Some(key) = ColumnId::from_index(col as usize).and_then(ColumnId::sort_key) {
@@ -485,6 +493,13 @@ fn wire(ui: &AppWindow, app: &Shared) {
         nav::set_active_side(app, side as usize);
         commands::header_menu(app);
     });
+    on!(on_column_moved, app => |col, gap| {
+        let moved = ColumnId::from_index(col as usize).is_some_and(|c| app.borrow_mut().columns.move_to_gap(c, gap.max(0) as usize));
+        if moved {
+            push_columns(app);
+        }
+    });
+    on!(on_tab_moved, app => |side, from, gap| nav::move_tab(app, side as usize, from.max(0) as usize, gap.max(0) as usize));
     on!(on_column_resized, app => |col, width| {
         if let Some(c) = ColumnId::from_index(col as usize) {
             app.borrow_mut().columns.set_width(c, width);
@@ -784,6 +799,7 @@ fn push_view(app: &Shared, side: usize) {
         filter_seq: s.filter_seq,
         tree_row: s.tree_row,
         tree_seq: s.tree_seq,
+        tree_menu_row: s.tree_menu_row,
     };
     if side == 0 {
         ui.set_left(view);

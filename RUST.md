@@ -83,7 +83,10 @@ crates/fileem/             the app
   src/properties.rs        what the Properties window shows (toolkit-free) + ui/properties.slint
   src/clipboard.rs         files and text on the OS clipboard (Java FileClipboard)
   src/shell.rs             open, terminal, show in file manager (Java Shell)
-  tests/ui.rs              end-to-end UI test on Slint's headless testing backend
+  src/signals.rs           SIGTERM/SIGHUP/SIGINT: save and stop operations first (Java shutdown hook)
+  tests/ui.rs              end-to-end UI test on Slint's headless testing backend (software
+                           renderer, so snapshots work)
+  tests/signals.rs         signal delivery, in a process of its own (no test harness)
 ```
 
 Notes for the UI test: Slint's testing backend can be initialized once per process, so

@@ -23,8 +23,17 @@ slint = { version = "1", default-features = false, features = [
 
 clipboard-rs = { version = "0.3", default-features = false }
 
+[target.'cfg(unix)'.dependencies]
+# sigwait for saving on SIGTERM / logout (src/signals.rs)
+libc = "0.2"
+
 [build-dependencies]
 slint-build = "1"
+
+# its own process with no test harness: it sends itself signals
+[[test]]
+name = "signals"
+harness = false
 
 [dev-dependencies]
 tempfile = "3"

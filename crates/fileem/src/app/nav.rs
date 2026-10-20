@@ -363,6 +363,23 @@ pub fn close_tab(app: &Shared, side: usize, index: usize) {
     tab_changed(app, side);
 }
 
+/// The tab at `from` was dragged into `gap` (0: before the first tab); the shown tab stays shown.
+pub fn move_tab(app: &Shared, side: usize, from: usize, gap: usize) {
+    {
+        let mut a = app.borrow_mut();
+        let s = &mut a.sides[side];
+        if from >= s.tabs.len() {
+            return;
+        }
+        let Some(to) = crate::tab::reordered(from, gap.min(s.tabs.len())) else { return };
+        let active = s.tabs[s.active].id;
+        let tab = s.tabs.remove(from);
+        s.tabs.insert(to, tab);
+        s.active = s.tabs.iter().position(|t| t.id == active).unwrap_or(0);
+    }
+    sync_tabs(app, side);
+}
+
 pub fn close_other_tabs(app: &Shared, side: usize, keep: usize) {
     {
         let mut a = app.borrow_mut();

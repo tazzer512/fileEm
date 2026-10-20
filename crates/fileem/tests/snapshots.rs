@@ -93,7 +93,7 @@ fn snapshots() {
 
     // the question after dropping a file onto a folder
     ui.invoke_row_pressed(0, 2, false, false);
-    ui.invoke_drag_started(0, 0, 2);
+    ui.invoke_drag_started(0, 0, 2, 0.0, 0.0, 0.0, 0.0);
     ui.invoke_dropped(0, 0, 0);
     pump_until("drop question", || ui.get_dialog_open());
     save(ui.window(), "dialog-drop");

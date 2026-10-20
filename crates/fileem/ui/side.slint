@@ -90,6 +90,8 @@ export struct SideView {
     filter-seq: int,
     tree-row: int,
     tree-seq: int,
+    // the tree row whose menu is open (-1: none)
+    tree-menu-row: int,
     // ViewMode::index (5: Details) and the grid's layout from src/grid.rs
     view-mode: int,
     icon-size: length,
@@ -114,16 +116,28 @@ component HeaderCell {
     in property <bool> sorted;
     in property <bool> ascending;
     in property <TextHorizontalAlignment> align: left;
+    // can be dragged to another place (all but Name)
+    in property <bool> movable;
+    // a dragged column would land at this cell's left / right edge
+    in property <bool> drop-left;
+    in property <bool> drop-right;
     callback clicked();
     callback resized(length);
     // right-click, in window coordinates
     callback menu(length, length);
+    // dragging to reorder: the mouse at `x` in this cell; then let go, or the press was cancelled
+    callback drag-moved(length);
+    callback drag-ended();
+    callback drag-cancelled();
     accessible-role: button;
     accessible-label: title;
     accessible-action-default => { clicked(); }
     Rectangle {
-        background: touch.has-hover ? Palette.foreground.with-alpha(0.06) : transparent;
+        background: touch.dragging ? Palette.foreground.with-alpha(0.12)
+            : touch.has-hover ? Palette.foreground.with-alpha(0.06) : transparent;
     }
+    if root.drop-left: Rectangle { x: 0; width: 2px; background: Palette.accent-background; }
+    if root.drop-right: Rectangle { x: parent.width - 2px; width: 2px; background: Palette.accent-background; }
     HorizontalLayout {
         padding-left: 6px;
         padding-right: 6px;
@@ -143,12 +157,34 @@ component HeaderCell {
         }
     }
     touch := TouchArea {
+        // a left press moved sideways: the column is being dragged
+        property <bool> dragging;
         pointer-event(event) => {
             if (event.kind == PointerEventKind.down && event.button == PointerEventButton.right) {
                 root.menu(self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y);
             }
+            if (event.kind == PointerEventKind.down && event.button == PointerEventButton.left) {
+                self.dragging = false;
+            }
+            if (event.kind == PointerEventKind.up && event.button == PointerEventButton.left && self.dragging) {
+                root.drag-ended();
+            }
+            if (event.kind == PointerEventKind.cancel && self.dragging) {
+                self.dragging = false;
+                root.drag-cancelled();
+            }
         }
-        clicked => { root.clicked(); }
+        moved => {
+            if (root.movable && self.pressed && (self.dragging || abs(self.mouse-x - self.pressed-x) > 6px)) {
+                self.dragging = true;
+                root.drag-moved(self.mouse-x);
+            }
+        }
+        clicked => {
+            if (!self.dragging) {
+                root.clicked();
+            }
+        }
     }
     // the right edge drags the width
     Rectangle {
@@ -173,10 +209,24 @@ export component SidePane {
     in property <bool> keys-focused;
     // Ctrl (Cmd) is held down (the window tracks it): Ctrl+wheel goes to the view, not the list
     in-out property <bool> ctrl-held;
+    // A tab or a column dragged to another place: the mouse's x in the tab bar or header. Each
+    // tab (column) works out the gap it would land in while the mouse is over it; when let go
+    // (`releasing`), the one under the mouse reports the move. Computed from the last position
+    // when the release is handled, not from a `changed` handler that may not have run yet.
+    property <bool> tab-dragging;
+    property <bool> tab-releasing;
+    property <int> tab-from;
+    property <length> tab-drag-x;
+    property <bool> col-dragging;
+    property <bool> col-releasing;
+    property <int> col-from;
+    property <length> col-drag-x;
     in property <bool> dual;
     out property <length> row-height: 24px;
     // what a drag carries; the controller knows what was dragged (`drag-started`)
     in property <data-transfer> drag-data;
+    // the dragged item's picture, under the mouse while dragging (`drag-started` makes it)
+    in property <image> drag-image;
 
     // any press in this side makes it the active one
     callback activate(int);
@@ -214,7 +264,9 @@ export component SidePane {
     // side, whether a box was drawn (not just a click)
     callback box-ended(int, bool);
     // side, 0 list / 1 tree, row
-    callback drag-started(int, int, int);
+    // side, area (0 list, 1 tree), row; the dragged element's rectangle in window coordinates
+    // (its picture follows the mouse)
+    callback drag-started(int, int, int, length, length, length, length);
     // side, 0 list / 1 tree, row under the mouse (-1: none); returns the row to mark, -1 when
     // accepted into the shown folder, -2 when refused
     callback drop-check(int, int, int) -> int;
@@ -226,6 +278,9 @@ export component SidePane {
     callback size-step(int, int);
     callback size-slider-moved(int, float);
     callback size-slider-released(int);
+    // a tab (side, index) or column (ColumnId index) dropped into a gap (0: before the first)
+    callback tab-moved(int, int, int);
+    callback column-moved(int, int);
     // the widest of `view.measure-names` in the items' font: List's column width
     callback list-measured(int, length);
     // Ctrl+wheel: side, delta (up positive)
@@ -499,17 +554,21 @@ export component SidePane {
                         background: i == root.tree-drop-row ? Palette.accent-background.with-alpha(0.3)
                             : row.current ? Palette.accent-background.with-alpha(0.18)
                             : tree-touch.has-hover && !row.header ? Palette.foreground.with-alpha(0.06) : transparent;
-                        border-width: row.current || i == root.tree-drop-row ? 1px : 0px;
-                        border-color: Palette.accent-background.with-alpha(0.6);
+                        // the right-clicked row is outlined while its menu is open
+                        border-width: row.current || i == root.tree-drop-row || i == root.view.tree-menu-row ? 1px : 0px;
+                        border-color: i == root.view.tree-menu-row ? Palette.accent-background : Palette.accent-background.with-alpha(0.6);
                     }
                     DragArea {
                         enabled: row.draggable;
                         data: root.drag-data;
                         allow-move: true;
                         allow-copy: true;
+                        drag-image: root.drag-image;
+                        drag-image-offset-x: round(tree-touch.pressed-x / 1px);
+                        drag-image-offset-y: round(tree-touch.pressed-y / 1px);
                         changed dragging => {
                             if (self.dragging) {
-                                root.drag-started(root.side, 1, i);
+                                root.drag-started(root.side, 1, i, self.absolute-position.x, self.absolute-position.y, self.width, self.height);
                             }
                         }
                     tree-touch := TouchArea {
@@ -519,6 +578,8 @@ export component SidePane {
                             }
                             // right-click: a menu, never a navigation
                             if (event.kind == PointerEventKind.down && event.button == PointerEventButton.right) {
+                                // the keys come back here when the menu closes (that ends its outline)
+                                root.focus-keys();
                                 if (root.tree-menu(root.side, i)) {
                                     root.show-menu(self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y);
                                 }
@@ -619,6 +680,20 @@ export component SidePane {
                     spacing: 2px;
                     alignment: start;
                     for tab[t] in root.view.tabs: Rectangle {
+                        // the gap a dragged tab would land in, while the mouse is over this one (or the
+                        // spacing after it; the first and last also take everything beyond them)
+                        property <int> slot: (root.tab-dragging || root.tab-releasing)
+                            && (t == 0 || root.tab-drag-x >= self.x)
+                            && (t == root.view.tabs.length - 1 || root.tab-drag-x < self.x + self.width + 2px)
+                            ? (root.tab-drag-x < self.x + self.width / 2 ? t : t + 1) : -1;
+                        property <int> drop-now: root.tab-releasing ? self.slot : -1;
+                        changed drop-now => {
+                            if (self.drop-now >= 0) {
+                                let gap = self.drop-now; // resetting `releasing` changes drop-now
+                                root.tab-releasing = false;
+                                root.tab-moved(root.side, root.tab-from, gap);
+                            }
+                        }
                         min-width: 80px;
                         max-width: 200px;
                         preferred-width: tab-layout.preferred-width;
@@ -630,8 +705,34 @@ export component SidePane {
                         accessible-label: tab.title;
                         accessible-item-selected: tab.active;
                         accessible-action-default => { root.tab-clicked(root.side, t); }
+                        if root.tab-dragging && slot >= 0: Rectangle {
+                            x: slot == t ? -2px : parent.width;
+                            width: 2px;
+                            background: Palette.accent-background;
+                        }
                         tab-touch := TouchArea {
+                            // a left press moved sideways: the tab is being dragged to another place
+                            property <bool> dragging;
+                            moved => {
+                                if (self.pressed && root.view.tabs.length > 1 && (self.dragging || abs(self.mouse-x - self.pressed-x) > 6px)) {
+                                    self.dragging = true;
+                                    root.tab-dragging = true;
+                                    root.tab-drag-x = parent.x + self.mouse-x;
+                                }
+                            }
                             pointer-event(event) => {
+                                if (event.kind == PointerEventKind.down && event.button == PointerEventButton.left) {
+                                    self.dragging = false;
+                                }
+                                if (event.kind == PointerEventKind.up && event.button == PointerEventButton.left && self.dragging) {
+                                    root.tab-from = t;
+                                    root.tab-dragging = false;
+                                    root.tab-releasing = true;
+                                }
+                                if (event.kind == PointerEventKind.cancel && self.dragging) {
+                                    self.dragging = false;
+                                    root.tab-dragging = false;
+                                }
                                 if (event.kind == PointerEventKind.down) {
                                     root.activate(root.side);
                                 }
@@ -643,7 +744,11 @@ export component SidePane {
                                     root.tab-closed(root.side, t);
                                 }
                             }
-                            clicked => { root.tab-clicked(root.side, t); }
+                            clicked => {
+                                if (!self.dragging) {
+                                    root.tab-clicked(root.side, t);
+                                }
+                            }
                         }
                         tab-layout := HorizontalLayout {
                             padding-left: 10px;
@@ -829,6 +934,17 @@ export component SidePane {
                     width: max(root.columns-width, list.visible-width);
                     alignment: start;
                     HeaderCell {
+                        // a column dropped on Name (or left of it) goes right after it
+                        property <int> slot: (root.col-dragging || root.col-releasing) && root.col-drag-x < self.x + self.width ? 0 : -1;
+                        property <int> drop-now: root.col-releasing ? self.slot : -1;
+                        changed drop-now => {
+                            if (self.drop-now >= 0) {
+                                let gap = self.drop-now; // resetting `releasing` changes drop-now
+                                root.col-releasing = false;
+                                root.column-moved(root.col-from, gap);
+                            }
+                        }
+                        drop-right: root.col-dragging && self.slot == 0;
                         width: root.name-width;
                         title: "Name";
                         sorted: root.view.sort-column == 0;
@@ -837,7 +953,33 @@ export component SidePane {
                         resized(w) => { root.column-resized(0, w); }
                         menu(x, y) => { root.activate(root.side); root.header-menu(root.side); root.show-menu(x, y); }
                     }
-                    for col in root.columns: HeaderCell {
+                    for col[ci] in root.columns: HeaderCell {
+                        // the gap a dragged column would land in, while the mouse is over this one (the
+                        // last one also takes everything right of it)
+                        property <int> slot: (root.col-dragging || root.col-releasing) && root.col-drag-x >= self.x
+                            && (ci == root.columns.length - 1 || root.col-drag-x < self.x + self.width)
+                            ? (root.col-drag-x < self.x + self.width / 2 ? ci : ci + 1) : -1;
+                        property <int> drop-now: root.col-releasing ? self.slot : -1;
+                        changed drop-now => {
+                            if (self.drop-now >= 0) {
+                                let gap = self.drop-now; // resetting `releasing` changes drop-now
+                                root.col-releasing = false;
+                                root.column-moved(root.col-from, gap);
+                            }
+                        }
+                        movable: true;
+                        drop-left: root.col-dragging && self.slot == ci && ci > 0;
+                        drop-right: root.col-dragging && self.slot == ci + 1;
+                        drag-moved(x) => {
+                            root.col-dragging = true;
+                            root.col-drag-x = self.x + x;
+                        }
+                        drag-ended => {
+                            root.col-from = col.col;
+                            root.col-dragging = false;
+                            root.col-releasing = true;
+                        }
+                        drag-cancelled => { root.col-dragging = false; }
                         width: col.width;
                         title: col.title;
                         align: col.align-right ? TextHorizontalAlignment.right : TextHorizontalAlignment.left;
@@ -888,9 +1030,12 @@ export component SidePane {
                             data: root.drag-data;
                             allow-move: true;
                             allow-copy: true;
+                            drag-image: root.drag-image;
+                            drag-image-offset-x: round(row-touch.pressed-x / 1px);
+                            drag-image-offset-y: round(row-touch.pressed-y / 1px);
                             changed dragging => {
                                 if (self.dragging) {
-                                    root.drag-started(root.side, 0, i);
+                                    root.drag-started(root.side, 0, i, self.absolute-position.x, self.absolute-position.y, self.width, self.height);
                                 }
                             }
                         row-touch := TouchArea {
@@ -1046,9 +1191,12 @@ export component SidePane {
                             data: root.drag-data;
                             allow-move: true;
                             allow-copy: true;
+                            drag-image: root.drag-image;
+                            drag-image-offset-x: round(slot-touch.pressed-x / 1px);
+                            drag-image-offset-y: round(slot-touch.pressed-y / 1px);
                             changed dragging => {
                                 if (self.dragging) {
-                                    root.drag-started(root.side, 0, slot.idx);
+                                    root.drag-started(root.side, 0, slot.idx, self.absolute-position.x, self.absolute-position.y, self.width, self.height);
                                 }
                             }
                         slot-touch := TouchArea {

@@ -14,6 +14,7 @@ pub mod ops_ui;
 pub mod progress;
 pub mod properties;
 pub mod shell;
+pub mod signals;
 pub mod tab;
 pub mod thumbs;
 pub mod tree;
