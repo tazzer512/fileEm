@@ -17,6 +17,11 @@ use super::{Pixels, check};
 /// the ordinary sizes take the safe way).
 const READ_LIMIT: u64 = 256 << 20;
 
+/// The most pixels decoded at once. Decoding takes about 27 bytes per pixel (so this is some
+/// 650 MB); files store smaller resolutions, so the previews and thumbnails asked for stay far
+/// below it, unless the file has no smaller resolution (or its header lies about its size).
+const MAX_DECODE_PIXELS: u64 = 24 << 20;
+
 const EXTENSIONS: [&str; 6] = ["jp2", "j2k", "j2c", "jpc", "jpf", "jpx"];
 
 pub fn is_jpeg2000(extension: &str) -> bool {
@@ -55,6 +60,9 @@ fn decode(data: &[u8], limit: u32) -> Option<Pixels> {
     let settings = DecodeSettings { target_resolution: (scale < 1.0).then_some(target), ..DecodeSettings::default() };
     let image = Image::new(data, &settings).ok()?;
     let (w, h) = (image.width(), image.height());
+    if u64::from(w) * u64::from(h) > MAX_DECODE_PIXELS {
+        return None;
+    }
     let (color, alpha) = (image.color_space().clone(), image.has_alpha());
     let mut ctx = DecoderContext::default();
     let samples = image.decode(&mut ctx).ok()?.data_u8();
@@ -132,6 +140,23 @@ mod tests {
             assert_eq!(p.width, 64);
             assert_eq!(p.pixel(36, 1), [200, 200, 200, 255], "{name}: grey 200, opaque");
         }
+    }
+
+    #[test]
+    fn a_header_promising_a_huge_image_without_smaller_levels_gives_none() {
+        // red-blue.j2k's SIZ marker (right after SOC) set to a million pixels square, one tile,
+        // and its COD marker to no smaller resolutions: decoding it would need terabytes
+        let mut data = std::fs::read(fixture("red-blue.j2k")).unwrap();
+        assert_eq!(data[2..4], [0xff, 0x51]);
+        for (i, v) in [1_000_000u32, 1_000_000, 0, 0, 1_000_000, 1_000_000].into_iter().enumerate() {
+            data[8 + 4 * i..12 + 4 * i].copy_from_slice(&v.to_be_bytes());
+        }
+        let cod = data.windows(2).position(|w| w == [0xff, 0x52]).unwrap();
+        data[cod + 9] = 0;
+        let tmp = tempfile::tempdir().unwrap();
+        let p = tmp.path().join("huge.j2k");
+        std::fs::write(&p, &data).unwrap();
+        assert_eq!(read(&p, 96).unwrap(), None);
     }
 
     #[test]

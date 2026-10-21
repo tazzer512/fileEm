@@ -101,7 +101,9 @@ public final class Shell {
     static List<String> terminalCommand(Path dir, String envTerminal, Predicate<String> installed) {
         String d = dir.toString();
         if (OsUtil.isWindows()) {
-            return installed.test("wt.exe") ? List.of("wt.exe", "-d", d) : List.of("cmd.exe", "/c", "start", "cmd.exe");
+            return installed.test("wt.exe")
+                    ? List.of("wt.exe", "-d", windowsTerminalEscape(d))
+                    : List.of("cmd.exe", "/c", "start", "cmd.exe");
         }
         if (OsUtil.isMac()) {
             return List.of("open", "-a", "Terminal", d);
@@ -129,6 +131,15 @@ public final class Shell {
             }
         }
         return null;
+    }
+
+    /**
+     * Windows Terminal splits its command line into commands at every {@code ;}, also inside
+     * quotes: a folder named {@code a;calc} would start {@code calc}. {@code \;} is its escape for a
+     * literal one.
+     */
+    static String windowsTerminalEscape(String arg) {
+        return arg.replace(";", "\\;");
     }
 
     /** Shows the item selected in the OS file manager (falls back to opening its folder). */

@@ -151,9 +151,18 @@ fn decode_any(path: &Path, max_side: u32, stop: &AtomicBool) -> io::Result<Optio
     Ok(pixels)
 }
 
+/// The most a decoded picture may take (the `image` crate's own default). A header can promise
+/// any size: allocating what it says ends the app when the memory isn't there, which no
+/// `catch_unwind` stops.
+const MAX_DECODE_BYTES: u64 = 512 << 20;
+
 /// PNG, JPEG, GIF, BMP (by content, whatever the name says), turned upright per EXIF.
 fn decode_common(path: &Path, max_side: u32) -> Option<Pixels> {
     let mut decoder = ImageReader::open(path).ok()?.with_guessed_format().ok()?.into_decoder().ok()?;
+    // `into_decoder` doesn't reserve the picture's buffer against the limits (only `decode` does)
+    if decoder.total_bytes() > MAX_DECODE_BYTES {
+        return None;
+    }
     let orientation = decoder.orientation().unwrap_or(Orientation::NoTransforms);
     let img = DynamicImage::from_decoder(decoder).ok()?;
     Some(finish(img, max_side, orientation))
@@ -229,6 +238,23 @@ mod tests {
         let out = shrink(&src, 4, 2, 2, 1);
         assert_eq!(out[..4], [0, 0, 0x7f, 0xff], "black and blue: half blue");
         assert_eq!(out[4..], [0xff, 0xff, 0xff, 0x7f], "half transparent white");
+    }
+
+    #[test]
+    fn headers_promising_huge_images_give_none_instead_of_allocating_them() {
+        // a few hundred bytes claiming a million pixels square: decoding would ask for terabytes,
+        // and a failed allocation ends the app (it is no panic that could be caught)
+        let tmp = tempfile::tempdir().unwrap();
+        let png = tmp.path().join("huge.png");
+        std::fs::write(&png, fixtures::png_claiming(1_000_000, 1_000_000)).unwrap();
+        assert_eq!(decode(&png, 96).unwrap(), None);
+        let bmp = tmp.path().join("huge.bmp");
+        std::fs::write(&bmp, fixtures::bmp_claiming(1_000_000, 1_000_000)).unwrap();
+        assert_eq!(decode(&bmp, 4096).unwrap(), None);
+        // a real PNG of that kind still decodes
+        let ok = tmp.path().join("ok.png");
+        std::fs::write(&ok, fixtures::png_claiming(1, 1)).unwrap();
+        assert_eq!(decode(&ok, 96).unwrap().unwrap().pixel(0, 0), [1, 2, 3, 255]);
     }
 
     #[test]

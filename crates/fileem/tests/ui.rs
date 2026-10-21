@@ -321,6 +321,14 @@ fn settle(f: &Fixture) {
     wait_until(f, "settled", move |_| start.elapsed() > Duration::from_millis(150));
 }
 
+/// Waits until the tree has revealed (and scrolled to) the current folder, which it does in the
+/// background, then scrolls it to the top: scrolled earlier, the reveal would scroll it away again.
+fn tree_to_top(f: &Fixture) {
+    wait_until(f, "the tree shows the folder", |f| f.tree().iter().any(|r| r.current));
+    settle(f);
+    f.scroll_tree_to_top();
+}
+
 #[test]
 fn ui() {
     std::env::set_var("FILEEM_NO_LAUNCH", "1");
@@ -958,10 +966,8 @@ fn right_click_on_empty_space_offers_the_folder_menu() {
 fn right_click_in_the_tree_opens_a_menu_without_navigating() {
     let f = open_window();
     let home = fileem_core::util::os::home();
-    // the tree has revealed (and scrolled to) the current folder; Home is above it
-    wait_until(&f, "the tree marks the current folder", |f| f.tree().iter().any(|r| r.current));
-    settle(&f);
-    f.scroll_tree_to_top();
+    // once the tree has revealed (and scrolled to) the current folder; Home is above it
+    tree_to_top(&f);
     // the right-clicked row is outlined while its menu is open, however the menu closes
     let home_row = f.tree().iter().position(|r| r.name == "Home").unwrap() as i32;
     f.right_click(&f.tree_row("Home"));
@@ -2797,14 +2803,12 @@ fn folder_menus_add_bookmarks_and_a_bookmark_opens_from_the_tree() {
     f.button("Rename").invoke_accessible_default_action();
     wait_until(&f, "renamed", |f| tree_bookmarks(&f.ui.get_left()) == ["Inbox", "files"]);
     assert!(f.dir.join("alpha").is_dir(), "the folder keeps its name");
-    settle(&f);
-    f.scroll_tree_to_top();
+    tree_to_top(&f);
     f.click_at(&f.tree_row("Inbox"));
     wait_until(&f, "the bookmark opened", |f| f.address() == f.dir.join("alpha") && f.names() == ["inside.txt"]);
 
     // a folder in the tree offers it too
-    settle(&f);
-    f.scroll_tree_to_top();
+    tree_to_top(&f);
     f.right_click(&f.tree_row("Inbox"));
     assert!(f.menu_item("Remove bookmark").is_some());
     f.key(Key::Escape);
@@ -2818,8 +2822,7 @@ fn folder_menus_add_bookmarks_and_a_bookmark_opens_from_the_tree() {
 fn the_bookmark_menu_renames_moves_and_removes_and_bookmarks_survive_a_restart() {
     let f = open_window_with(with_bookmarks(&[("Mark A", "alpha"), ("Mark B", "beta")]), true);
     assert_eq!(tree_bookmarks(&f.ui.get_left()), ["Mark A", "Mark B"], "from the session");
-    settle(&f);
-    f.scroll_tree_to_top();
+    tree_to_top(&f);
 
     f.right_click(&f.tree_row("Mark B"));
     for forbidden in ["Cut", "Rename…", "Move to Trash", "Delete permanently", "Duplicate", "Add to bookmarks  (Ctrl+D)"] {
@@ -3027,8 +3030,7 @@ fn drives_show_their_space_and_only_plugged_in_ones_offer_eject() {
     let after = rows.iter().position(|r| r.name == "This computer").unwrap();
     assert_eq!(rows[after + 1].name, "STICK", "in the order given");
 
-    settle(&f);
-    f.scroll_tree_to_top();
+    tree_to_top(&f);
     f.right_click(&f.tree_row("STICK"));
     assert!(f.menu_item("Eject").is_some(), "a stick can be ejected");
     assert!(!menu_has(&f, "Cut") && !menu_has(&f, "Copy"), "a drive is a shortcut");
@@ -3054,8 +3056,7 @@ fn eject_moves_tabs_off_the_drive_first_then_ejects_and_confirms() {
     let (started, answer) = fake_ejector(&f, Vec::new());
 
     // the row's eject button
-    settle(&f);
-    f.scroll_tree_to_top();
+    tree_to_top(&f);
     ElementHandle::find_by_accessible_label(&f.ui, "Eject (safely remove)").next().unwrap().invoke_accessible_default_action();
     assert!(app::is_ejecting(&f.app, &drive));
     assert_eq!(eject_started(&f, &started), std::slice::from_ref(&drive));

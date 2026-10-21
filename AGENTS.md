@@ -51,6 +51,12 @@ remove or break it.
   `src/app/volumes.rs` (5 s polling thread, the trees' drives, the eject flow). UI tests never
   eject for real: they put in a fake with `app::set_ejector` and show their own drives with
   `app::show_volumes` (which stops the polling).
+- Untrusted input never decides an allocation: check a decoded picture's size before decoding
+  (`images::MAX_DECODE_BYTES`, `jpeg2000::MAX_DECODE_PIXELS`); a failed allocation aborts the
+  app, which `catch_unwind` can't stop. Image tests craft lying headers (`fixtures::png_claiming`).
+- File operations join raw names (`Path::file_name()`), never `display_name` (lossy for
+  non-UTF-8 Linux names). Programs are started with argument lists, never through `cmd` or a
+  shell; Windows opens files with `ShellExecuteW`, and Windows Terminal's `;` is escaped.
 - The release profile keeps `panic = "unwind"` on purpose (+2 MB): `images::decode` catches a
   decoder's panic on a damaged file, so it costs one thumbnail instead of the app. Don't switch
   back to `abort`.

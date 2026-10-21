@@ -970,3 +970,38 @@ fn an_operation_cancelled_before_it_started_counts_as_stopped() {
     assert_eq!(h.state(), State::Cancelled);
     assert!(names(&d.dst).is_empty());
 }
+
+// ---- names ----
+
+/// Linux names are bytes: names that aren't UTF-8 must arrive exactly as they are. Two of them
+/// once both became "\u{fffd}.txt" in the copy, so the second asked to replace the first (and a
+/// move had already deleted the first one's source).
+#[cfg(target_os = "linux")]
+#[test]
+fn names_that_are_not_utf8_are_copied_and_moved_unchanged() {
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+    let names = [OsStr::from_bytes(b"\xff.txt"), OsStr::from_bytes(b"\xfe.txt")];
+    for (kind, copy_style) in [(Kind::Copy, false), (Kind::Move, false), (Kind::Move, true)] {
+        let d = dirs();
+        let folder = d.src.join(OsStr::from_bytes(b"caf\xe9"));
+        fs::create_dir(&folder).unwrap();
+        for (i, n) in names.iter().enumerate() {
+            fs::write(folder.join(n), format!("file {i}")).unwrap();
+        }
+        let mut o = op(kind, std::slice::from_ref(&folder), Some(&d.dst));
+        if copy_style {
+            o.force_copy_moves();
+        }
+        let h = o.run();
+        assert_eq!(h.state(), State::Succeeded, "{kind:?}: {:?}", h.errors());
+        assert!(h.errors().is_empty(), "{kind:?}: {:?}", h.errors());
+        let copied = d.dst.join(OsStr::from_bytes(b"caf\xe9"));
+        for (i, n) in names.iter().enumerate() {
+            assert_eq!(fs::read_to_string(copied.join(n)).unwrap(), format!("file {i}"), "{kind:?} {copy_style}");
+        }
+        assert_eq!(fs::read_dir(&copied).unwrap().count(), 2);
+        assert_eq!(folder.exists(), kind == Kind::Copy, "{kind:?} {copy_style}");
+        assert_no_temp_files(&d.base);
+    }
+}

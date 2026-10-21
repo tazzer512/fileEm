@@ -597,7 +597,7 @@ impl Worker {
         }
         let top: Vec<PathBuf> = fs::read_dir(tmp)?.filter_map(Result::ok).map(|e| e.path()).collect();
         let out = if top.len() == 1 {
-            let out = fs_util::unique_name(&self.target.join(fs_util::display_name(&top[0])), false);
+            let out = fs_util::unique_name(&self.target.join(file_name(&top[0])), false);
             rename_noreplace(&top[0], &out)?;
             fs::remove_dir(tmp)?;
             out
@@ -1239,8 +1239,10 @@ pub fn archive_name(items: &[PathBuf]) -> String {
     name + ".zip"
 }
 
-fn file_name(p: &Path) -> String {
-    fs_util::display_name(p)
+/// The name `p` has on disk, for joining to a target: never the display name, which turns names
+/// that aren't UTF-8 (Linux allows any bytes) into "\u{fffd}" and makes different names equal.
+fn file_name(p: &Path) -> std::ffi::OsString {
+    p.file_name().unwrap_or(p.as_os_str()).to_os_string()
 }
 
 /// FIFOs, sockets, devices: neither file, folder nor link.

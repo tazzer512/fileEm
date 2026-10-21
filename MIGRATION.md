@@ -551,3 +551,21 @@ are the Java sources, as a size hint.
   Check it with `WAYLAND_DEBUG=1` (`xdg_toplevel.set_app_id`) or, under X11, `xprop WM_CLASS`.
 - Timing renders: debug builds are ~10× slower than release; measure `take_snapshot` with
   `cargo test --release`.
+- `image`'s `ImageReader::into_decoder` sets the limits but doesn't reserve the picture's buffer
+  (only `decode()` does): a lying header (a PNG claiming 1,000,000² pixels) then allocates
+  terabytes, and a failed allocation aborts the process; `catch_unwind` doesn't help. Check
+  `total_bytes()` first (`images::MAX_DECODE_BYTES`). `hayro-jpeg2000` needs ~27 bytes per
+  decoded pixel and trusts the header too: `jpeg2000::MAX_DECODE_PIXELS` caps the level decoded.
+- Linux file names are bytes: join `Path::file_name()` (an `OsStr`), never `display_name`
+  (lossy), onto a target. Two non-UTF-8 names both became `�.txt` in a copy, and a move asked
+  to replace one with the other.
+- Windows: `cmd /C start <path>` runs `&` in file names as a command (`x&calc`); files open
+  through `ShellExecuteW`. Windows Terminal splits its command line at `;`, also inside quotes:
+  escape it as `\;` (`shell::windows_terminal_escape`). Check Windows-only code with
+  `cargo check --workspace --target x86_64-pc-windows-msvc` (needs `rustup target add`).
+- UI tests: wait for a condition, not a fixed time, before scrolling the tree. The tree reveals
+  the current folder in the background and scrolls to it, so under load it scrolled away again
+  after `settle` (the drives scenario failed in 3 of 4 full runs); `tree_to_top` waits for it.
+- Audit, open: with 100,000 files an arrow key takes ~65 ms in release (`sync_selection`
+  reads every row, ~34 ms; `push_view` builds the status from all rows, ~24 ms); both should
+  touch only the rows that changed and the selected rows.

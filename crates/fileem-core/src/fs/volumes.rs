@@ -375,6 +375,11 @@ pub fn eject(roots: &[PathBuf]) -> Result<(), String> {
 }
 
 fn run(cmd: &[String]) -> Result<(), String> {
+    run_within(cmd, EJECT_TIMEOUT)
+}
+
+/// Runs `cmd`, killing it after `timeout`; its output is the error.
+fn run_within(cmd: &[String], timeout: Duration) -> Result<(), String> {
     let mut child = Command::new(&cmd[0])
         .args(&cmd[1..])
         .stdin(Stdio::null())
@@ -395,7 +400,7 @@ fn run(cmd: &[String]) -> Result<(), String> {
         }
         let _ = tx.send(text);
     });
-    let deadline = Instant::now() + EJECT_TIMEOUT;
+    let deadline = Instant::now() + timeout;
     loop {
         match child.try_wait() {
             Ok(Some(status)) => {
@@ -405,6 +410,7 @@ fn run(cmd: &[String]) -> Result<(), String> {
             Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(50)),
             Ok(None) => {
                 let _ = child.kill();
+                let _ = child.wait(); // reaped, not left behind as a zombie
                 return Err("The drive did not respond.".into());
             }
             Err(e) => return Err(io::Error::other(e).to_string()),
@@ -431,6 +437,24 @@ pub fn eject_error(output: &str) -> String {
 mod tests {
     use super::*;
     use std::collections::HashSet;
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_tool_that_hangs_is_stopped_and_reaped() {
+        let cmd = ["sleep", "37"].map(String::from);
+        let start = Instant::now();
+        assert_eq!(run_within(&cmd, Duration::from_millis(200)), Err("The drive did not respond.".into()));
+        assert!(start.elapsed() < Duration::from_secs(5));
+        // no sleep of ours is left, not even as a zombie
+        let me = std::process::id().to_string();
+        for proc in std::fs::read_dir("/proc").unwrap().filter_map(Result::ok) {
+            let Ok(stat) = std::fs::read_to_string(proc.path().join("stat")) else { continue };
+            // pid (comm) state ppid ...
+            let after = &stat[stat.rfind(')').map_or(0, |i| i + 2)..];
+            let ppid = after.split(' ').nth(1).unwrap_or("");
+            assert!(!(ppid == me && stat.contains("(sleep)")), "left behind: {stat}");
+        }
+    }
 
     #[test]
     fn lists_at_least_the_system_volume_with_unique_existing_roots() {

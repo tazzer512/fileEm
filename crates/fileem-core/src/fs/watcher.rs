@@ -24,6 +24,11 @@ struct Entry {
 struct Shared {
     watcher: Mutex<RecommendedWatcher>,
     entries: Arc<Mutex<HashMap<PathBuf, Entry>>>,
+    /// Held while a folder's listeners and its OS watch change together: otherwise the last
+    /// handle of a folder, dropped while a new watch on it starts, could remove the OS watch the
+    /// new one just made, and the new listener would never hear of a change. (Not `entries`: the
+    /// watcher's own thread takes that one, and unwatching waits for that thread.)
+    registering: Mutex<()>,
 }
 
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
@@ -47,7 +52,7 @@ fn shared() -> Option<&'static Shared> {
                 }
             })
             .ok()?;
-            Some(Shared { watcher: Mutex::new(watcher), entries })
+            Some(Shared { watcher: Mutex::new(watcher), entries, registering: Mutex::new(()) })
         })
         .as_ref()
 }
@@ -96,12 +101,15 @@ pub struct WatchHandle {
 impl Drop for WatchHandle {
     fn drop(&mut self) {
         let Some(s) = shared() else { return };
+        let _registering = s.registering.lock().unwrap();
         let mut map = s.entries.lock().unwrap();
         let Some(entry) = map.get_mut(&self.dir) else { return };
         entry.listeners.retain(|(id, _)| *id != self.id);
         if entry.listeners.is_empty() {
             map.remove(&self.dir);
             drop(map);
+            #[cfg(test)]
+            tests::pause_point(&self.dir);
             let _ = s.watcher.lock().unwrap().unwatch(&self.dir);
         }
     }
@@ -114,6 +122,7 @@ pub fn watch(dir: &Path, on_change: impl Fn() + Send + Sync + 'static) -> WatchH
     let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
     let handle = WatchHandle { dir: dir.to_path_buf(), id };
     let Some(s) = shared() else { return handle };
+    let _registering = s.registering.lock().unwrap();
     // registered again on every watch: a folder deleted and created again at the same path needs
     // a new OS watch, or it would never report again
     let _ = s.watcher.lock().unwrap().watch(dir, RecursiveMode::NonRecursive);
@@ -129,6 +138,20 @@ mod tests {
     use std::sync::mpsc;
 
     const WAIT: Duration = Duration::from_secs(15);
+
+    /// Folders whose last handle, when dropped, waits between forgetting its listeners and
+    /// removing the OS watch until the test says so.
+    static PAUSES: Mutex<Vec<(PathBuf, mpsc::Receiver<()>)>> = Mutex::new(Vec::new());
+
+    pub(super) fn pause_point(dir: &Path) {
+        let pause = {
+            let mut p = PAUSES.lock().unwrap();
+            p.iter().position(|(d, _)| d == dir).map(|i| p.remove(i).1)
+        };
+        if let Some(rx) = pause {
+            let _ = rx.recv_timeout(WAIT);
+        }
+    }
 
     fn counter() -> (Arc<AtomicUsize>, mpsc::Receiver<()>, impl Fn() + Send + Sync + 'static) {
         let calls = Arc::new(AtomicUsize::new(0));
@@ -176,6 +199,31 @@ mod tests {
         fs::write(sub.join("b.txt"), "x").unwrap();
         again.recv_timeout(WAIT).expect("changes in the new folder are reported");
         drop(handle);
+    }
+
+    #[test]
+    fn a_new_watch_while_the_last_old_one_is_dropped_keeps_reporting() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().to_path_buf();
+        let (_, _old_rx, old_listener) = counter();
+        let old = watch(&dir, old_listener);
+        let (go, paused) = mpsc::channel();
+        PAUSES.lock().unwrap().push((dir.clone(), paused));
+        // the old handle goes (another tab left the folder) ...
+        let dropping = std::thread::spawn(move || drop(old));
+        std::thread::sleep(Duration::from_millis(100));
+        // ... while a new one starts on the same folder
+        let (_, rx, listener) = counter();
+        let starting = std::thread::spawn({
+            let dir = dir.clone();
+            move || watch(&dir, listener)
+        });
+        std::thread::sleep(Duration::from_millis(200));
+        go.send(()).unwrap();
+        dropping.join().unwrap();
+        let _new = starting.join().unwrap();
+        fs::write(dir.join("new.txt"), "x").unwrap();
+        rx.recv_timeout(Duration::from_secs(3)).expect("the new watch still reports changes");
     }
 
     #[test]

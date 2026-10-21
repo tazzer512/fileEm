@@ -30,21 +30,14 @@ pub fn open(p: &Path) -> io::Result<()> {
     if suppressed("open", p) {
         return Ok(());
     }
-    let mut cmd = if cfg!(windows) {
-        let mut c = Command::new("cmd");
-        // the empty string is `start`'s window title, so a quoted path isn't taken for one
-        c.args(["/C", "start", ""]).arg(p);
-        c
-    } else if cfg!(target_os = "macos") {
-        let mut c = Command::new("open");
-        c.arg(p);
-        c
-    } else {
-        let mut c = Command::new("xdg-open");
-        c.arg(p);
-        c
-    };
-    spawn(&mut cmd)
+    #[cfg(windows)]
+    {
+        windows::shell_execute(p)
+    }
+    #[cfg(not(windows))]
+    {
+        spawn(Command::new(if cfg!(target_os = "macos") { "open" } else { "xdg-open" }).arg(p))
+    }
 }
 
 /// "Show in …": the OS file manager's name.
@@ -76,7 +69,11 @@ pub fn terminal_command(dir: &Path, env_terminal: Option<&str>, installed: impl 
     let d = dir.display().to_string();
     let cmd = |parts: &[&str]| Some(parts.iter().map(|s| s.to_string()).collect());
     if cfg!(windows) {
-        return if installed("wt.exe") { cmd(&["wt.exe", "-d", &d]) } else { cmd(&["cmd.exe", "/c", "start", "cmd.exe"]) };
+        return if installed("wt.exe") {
+            cmd(&["wt.exe", "-d", &windows_terminal_escape(&d)])
+        } else {
+            cmd(&["cmd.exe", "/c", "start", "cmd.exe"])
+        };
     }
     if cfg!(target_os = "macos") {
         return cmd(&["open", "-a", "Terminal", &d]);
@@ -101,6 +98,12 @@ pub fn terminal_command(dir: &Path, env_terminal: Option<&str>, installed: impl 
         c.extend(args);
         c
     })
+}
+
+/// Windows Terminal splits its command line into commands at every `;`, also inside quotes: a
+/// folder named `a;calc` would start `calc`. `\;` is its escape for a literal one.
+pub fn windows_terminal_escape(arg: &str) -> String {
+    arg.replace(';', "\\;")
 }
 
 /// Shows `p` selected in the OS file manager (falls back to opening its folder). Blocks briefly on
@@ -140,6 +143,67 @@ pub fn show_items_argument(p: &Path) -> String {
     format!("['{}']", crate::clipboard::to_uri(p).replace('\'', "%27"))
 }
 
+/// Opening files on Windows: through the shell's own call, never `cmd /C start`, whose command
+/// line runs `&`, `|` and friends in file names as commands (`x&calc` would start calc).
+#[cfg(windows)]
+mod windows {
+    use std::ffi::{c_void, OsStr};
+    use std::io;
+    use std::os::windows::ffi::OsStrExt;
+    use std::path::Path;
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    #[link(name = "shell32")]
+    extern "system" {
+        fn ShellExecuteW(hwnd: *mut c_void, op: *const u16, file: *const u16, params: *const u16, dir: *const u16, show: i32) -> isize;
+    }
+
+    #[link(name = "ole32")]
+    extern "system" {
+        fn CoInitializeEx(reserved: *mut c_void, flags: u32) -> i32;
+        fn CoUninitialize();
+    }
+
+    const COINIT_APARTMENTTHREADED: u32 = 0x2;
+    const COINIT_DISABLE_OLE1DDE: u32 = 0x4;
+    const SW_SHOWNORMAL: i32 = 1;
+
+    fn wide(s: &OsStr) -> Vec<u16> {
+        s.encode_wide().chain([0]).collect()
+    }
+
+    /// `ShellExecuteW(open)` on a thread of its own (shell extensions want COM there, and a slow
+    /// handler doesn't hold up the window for long): its error if it fails within 2 s.
+    pub fn shell_execute(p: &Path) -> io::Result<()> {
+        let file = wide(p.as_os_str());
+        let (tx, rx) = mpsc::channel();
+        std::thread::Builder::new().name("fileem-open".into()).spawn(move || {
+            let op = wide(OsStr::new("open"));
+            // SAFETY: NUL-terminated wide strings that outlive the calls; COM is set up and torn
+            // down on this thread only
+            let r = unsafe {
+                let com = CoInitializeEx(std::ptr::null_mut(), COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+                let r = ShellExecuteW(std::ptr::null_mut(), op.as_ptr(), file.as_ptr(), std::ptr::null(), std::ptr::null(), SW_SHOWNORMAL);
+                if com >= 0 {
+                    CoUninitialize();
+                }
+                r
+            };
+            let _ = tx.send(r);
+        })?;
+        match rx.recv_timeout(Duration::from_secs(2)) {
+            // values above 32 mean success; below are the old error codes
+            Ok(r) if r > 32 => Ok(()),
+            Ok(2 | 3) => Err(io::Error::new(io::ErrorKind::NotFound, "Not found")),
+            Ok(5) => Err(io::Error::new(io::ErrorKind::PermissionDenied, "Access denied")),
+            Ok(31) => Err(io::Error::other("No program is associated with this kind of file")),
+            Ok(r) => Err(io::Error::other(format!("Windows could not open it (error {r})"))),
+            Err(_) => Ok(()), // still starting
+        }
+    }
+}
+
 fn spawn(cmd: &mut Command) -> io::Result<()> {
     let mut child = cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn()?;
     // reap the launcher when it exits, so it doesn't linger as a zombie
@@ -159,6 +223,21 @@ mod tests {
     #[test]
     fn show_in_file_manager_quotes_apostrophes_in_the_item_uri() {
         assert_eq!(show_items_argument(Path::new("/home/u/it's here.txt")), "['file:///home/u/it%27s%20here.txt']");
+    }
+
+    #[test]
+    fn semicolons_in_a_folder_for_windows_terminal_are_escaped() {
+        assert_eq!(windows_terminal_escape(r"C:\a;calc"), r"C:\a\;calc");
+        assert_eq!(windows_terminal_escape(r"C:\Users\me"), r"C:\Users\me");
+    }
+
+    #[test]
+    fn files_are_never_opened_through_cmd() {
+        // `cmd /C start` runs `&` in file names as a command separator
+        let src = include_str!("shell.rs");
+        let open = &src[src.find("pub fn open(").unwrap()..src.find("/// \"Show in").unwrap()];
+        assert!(!open.contains("\"cmd"), "{open}");
+        assert!(src.contains("ShellExecuteW(std::ptr::null_mut()"));
     }
 
     #[cfg(target_os = "linux")]

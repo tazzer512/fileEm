@@ -38,6 +38,12 @@ class ShellTest {
     }
 
     @Test
+    void semicolonsInAFolderForWindowsTerminalAreEscaped() {
+        assertEquals("C:\\a\\;calc", Shell.windowsTerminalEscape("C:\\a;calc"));
+        assertEquals("C:\\Users\\me", Shell.windowsTerminalEscape("C:\\Users\\me"));
+    }
+
+    @Test
     void macAndWindowsAlwaysHaveATerminal() {
         assumeTrue(!OsUtil.isLinux());
         assertEquals(OsUtil.isMac() ? "open" : "cmd.exe",

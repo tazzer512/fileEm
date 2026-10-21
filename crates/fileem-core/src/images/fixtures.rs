@@ -13,6 +13,50 @@ pub fn jpeg(w: u32, h: u32) -> Vec<u8> {
     out
 }
 
+/// A valid PNG whose header promises `w × h` pixels but holds only a few bytes of image data:
+/// a decoder that trusts the header would allocate gigabytes for it.
+pub fn png_claiming(w: u32, h: u32) -> Vec<u8> {
+    use image::ImageEncoder;
+    let mut out = Vec::new();
+    image::codecs::png::PngEncoder::new(&mut out)
+        .write_image(&[1, 2, 3, 255], 1, 1, image::ExtendedColorType::Rgba8)
+        .unwrap();
+    // IHDR's data follows the 8-byte signature and the chunk's length and type; its CRC after it
+    out[16..20].copy_from_slice(&w.to_be_bytes());
+    out[20..24].copy_from_slice(&h.to_be_bytes());
+    let crc = crc32(&out[12..29]);
+    out[29..33].copy_from_slice(&crc.to_be_bytes());
+    out
+}
+
+/// A BMP header promising `w × h` 24-bit pixels, followed by almost none.
+pub fn bmp_claiming(w: i32, h: i32) -> Vec<u8> {
+    let mut b = b"BM".to_vec();
+    b.extend(54u32.to_le_bytes()); // file size (not checked)
+    b.extend([0; 4]);
+    b.extend(54u32.to_le_bytes()); // pixel data offset
+    b.extend(40u32.to_le_bytes());
+    b.extend(w.to_le_bytes());
+    b.extend(h.to_le_bytes());
+    b.extend(1u16.to_le_bytes());
+    b.extend(24u16.to_le_bytes());
+    b.extend([0; 24]);
+    b.resize(160, 0);
+    b
+}
+
+/// The CRC-32 PNG chunks carry (bit by bit: only for test files).
+fn crc32(data: &[u8]) -> u32 {
+    let mut crc = !0u32;
+    for &byte in data {
+        crc ^= u32::from(byte);
+        for _ in 0..8 {
+            crc = if crc & 1 == 1 { (crc >> 1) ^ 0xedb8_8320 } else { crc >> 1 };
+        }
+    }
+    !crc
+}
+
 /// The start of a lossless JPEG (SOF3), like the raw sensor data in CR2/DNG: not viewable.
 pub fn lossless_jpeg(w: u16, h: u16) -> Vec<u8> {
     let mut b = vec![0xff, 0xd8, 0xff, 0xc3, 0, 11, 14];
