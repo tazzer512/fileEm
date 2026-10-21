@@ -12,7 +12,7 @@ Same machine (Linux, Wayland), resident memory of a running app showing a folder
 | | Memory (RSS) | Shipped as |
 |---|---|---|
 | Java (jpackage) | ~360 MB | 84 MB folder with a bundled runtime |
-| Rust, OpenGL renderer (default) | ~105 MB | one 20 MB executable |
+| Rust, OpenGL renderer (default) | ~105 MB | one 23 MB executable (8 MB .deb) |
 | Rust, software renderer (`SLINT_BACKEND=winit-software`) | ~32 MB | same executable |
 
 Most of the OpenGL figure is the GPU driver. OpenGL stays the default: the software renderer

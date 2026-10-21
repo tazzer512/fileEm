@@ -139,7 +139,8 @@ command when it isn't installed:
   jdeps finds most, but add ones only used reflectively or by name (`jdk.charsets` for IBM437,
   `jdk.localedata`). `tools/install-linux.sh` installs it per user with a `.desktop` entry named
   after the window class (`com.fileem.FileEmApp`; renaming `FileEmApp` breaks the dock icon,
-  `PackagingTest` checks). Icons: `tools/make-icon.py` writes `src/packaging/` and the window icons.
+  `PackagingTest` checks). Icons: `tools/make-icon.py` writes `src/packaging/`, the window icons and the Rust app's
+  `crates/fileem/icons/`.
 - `mvn test`: about 250 tests, a bit over a minute. UI tests run **headless on Monocle** (configured in
   the pom's `headless-ui-tests` profile), so no display is needed.
   - `mvn test -Dtest=FileOperationTest`: a single class. `-Dtest='!MainWindowUiTest'` skips
@@ -546,4 +547,5 @@ The suite has only run on Linux; the macOS/Windows paths (Trash via AWT, drive l
 Cmd shortcuts) are untested there. Packaging is only tried on Linux as an app-image (+
 `install-linux.sh`); the macOS/Windows images and the `deb`/`rpm`/`dmg`/`msi` installer types are
 untested, and on macOS the Dock icon only comes from the packaged `.app`. Possible next steps: CI on
-all three OSes (tests + `-Pdist`), archive browsing, folder-size column.
+all three OSes for the Java app too (tests + `-Pdist`; `.github/workflows/rust.yml` covers only
+the Rust app), archive browsing, folder-size column.

@@ -546,3 +546,8 @@ are the Java sources, as a size hint.
 - `Path::join("")` adds a trailing separator (`new.txt/`), which no longer names a file.
 - `notify`'s inotify backend reports opens and reads (`EventKind::Access`): filter them, or a
   watched folder refreshes itself every time it is listed.
+- `slint::set_xdg_app_id` needs the platform to exist (it returns `NoPlatform` before): call it
+  after the first `AppWindow::new()` and before `run()` / `show()`; every later window gets it.
+  Check it with `WAYLAND_DEBUG=1` (`xdg_toplevel.set_app_id`) or, under X11, `xprop WM_CLASS`.
+- Timing renders: debug builds are ~10× slower than release; measure `take_snapshot` with
+  `cargo test --release`.
