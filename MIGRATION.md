@@ -566,6 +566,8 @@ are the Java sources, as a size hint.
 - UI tests: wait for a condition, not a fixed time, before scrolling the tree. The tree reveals
   the current folder in the background and scrolls to it, so under load it scrolled away again
   after `settle` (the drives scenario failed in 3 of 4 full runs); `tree_to_top` waits for it.
-- Audit, open: with 100,000 files an arrow key takes ~65 ms in release (`sync_selection`
-  reads every row, ~34 ms; `push_view` builds the status from all rows, ~24 ms); both should
-  touch only the rows that changed and the selected rows.
+- With 100,000 files an arrow key took ~65 ms in release: `sync_selection` read every row and
+  the status walked all rows to find the selected ones. `Side::flagged` remembers the rows drawn
+  selected or current, so a change touches only those and the new ones, and
+  `Tab::selected_rows` costs the selection's size (now ~4 ms). Select all (~140 ms) and the first
+  move after it still touch every row; type-ahead compares names without lowercased copies.

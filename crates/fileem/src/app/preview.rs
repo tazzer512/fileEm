@@ -239,7 +239,7 @@ pub fn selection_changed(app: &Shared) {
         let a = app.borrow();
         let tab = a.tab();
         let current = tab.current_row().filter(|&r| tab.is_selected(r));
-        current.or_else(|| (0..tab.len()).find(|&r| tab.is_selected(r))).map(|r| tab.row(r).clone())
+        current.or_else(|| tab.selected_rows().first().copied()).map(|r| tab.row(r).clone())
     };
     let mut a = app.borrow_mut();
     if same(entry.as_ref(), a.preview.wanted.as_ref()) {

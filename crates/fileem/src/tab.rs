@@ -247,9 +247,17 @@ impl Tab {
         self.current.as_ref().and_then(|p| self.row_of.get(p).copied())
     }
 
+    /// Rows of the selected items, in row order. Costs the selection's size, not the folder's:
+    /// arrow keys in a folder of 100,000 files call it on every press.
+    pub fn selected_rows(&self) -> Vec<usize> {
+        let mut rows: Vec<usize> = self.selected.iter().filter_map(|p| self.row_of.get(p).copied()).collect();
+        rows.sort_unstable();
+        rows
+    }
+
     /// Selected paths in row order.
     pub fn selected_paths(&self) -> Vec<PathBuf> {
-        self.rows().filter(|e| self.selected.contains(e.path())).map(|e| e.path().to_path_buf()).collect()
+        self.selected_rows().into_iter().map(|r| self.row(r).path().to_path_buf()).collect()
     }
 
     /// A click on `row`: select only it; Ctrl/Cmd toggles it; Shift selects the range from the anchor.
@@ -419,7 +427,7 @@ impl Tab {
             let why = if self.filter.trim().is_empty() { "hidden" } else { "filtered out" };
             s.push_str(&format!(" ({} {why})", formats::count(left_out as u64)));
         }
-        let sel: Vec<&FileEntry> = self.rows().filter(|e| self.selected.contains(e.path())).collect();
+        let sel: Vec<&FileEntry> = self.selected_rows().into_iter().map(|r| self.row(r)).collect();
         if !sel.is_empty() {
             s.push_str(&format!(", {} selected", formats::count(sel.len() as u64)));
             let bytes: u64 = sel.iter().filter_map(|e| e.size()).sum();

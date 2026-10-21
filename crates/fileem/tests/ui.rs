@@ -507,6 +507,9 @@ fn keyboard_selection_and_enter_opens_files_without_launching() {
     assert_eq!(f.selected(), ["alpha"]);
     f.chord(&[Key::Control], "a");
     assert_eq!(f.selected().len(), 5);
+    f.key(Key::DownArrow);
+    assert_eq!(f.selected(), ["beta"], "a move after select all clears the other rows");
+    assert_eq!(f.rows().iter().filter(|r| r.current).count(), 1);
 
     f.key(Key::End);
     f.key(Key::Return);

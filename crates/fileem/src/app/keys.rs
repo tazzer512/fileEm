@@ -138,6 +138,13 @@ fn is_special(c: char) -> bool {
     ('\u{F700}'..='\u{F8FF}').contains(&c)
 }
 
+/// Whether `name` lowercased starts with `prefix` (lowercase), without copying the name: type-ahead
+/// checks every row up to the match.
+fn starts_with_lowercase(name: &str, prefix: &str) -> bool {
+    let mut lower = name.chars().flat_map(char::to_lowercase);
+    prefix.chars().all(|p| lower.next() == Some(p))
+}
+
 /// Typing a name's first letters jumps to it; a pause of a second starts a new search.
 fn type_ahead(app: &Shared, c: char) {
     let found = {
@@ -149,11 +156,25 @@ fn type_ahead(app: &Shared, c: char) {
         a.type_ahead_at = Some(now);
         a.type_ahead.extend(c.to_lowercase());
         let prefix = a.type_ahead.clone();
-        let path = a.tab().rows().find(|e| e.name().to_lowercase().starts_with(&prefix)).map(|e| e.path().to_path_buf());
+        let path = a.tab().rows().find(|e| starts_with_lowercase(e.name(), &prefix)).map(|e| e.path().to_path_buf());
         path.is_some_and(|p| a.tab_mut().select_path(&p))
     };
     if found {
         let side = app.borrow().active;
         sync_selection(app, side, true);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn type_ahead_matches_the_start_of_a_name_in_any_case() {
+        assert!(starts_with_lowercase("Notes.txt", "no"));
+        assert!(starts_with_lowercase("ÉTÉ.txt", "été"));
+        assert!(starts_with_lowercase("a", ""));
+        assert!(!starts_with_lowercase("No", "not"));
+        assert!(!starts_with_lowercase("big.bin", "i"));
     }
 }

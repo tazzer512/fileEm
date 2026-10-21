@@ -97,6 +97,9 @@ pub struct Side {
     reveal_token: u64,
     tree_width: f32,
     files: Rc<VecModel<FileRow>>,
+    /// The rows of `files` drawn selected or current, so a selection change touches only those
+    /// and the new ones, not every row.
+    flagged: Vec<usize>,
     /// The Details list's model in the grid views.
     no_files: Rc<VecModel<FileRow>>,
     /// The names Slint measures for List's column width (`grid::names_to_measure`, a line each),
@@ -139,6 +142,7 @@ impl Side {
             reveal_token: 0,
             tree_width: 240.0,
             files: Rc::new(VecModel::default()),
+            flagged: Vec::new(),
             no_files: Rc::new(VecModel::default()),
             measure_names: SharedString::new(),
             measured_width: 0.0,
@@ -764,6 +768,10 @@ fn sync_files(app: &Shared, side: usize) {
             })
             .collect();
         s.files.set_vec(rows);
+        let flagged = flagged_rows(tab);
+        let s = &mut a.sides[side];
+        s.flagged = flagged;
+        let tab = &s.tabs[s.active].tab;
         let names = crate::grid::names_to_measure((0..tab.len()).map(|r| tab.row(r).name()));
         let rough = names.first().map_or(0.0, |n| crate::grid::rough_width(n));
         let names: SharedString = names.iter().map(|n| n.replace(['\n', '\r'], " ")).collect::<Vec<_>>().join("\n").into();
@@ -783,6 +791,13 @@ fn sync_files(app: &Shared, side: usize) {
     views::request_thumbs(app);
 }
 
+/// The rows a tab shows selected or current.
+fn flagged_rows(tab: &Tab) -> Vec<usize> {
+    let mut rows = tab.selected_rows();
+    rows.extend(tab.current_row());
+    rows
+}
+
 /// Updates only the selection flags of rows that changed; with `scroll`, the focused row is
 /// scrolled into view.
 fn sync_selection(app: &Shared, side: usize, scroll: bool) {
@@ -791,7 +806,9 @@ fn sync_selection(app: &Shared, side: usize, scroll: bool) {
         let s = &mut a.sides[side];
         s.status_message = None;
         let current = s.tab().current_row();
-        for r in 0..s.files.row_count() {
+        let flagged = flagged_rows(s.tab());
+        let old = std::mem::take(&mut s.flagged);
+        for &r in old.iter().chain(&flagged) {
             let Some(mut row) = s.files.row_data(r) else { continue };
             let (sel, cur) = (s.tab().is_selected(r), current == Some(r));
             if row.selected != sel || row.current != cur {
@@ -800,6 +817,7 @@ fn sync_selection(app: &Shared, side: usize, scroll: bool) {
                 s.files.set_row_data(r, row);
             }
         }
+        s.flagged = flagged;
         if let (true, Some(r)) = (scroll, current) {
             s.ensure_row = r as i32;
             s.ensure_seq += 1;
