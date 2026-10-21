@@ -1,6 +1,6 @@
 [Desktop Entry]
 Type=Application
-Name=fileEm (Rust)
+Name=rustyFileEm
 GenericName=File Manager
 Comment=Explorer-style file manager with an optional second side
 Exec=fileem %f

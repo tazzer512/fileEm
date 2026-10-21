@@ -35,6 +35,8 @@ fn the_launcher_entry_is_named_after_the_app_id() {
     let desktop = read(&format!("packaging/linux/{APP_ID}.desktop"));
     assert_eq!(entry(&desktop, "StartupWMClass"), APP_ID);
     assert_eq!(entry(&desktop, "Icon"), APP_ID);
+    // its own name in the app grid, next to the Java app's "fileEm"
+    assert_eq!(entry(&desktop, "Name"), "rustyFileEm");
     assert!(entry(&desktop, "Exec").starts_with("fileem "), "the scripts rewrite or keep this");
     for script in ["packaging/linux/install.sh", "packaging/linux/make-deb.sh", "packaging/macos/make-app.sh"] {
         assert!(read(script).contains(&format!("app_id=\"{APP_ID}\"")), "{script} uses the app id");

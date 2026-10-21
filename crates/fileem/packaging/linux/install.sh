@@ -31,7 +31,7 @@ if [[ "${1:-}" == "--uninstall" ]]; then
     rm -f "$desktop"
     find "$icons" -path "*/apps/$app_id.png" -delete 2>/dev/null || true
     refresh
-    echo "fileEm (Rust) uninstalled (settings in ~/.config/fileem are kept)."
+    echo "rustyFileEm uninstalled (settings in ~/.config/fileem are kept)."
     exit 0
 fi
 
@@ -57,5 +57,5 @@ sed "s|^Exec=fileem |Exec=\"$app_dir/fileem\" |" "$here/$app_id.desktop" > "$des
 mv -f "$desktop.new" "$desktop"
 
 refresh
-echo "fileEm (Rust) installed: $app_dir/fileem"
-echo "Start it from the app grid / menu (search \"fileEm\"), or run: $app_dir/fileem"
+echo "rustyFileEm installed: $app_dir/fileem"
+echo "Start it from the app grid / menu (search \"rustyFileEm\"), or run: $app_dir/fileem"

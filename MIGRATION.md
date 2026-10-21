@@ -413,7 +413,7 @@ are the Java sources, as a size hint.
   both scripts use; named after the app id, `StartupWMClass` too); `install.sh` installs per user
   into `~/.local/share/fileem-rust` + icons + entry (`--uninstall` removes only those, never the
   Java app's install); `make-deb.sh` builds `target/dist/fileem_<version>_<arch>.deb`
-  (`/usr/bin/fileem`, entry, icons; needs `dpkg-deb`). The entry is called "fileEm (Rust)" until
+  (`/usr/bin/fileem`, entry, icons; needs `dpkg-deb`). The entry is called "rustyFileEm" until
   the cutover, so it can't be mixed up with the Java app's. No AppImage: the deb and the per-user
   script cover the two ways the Java app is installed now.
 - [x] **Windows**: release builds have no console (`windows_subsystem`), `build.rs` embeds the
