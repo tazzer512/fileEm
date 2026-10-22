@@ -89,7 +89,8 @@ pub fn key(app: &Shared, text: &str, ctrl: bool, alt: bool, shift: bool) -> bool
         if let Some(r) = row {
             commands::activate(app, r);
         }
-    } else if ctrl && c == ' ' {
+    } else if c == ' ' && !alt && !shift && (ctrl || !typing_ahead(app)) {
+        // Space (or Ctrl+Space) toggles the focused row; a space within a typed name is type-ahead
         app.borrow_mut().tab_mut().toggle_current();
         sync_selection(app, side, false);
     } else if letter('c') && !shift {
@@ -143,6 +144,12 @@ fn is_special(c: char) -> bool {
 fn starts_with_lowercase(name: &str, prefix: &str) -> bool {
     let mut lower = name.chars().flat_map(char::to_lowercase);
     prefix.chars().all(|p| lower.next() == Some(p))
+}
+
+/// Whether a type-ahead search is going on (a space then belongs to the name typed).
+fn typing_ahead(app: &Shared) -> bool {
+    let a = app.borrow();
+    !a.type_ahead.is_empty() && a.type_ahead_at.is_some_and(|t| t.elapsed() <= Duration::from_secs(1))
 }
 
 /// Typing a name's first letters jumps to it; a pause of a second starts a new search.

@@ -167,7 +167,8 @@ mvn test -Dheadless=false   # watch the UI tests run on screen
 | F9 | Toggle dual pane |
 | Ctrl+Shift+1…8, Ctrl+wheel | View: Extra large, Large, Medium, Small icons, List, Details, Tiles, Content |
 | Ctrl++ / Ctrl+− | Bigger / smaller items (icon views and Tiles) |
-| Arrows, Home/End, PgUp/PgDn | Move in the list or grid (Shift extends, Ctrl moves without selecting, Ctrl+Space toggles) |
+| Arrows, Home/End, PgUp/PgDn | Move in the list or grid (Shift extends, Ctrl moves without selecting) |
+| Space, Ctrl+Space | Select or deselect the focused item, keeping the others selected (to pick several files with the keyboard; within a typed name a space is part of the name) |
 
 On macOS, Ctrl is Cmd; Cmd+Backspace deletes and Cmd+Up/Down go up/open.
 

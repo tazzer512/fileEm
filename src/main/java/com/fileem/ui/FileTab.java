@@ -844,6 +844,26 @@ public final class FileTab extends BorderPane {
         }
     }
 
+    /** Space: selects or deselects the focused item, keeping the rest of the selection. */
+    void toggleFocused() {
+        int i = table.getFocusModel().getFocusedIndex();
+        if (i < 0) {
+            return;
+        }
+        var sm = table.getSelectionModel();
+        if (sm.isSelected(i)) {
+            sm.clearSelection(i);
+        } else {
+            sm.select(i);
+        }
+        table.getFocusModel().focus(i);
+    }
+
+    /** Whether a type-ahead search is going on (a space then belongs to the name typed). */
+    boolean typingAhead() {
+        return !typeAhead.isEmpty() && System.currentTimeMillis() - lastTyped <= 1000;
+    }
+
     /** Type-ahead find in either view: typing a name's first letters selects it. */
     void typeAhead(KeyEvent e) {
         String ch = e.getCharacter();

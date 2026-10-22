@@ -2417,6 +2417,32 @@ class MainWindowUiTest {
     }
 
     @Test
+    void spaceTogglesTheFocusedItemKeepingTheOthers(FxRobot robot) throws Exception {
+        FileTab tab = leftTab();
+        open(robot, tab, folderWith("space", "a.txt", "b.txt", "c.txt", "my file.txt"));
+        robot.interact(() -> tab.table().getFocusModel().focus(0));
+        robot.type(KeyCode.SPACE);
+        assertEquals(List.of("a.txt"), selectedNames(tab));
+        robot.push(KeyCode.CONTROL, KeyCode.DOWN);
+        robot.push(KeyCode.CONTROL, KeyCode.DOWN);
+        robot.type(KeyCode.SPACE);
+        assertEquals(List.of("a.txt", "c.txt"), selectedNames(tab));
+        robot.type(KeyCode.SPACE);
+        assertEquals(List.of("a.txt"), selectedNames(tab), "a second Space deselects");
+        assertEquals(2, (int) fx(() -> tab.table().getFocusModel().getFocusedIndex()), "the focus stays");
+
+        // the grid views share the selection and the key
+        setView(robot, tab, ViewMode.SMALL_ICONS);
+        robot.interact(tab::focusTable);
+        robot.type(KeyCode.SPACE);
+        assertEquals(List.of("a.txt", "c.txt"), selectedNames(tab));
+
+        // within a typed name a space is part of it
+        robot.write("my f");
+        assertEquals(List.of("my file.txt"), selectedNames(tab));
+    }
+
+    @Test
     void typeAheadWorksInTheGrid(FxRobot robot) throws Exception {
         FileTab tab = leftTab();
         open(robot, tab, folderWith("gridtype", "apple.txt", "notes.txt", "zebra.txt"));

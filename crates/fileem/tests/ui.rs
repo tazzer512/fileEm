@@ -356,6 +356,7 @@ fn ui() {
         ctrl_h_and_the_toolbar_toggle_hidden_files;
         clicking_a_column_header_sorts_and_again_reverses;
         typing_jumps_to_a_name;
+        space_toggles_the_focused_row_keeping_the_others;
         click_ctrl_click_and_shift_click_select;
         the_address_bar_navigates_and_reports_bad_paths;
         the_tree_reveals_the_current_folder_and_navigates_on_click;
@@ -545,6 +546,30 @@ fn typing_jumps_to_a_name() {
     f.key("n");
     assert_eq!(f.selected(), ["notes.txt"]);
     assert_eq!(f.current().as_deref(), Some("notes.txt"));
+}
+
+fn space_toggles_the_focused_row_keeping_the_others() {
+    let f = open_window();
+    f.key(Key::Home);
+    assert_eq!(f.selected(), ["alpha"]);
+    f.chord(&[Key::Control], Key::DownArrow);
+    f.chord(&[Key::Control], Key::DownArrow);
+    f.key(" ");
+    assert_eq!(f.selected(), ["alpha", "a.png"]);
+    f.chord(&[Key::Control], Key::DownArrow);
+    f.key(" ");
+    assert_eq!(f.selected(), ["alpha", "a.png", "big.bin"]);
+    f.key(" ");
+    assert_eq!(f.selected(), ["alpha", "a.png"], "a second Space deselects");
+    assert_eq!(f.current().as_deref(), Some("big.bin"), "the focus stays");
+
+    // within a typed name a space is part of it
+    fs::write(f.dir.join("my file.txt"), "x").unwrap();
+    wait_until(&f, "the new file", |f| f.names().contains(&"my file.txt".to_string()));
+    for k in ["m", "y", " ", "f"] {
+        f.key(k);
+    }
+    assert_eq!(f.selected(), ["my file.txt"]);
 }
 
 fn click_ctrl_click_and_shift_click_select() {

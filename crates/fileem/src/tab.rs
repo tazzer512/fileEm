@@ -381,7 +381,7 @@ impl Tab {
         self.current = Some(path);
     }
 
-    /// Space with Ctrl: toggles the focused row.
+    /// Space (with or without Ctrl): toggles the focused row.
     pub fn toggle_current(&mut self) {
         if let Some(p) = self.current.clone() {
             if !self.selected.remove(&p) {
