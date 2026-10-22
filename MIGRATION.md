@@ -74,7 +74,10 @@ are the Java sources, as a size hint.
   re-watched after delete + create; the app registers off the UI thread, reports reach it via a
   Slint callback with a token, refreshes are coalesced and keep scroll/focus/selection, a
   vanished folder opens its nearest parent, changed subfolders reload the tree. Our own
-  operations still refresh explicitly.) Original notes: `notify` crate; coalesced
+  operations still refresh explicitly. Later fixed in both apps: a navigation watches its folder
+  before listing it (a change in between was lost), the tree watches its open folders (it only
+  reloaded when a tab listed the folder), folders are watched by real path (two paths to one
+  folder share the OS watch), and dropped OS events refresh every watched folder.) Original notes: `notify` crate; coalesced
   refresh throttled to 2× the last listing time (`FileTab.requestRefresh`); skip while a
   navigation loads; refresh after our own operations.
 - [x] **Progress window** (done: `util::eta` with `EtaTest` ported; `progress.rs` rows

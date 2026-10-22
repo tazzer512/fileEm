@@ -39,22 +39,38 @@ fn shared() -> Option<&'static Shared> {
         .get_or_init(|| {
             let entries: Arc<Mutex<HashMap<PathBuf, Entry>>> = Arc::default();
             let routed = entries.clone();
-            let watcher = notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
-                if let Ok(event) = event {
-                    if !is_change(&event.kind) {
-                        return;
-                    }
-                    for p in &event.paths {
-                        // a change of an item concerns its folder; one of the folder itself, the folder
-                        changed(&routed, p.parent());
-                        changed(&routed, Some(p));
-                    }
-                }
-            })
-            .ok()?;
+            let watcher =
+                notify::recommended_watcher(move |event: notify::Result<notify::Event>| route(&routed, event)).ok()?;
             Some(Shared { watcher: Mutex::new(watcher), entries, registering: Mutex::new(()) })
         })
         .as_ref()
+}
+
+/// Hands an event to the folders it concerns.
+fn route(entries: &Arc<Mutex<HashMap<PathBuf, Entry>>>, event: notify::Result<notify::Event>) {
+    match event {
+        // the OS dropped events (inotify's queue overflowed in a big copy) or reported an error:
+        // any folder may have changed
+        Ok(event) if event.need_rescan() => changed_all(entries),
+        Err(_) => changed_all(entries),
+        Ok(event) => {
+            if !is_change(&event.kind) {
+                return;
+            }
+            for p in &event.paths {
+                // a change of an item concerns its folder; one of the folder itself, the folder
+                changed(entries, p.parent());
+                changed(entries, Some(p));
+            }
+        }
+    }
+}
+
+fn changed_all(entries: &Arc<Mutex<HashMap<PathBuf, Entry>>>) {
+    let dirs: Vec<PathBuf> = entries.lock().unwrap().keys().cloned().collect();
+    for dir in dirs {
+        changed(entries, Some(&dir));
+    }
 }
 
 /// Whether an event changes what a listing shows. Reads are none: inotify reports opening the
@@ -120,6 +136,10 @@ impl Drop for WatchHandle {
 /// off the UI thread. A folder that can't be watched simply never reports.
 pub fn watch(dir: &Path, on_change: impl Fn() + Send + Sync + 'static) -> WatchHandle {
     let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+    // by real path: a folder opened through a link and directly is one folder, and the OS has one
+    // watch for it (removing it for one path would end it for the other)
+    let dir = std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
+    let dir = dir.as_path();
     let handle = WatchHandle { dir: dir.to_path_buf(), id };
     let Some(s) = shared() else { return handle };
     let _registering = s.registering.lock().unwrap();
@@ -224,6 +244,40 @@ mod tests {
         let _new = starting.join().unwrap();
         fs::write(dir.join("new.txt"), "x").unwrap();
         rx.recv_timeout(Duration::from_secs(3)).expect("the new watch still reports changes");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_folder_watched_through_a_link_and_directly_reports_to_both() {
+        let tmp = tempfile::tempdir().unwrap();
+        let real = tmp.path().join("real");
+        fs::create_dir(&real).unwrap();
+        let link = tmp.path().join("link");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        let (_, via_link, listener) = counter();
+        let linked = watch(&link, listener);
+        let (_, direct, listener) = counter();
+        let _direct = watch(&real, listener);
+        fs::write(real.join("a.txt"), "x").unwrap();
+        via_link.recv_timeout(WAIT).expect("reported through the link");
+        direct.recv_timeout(WAIT).expect("reported directly");
+        std::thread::sleep(DEBOUNCE + Duration::from_millis(200));
+        while direct.try_recv().is_ok() {}
+        // regression: dropping the link's watch removed the OS watch the other path shared
+        drop(linked);
+        fs::write(real.join("b.txt"), "x").unwrap();
+        direct.recv_timeout(WAIT).expect("still reported after the link's watch is gone");
+    }
+
+    #[test]
+    fn dropped_events_report_every_folder() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (_, rx, listener) = counter();
+        let _handle = watch(tmp.path(), listener);
+        // what the OS sends when its queue overflowed: no paths, only a flag
+        let overflow = notify::Event::new(EventKind::Other).set_flag(notify::event::Flag::Rescan);
+        route(&shared().unwrap().entries, Ok(overflow));
+        rx.recv_timeout(WAIT).expect("an overflow refreshes the folder");
     }
 
     #[test]

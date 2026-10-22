@@ -545,6 +545,60 @@ class MainWindowUiTest {
     }
 
     @Test
+    void aChangeRightAfterTheListingIsNotLost(FxRobot robot) throws Exception {
+        Path dir = folderWith("gap", "first.txt");
+        FileTab tab = leftTab();
+        // regression: the watch started only once the listing was shown, so this was never seen
+        FileTab.afterListing = listed -> {
+            if (listed.equals(dir)) {
+                try {
+                    Files.writeString(dir.resolve("late.txt"), "x");
+                } catch (java.io.IOException e) {
+                    throw new java.io.UncheckedIOException(e);
+                }
+            }
+        };
+        try {
+            open(robot, tab, dir);
+        } finally {
+            FileTab.afterListing = null;
+        }
+        waitUntil("the late file shows up", () -> names(tab).contains("late.txt"));
+    }
+
+    @Test
+    void anExpandedTreeFolderFollowsTheDiskWhileTheTabShowsAnother(FxRobot robot) throws Exception {
+        Path a = Files.createDirectories(tmp.resolve("ta"));
+        Path x = Files.createDirectories(tmp.resolve("tx/old"));
+        FileTab tab = leftTab();
+        FolderTree tree = fx(() -> window.left().tree());
+        open(robot, tab, a);
+        waitUntil("tree marks ta", () -> tree.currentItem() != null && a.equals(tree.currentItem().getValue().path()));
+        TreeItem<TreeNode> top = fx(() -> tree.currentItem().getParent());
+        TreeItem<TreeNode> xItem = fx(() -> top.getChildren().stream()
+                .filter(i -> tmp.resolve("tx").equals(i.getValue().path())).findFirst().orElseThrow());
+        robot.interact(() -> xItem.setExpanded(true));
+        waitUntil("tx's subfolders", () -> childNames(xItem).equals(List.of("old")));
+
+        // regression: only the tab's own folder was watched, so the tree kept showing old folders
+        Files.createDirectory(tmp.resolve("tx/new"));
+        Files.delete(x);
+        waitUntil("the tree follows the disk", () -> childNames(xItem).equals(List.of("new")));
+
+        // collapsed it isn't watched; expanded again it shows what changed meanwhile
+        robot.interact(() -> xItem.setExpanded(false));
+        Files.createDirectory(tmp.resolve("tx/later"));
+        robot.interact(() -> xItem.setExpanded(true));
+        waitUntil("caught up after expanding", () -> childNames(xItem).equals(List.of("later", "new")));
+    }
+
+    private static List<String> childNames(TreeItem<TreeNode> item) {
+        return fx(() -> item.getChildren().stream()
+                .filter(c -> c.getValue().path() != null)
+                .map(c -> c.getValue().path().getFileName().toString()).toList());
+    }
+
+    @Test
     void treeFollowsTheTabAndClicksInTheTreeNavigate(FxRobot robot) throws Exception {
         Path deep = Files.createDirectories(tmp.resolve("t1/t2"));
         FileTab tab = leftTab();
@@ -1356,6 +1410,32 @@ class MainWindowUiTest {
         waitUntil("safe to remove notice", () -> dialogTexts().stream().anyMatch(t -> t.contains("can now be safely removed")));
         assertEquals(List.of(driveRoot), ejected);
         assertFalse(fx(() -> window.isEjecting(driveRoot)));
+        robot.clickOn("OK");
+    }
+
+    @Test
+    void theTreeStopsWatchingADriveWhileItIsEjected(FxRobot robot) throws Exception {
+        Path driveRoot = Files.createDirectories(tmp.resolve("stick3/photos")).getParent();
+        TreeNode drive = fakeDrive(robot, driveRoot);
+        FolderTree tree = fx(() -> window.left().tree());
+        TreeItem<TreeNode> item = fx(() -> tree.getRoot().getChildren().stream()
+                .flatMap(header -> header.getChildren().stream())
+                .filter(i -> driveRoot.equals(i.getValue().path())).findFirst().orElseThrow());
+        robot.interact(() -> item.setExpanded(true));
+        waitUntil("the open drive is watched", () -> tree.watchedPaths().contains(driveRoot));
+        List<java.util.Set<Path>> watchedWhenEjecting = new java.util.concurrent.CopyOnWriteArrayList<>();
+        CountDownLatch release = new CountDownLatch(1);
+        robot.interact(() -> window.setEjector(r -> {
+            watchedWhenEjecting.add(WaitForAsyncUtils.asyncFx(tree::watchedPaths).get());
+            release.await();
+        }));
+
+        fireMenuItem(fx(() -> window.treeMenuItems(drive)), "Eject");
+        waitUntil("ejecting", () -> !watchedWhenEjecting.isEmpty());
+        // a watch can keep a drive busy (Windows holds the folder open)
+        assertFalse(watchedWhenEjecting.get(0).stream().anyMatch(p -> p.startsWith(driveRoot)), "not watched while ejecting");
+        release.countDown();
+        waitUntil("safe to remove notice", () -> dialogTexts().stream().anyMatch(t -> t.contains("can now be safely removed")));
         robot.clickOn("OK");
     }
 

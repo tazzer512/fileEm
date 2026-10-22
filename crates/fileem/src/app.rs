@@ -25,7 +25,7 @@ mod views;
 mod volumes;
 
 use std::cell::RefCell;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::atomic::AtomicBool;
@@ -57,6 +57,7 @@ use crate::view_mode::{ViewMode, ViewState};
 use crate::{AppWindow, ColumnRow, CrumbRow, FileRow, PropertiesWindow, SideView, TabRow, TreeRow};
 
 pub use theme::{about, current as theme, data as theme_data, set as set_theme, toggle_dark, Themed};
+pub use nav::set_after_listing;
 pub use volumes::{Ejector, SystemEjector};
 pub use commands::{
     clipboard_text, close_requested, close_windows, open_dialog, properties_windows, run_command, run_operation,
@@ -84,6 +85,10 @@ pub struct TabState {
     watch: Option<WatchHandle>,
     /// Drops watcher reports for a folder no longer shown.
     watch_token: u64,
+    /// The watch the navigation in flight registered before listing (0 for none), and whether it
+    /// reported a change meanwhile.
+    next_watch_token: u64,
+    next_changed: bool,
     /// View mode and item sizes.
     view: ViewState,
 }
@@ -95,6 +100,10 @@ pub struct Side {
     active: usize,
     /// Drops tree loads of an older reveal.
     reveal_token: u64,
+    /// Watches on the tree's open folders (`Tree::open_folders`), so other programs' changes show.
+    tree_watches: HashMap<PathBuf, nav::TreeWatch>,
+    /// The latest reload of each tree folder: an older one finishing later is dropped.
+    tree_reloads: HashMap<PathBuf, u64>,
     tree_width: f32,
     files: Rc<VecModel<FileRow>>,
     /// The rows of `files` drawn selected or current, so a selection change touches only those
@@ -140,6 +149,8 @@ impl Side {
             tabs: Vec::new(),
             active: 0,
             reveal_token: 0,
+            tree_watches: HashMap::new(),
+            tree_reloads: HashMap::new(),
             tree_width: 240.0,
             files: Rc::new(VecModel::default()),
             flagged: Vec::new(),
@@ -280,6 +291,8 @@ impl App {
             select_after: None,
             watch: None,
             watch_token: 0,
+            next_watch_token: 0,
+            next_changed: false,
             view: ViewState::new(mode),
         }
     }
@@ -470,6 +483,11 @@ pub fn bookmarks(app: &Shared) -> Vec<(String, PathBuf)> {
 /// The Manage bookmarks window, when open.
 pub fn bookmarks_window(app: &Shared) -> Option<crate::BookmarksWindow> {
     bookmarks::window(app)
+}
+
+/// The folders `side`'s tree watches (its open folders).
+pub fn tree_watched(app: &Shared, side: usize) -> HashSet<PathBuf> {
+    app.borrow().sides[side].tree_watches.keys().cloned().collect()
 }
 
 /// Shows these drives instead of the system's and stops following the system's (tests).
@@ -873,6 +891,8 @@ fn sync_tree(app: &Shared, side: usize) {
         })
         .collect();
     a.sides[side].tree_rows.set_vec(rows);
+    drop(a);
+    nav::watch_tree_folders(app, side);
 }
 
 fn sync_tabs(app: &Shared, side: usize) {

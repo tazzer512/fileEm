@@ -64,7 +64,19 @@ public final class DirWatcher {
         return w == null ? () -> { } : w.register(dir, onChange);
     }
 
-    private synchronized AutoCloseable register(Path dir, Runnable listener) {
+    private AutoCloseable register(Path asked, Runnable listener) {
+        Path dir;
+        try {
+            // by real path: a folder opened through a link and directly is one folder, and the OS
+            // has one watch for it
+            dir = asked.toRealPath();
+        } catch (IOException | RuntimeException ex) {
+            return () -> { };
+        }
+        return registerReal(dir, listener);
+    }
+
+    private synchronized AutoCloseable registerReal(Path dir, Runnable listener) {
         Entry e = entries.get(dir);
         if (e == null || !e.key.isValid()) {
             // a key turns invalid when its folder is deleted; a folder created again at the same
@@ -88,7 +100,9 @@ public final class DirWatcher {
 
     private synchronized void unregister(Path dir, Entry e, Runnable listener) {
         e.listeners.remove(listener);
-        if (e.listeners.isEmpty() && entries.remove(dir, e)) {
+        if (e.listeners.isEmpty() && entries.remove(dir, e)
+                && entries.values().stream().noneMatch(other -> other.key == e.key)) {
+            // the OS gives one key per folder: another path to it (a bind mount) may share it
             e.key.cancel();
         }
     }
@@ -103,12 +117,12 @@ public final class DirWatcher {
             }
             key.pollEvents();
             key.reset();
-            Path dir = (Path) key.watchable();
             synchronized (this) {
-                Entry e = entries.get(dir);
-                if (e != null && e.key == key && !e.pending) {
-                    e.pending = true;
-                    debounce.schedule(() -> flush(e), DEBOUNCE_MS, TimeUnit.MILLISECONDS);
+                for (Entry e : entries.values()) {
+                    if (e.key == key && !e.pending) {
+                        e.pending = true;
+                        debounce.schedule(() -> flush(e), DEBOUNCE_MS, TimeUnit.MILLISECONDS);
+                    }
                 }
             }
         }

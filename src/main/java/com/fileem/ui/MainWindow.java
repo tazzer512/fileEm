@@ -1244,6 +1244,11 @@ public final class MainWindow extends BorderPane {
         return ejecting.contains(root);
     }
 
+    /** Whether {@code dir} is on a drive being ejected (the tree stops watching it: a watch can keep it busy). */
+    boolean onEjectingDrive(Path dir) {
+        return ejecting.stream().anyMatch(dir::startsWith);
+    }
+
     /**
      * Safely removes the drive at {@code root}, with all its other mounted partitions (the whole
      * drive goes, as in Windows and macOS). Refused while a file operation uses it. Tabs showing a
@@ -1304,6 +1309,8 @@ public final class MainWindow extends BorderPane {
     private void refreshTrees() {
         left.tree().refresh();
         right.tree().refresh();
+        left.tree().updateWatches();
+        right.tree().updateWatches();
     }
 
     /** Runs {@code then} once no tab in {@code tabs} shows a folder on {@code roots} (or after {@code tries} × 100 ms). */

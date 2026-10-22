@@ -1,6 +1,7 @@
 package com.fileem.fs;
 
 import com.fileem.FxTestSupport;
+import com.fileem.util.OsUtil;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -13,6 +14,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 class DirWatcherTest {
     @TempDir
@@ -63,6 +65,26 @@ class DirWatcherTest {
             assertTrue(again.await(15, TimeUnit.SECONDS), "changes in the new folder are reported");
         } finally {
             handle.close();
+        }
+    }
+
+    @Test
+    void aFolderWatchedThroughALinkAndDirectlyReportsToBoth() throws Exception {
+        assumeTrue(OsUtil.isPosix());
+        Path real = Files.createDirectory(dir.resolve("real"));
+        Path link = Files.createSymbolicLink(dir.resolve("link"), real);
+        CountDownLatch viaLink = new CountDownLatch(1);
+        CountDownLatch direct = new CountDownLatch(2);
+        AutoCloseable linked = DirWatcher.watch(link, viaLink::countDown);
+        try (AutoCloseable ignored = DirWatcher.watch(real, direct::countDown)) {
+            Files.writeString(real.resolve("a.txt"), "x");
+            // regression: the OS has one watch per folder, so only the first path heard of changes
+            assertTrue(viaLink.await(15, TimeUnit.SECONDS), "reported through the link");
+            Thread.sleep(600);
+            // and closing one path's watch leaves the other one working
+            linked.close();
+            Files.writeString(real.resolve("b.txt"), "x");
+            assertTrue(direct.await(15, TimeUnit.SECONDS), "reported directly, also after the link's watch closed");
         }
     }
 

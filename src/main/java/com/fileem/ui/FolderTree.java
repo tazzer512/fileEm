@@ -2,6 +2,7 @@ package com.fileem.ui;
 
 import atlantafx.base.theme.Styles;
 import com.fileem.Bookmarks;
+import com.fileem.fs.DirWatcher;
 import com.fileem.fs.Volumes;
 import com.fileem.fs.Volumes.Volume;
 import com.fileem.util.Bg;
@@ -46,6 +47,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.IdentityHashMap;
 import java.util.Iterator;
 import java.util.List;
@@ -246,6 +248,11 @@ final class FolderTree extends TreeView<TreeNode> {
     private static void syncChildren(ObservableList<TreeItem<TreeNode>> children, List<TreeItem<TreeNode>> wanted) {
         Set<TreeItem<TreeNode>> keep = Collections.newSetFromMap(new IdentityHashMap<>());
         keep.addAll(wanted);
+        for (TreeItem<TreeNode> c : children) {
+            if (!keep.contains(c)) {
+                stopWatching(c);
+            }
+        }
         children.removeIf(c -> !keep.contains(c));
         int j = 0;
         for (TreeItem<TreeNode> c : children) {
@@ -481,6 +488,22 @@ final class FolderTree extends TreeView<TreeNode> {
         });
     }
 
+    /** The folders watched for changes (test hook). */
+    Set<Path> watchedPaths() {
+        Set<Path> out = new HashSet<>();
+        forEachLoaded(getRoot(), item -> {
+            if (item.watched) {
+                out.add(item.path());
+            }
+        });
+        return out;
+    }
+
+    /** Starts or stops the folders' watches (after an eject started or ended). */
+    void updateWatches() {
+        forEachLoaded(getRoot(), FolderItem::updateWatch);
+    }
+
     private void reloadAll(TreeItem<TreeNode> root) {
         forEachLoaded(root, FolderItem::reload);
     }
@@ -494,6 +517,24 @@ final class FolderTree extends TreeView<TreeNode> {
         }
         for (TreeItem<TreeNode> c : List.copyOf(item.getChildren())) {
             forEachLoaded(c, action);
+        }
+    }
+
+    private static void closeQuietly(AutoCloseable c) {
+        try {
+            c.close();
+        } catch (Exception ignored) {
+            // nothing to do
+        }
+    }
+
+    /** Stops the watches of {@code item} and everything below it (it leaves the tree). */
+    private static void stopWatching(TreeItem<TreeNode> item) {
+        if (item instanceof FolderItem f) {
+            f.unwatch();
+        }
+        for (TreeItem<TreeNode> c : item.getChildren()) {
+            stopWatching(c);
         }
     }
 
@@ -515,6 +556,11 @@ final class FolderTree extends TreeView<TreeNode> {
     private final class FolderItem extends TreeItem<TreeNode> {
         private boolean loaded;
         private boolean loading;
+        /** A reload asked for while loading: the running one may have read the folder too early. */
+        private boolean reloadPending;
+        /** Watches the folder while it is expanded, so other programs' changes show up. */
+        private AutoCloseable watch;
+        private boolean watched;
         private final List<Runnable> waiting = new ArrayList<>();
 
         FolderItem(TreeNode node) {
@@ -527,6 +573,7 @@ final class FolderTree extends TreeView<TreeNode> {
                 if (expanded) {
                     load(null);
                 }
+                updateWatch();
             });
         }
 
@@ -550,8 +597,40 @@ final class FolderTree extends TreeView<TreeNode> {
         }
 
         void reload() {
-            if (loaded && !loading) {
+            if (loading) {
+                reloadPending = loaded;
+            } else if (loaded) {
                 fetch();
+            }
+        }
+
+        /** Watches the folder while it is loaded and expanded, unless its drive is being ejected. */
+        void updateWatch() {
+            boolean want = loaded && isExpanded() && !main.onEjectingDrive(path());
+            if (want == watched) {
+                return;
+            }
+            if (!want) {
+                unwatch();
+                return;
+            }
+            watched = true;
+            Path dir = path();
+            Bg.run(() -> DirWatcher.watch(dir, this::reload), handle -> {
+                if (watched && watch == null) {
+                    watch = handle;
+                    reload(); // what changed while it was being registered
+                } else {
+                    closeQuietly(handle); // collapsed or removed meanwhile
+                }
+            }, null);
+        }
+
+        void unwatch() {
+            watched = false;
+            if (watch != null) {
+                closeQuietly(watch);
+                watch = null;
             }
         }
 
@@ -585,6 +664,11 @@ final class FolderTree extends TreeView<TreeNode> {
             List<Runnable> callbacks = List.copyOf(waiting);
             waiting.clear();
             callbacks.forEach(Runnable::run);
+            if (reloadPending) {
+                reloadPending = false;
+                fetch();
+            }
+            updateWatch();
         }
     }
 

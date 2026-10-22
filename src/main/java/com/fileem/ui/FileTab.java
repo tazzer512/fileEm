@@ -97,9 +97,12 @@ public final class FileTab extends BorderPane {
     private boolean refreshPending;
     private volatile long lastListMillis;
     private long freeSpace = -1;
-    private AutoCloseable watch;
-    /** Identifies the latest watch registration (it runs in the background). */
-    private int watchToken;
+    /** The watch on the shown folder. */
+    private Watch watch;
+    /** The watch the navigation in flight registered, before listing its folder. */
+    private Watch nextWatch;
+    /** Test hook: runs in a navigation's job right after it listed its folder. */
+    static volatile java.util.function.Consumer<Path> afterListing;
 
     FileTab(MainWindow main, ExplorerSide side, Path initial) {
         this.main = main;
@@ -564,6 +567,11 @@ public final class FileTab extends BorderPane {
         refreshing = false;
         refreshPending = false;
         status.setText("Loading…");
+        if (nextWatch != null) {
+            nextWatch.close(); // its navigation is cancelled below
+        }
+        Watch w = new Watch();
+        nextWatch = w;
         startLoad(Bg.run(() -> {
             Path target = requested;
             Path sel = select;
@@ -578,12 +586,23 @@ public final class FileTab extends BorderPane {
                 sel = requested;
                 target = requested.getParent();
             }
-            return new Listing(target, sel, timedList(target));
+            // watched before it is listed: a change in between is caught, not lost
+            w.attach(DirWatcher.watch(target, () -> watchReported(w)));
+            List<FileEntry> entries = timedList(target);
+            java.util.function.Consumer<Path> hook = afterListing;
+            if (hook != null) {
+                hook.accept(target);
+            }
+            return new Listing(target, sel, entries);
         }, listing -> {
             if (gen != loadGeneration) {
+                w.close();
                 return;
             }
             navigating = false;
+            closeWatch();
+            watch = w;
+            nextWatch = null;
             Path target = listing.dir();
             List<FileEntry> entries = listing.entries();
             Path selectAfter = listing.select() != null ? listing.select()
@@ -614,11 +633,16 @@ public final class FileTab extends BorderPane {
             }
             updateStatus();
             side.tabNavigated(this);
+            if (w.changed) {
+                requestRefresh(); // changed while it was listed
+            }
         }, err -> {
+            w.close();
             if (gen != loadGeneration) {
                 return;
             }
             navigating = false;
+            nextWatch = null;
             updateStatus();
             if (previous == null) {
                 Path home = OsUtil.home();
@@ -686,20 +710,7 @@ public final class FileTab extends BorderPane {
         String name = FsUtil.displayName(currentDir);
         tab.setText(name);
         tab.setTooltip(new Tooltip(currentDir.toString()));
-        closeWatch();
         Path watched = currentDir;
-        int token = ++watchToken;
-        Bg.run(() -> DirWatcher.watch(watched, () -> {
-            if (watched.equals(currentDir)) {
-                requestRefresh();
-            }
-        }), handle -> {
-            if (token == watchToken) {
-                watch = handle;
-            } else {
-                closeQuietly(handle); // navigated on (or closed) while registering
-            }
-        }, null);
         freeSpace = -1;
         Bg.run(() -> Files.getFileStore(watched).getUsableSpace(), free -> {
             if (watched.equals(currentDir)) {
@@ -709,11 +720,46 @@ public final class FileTab extends BorderPane {
         }, null);
     }
 
+    /** A report of the watcher (FX thread): the shown folder refreshes; one still loading notes it. */
+    private void watchReported(Watch w) {
+        if (w == watch) {
+            requestRefresh();
+        } else if (w == nextWatch) {
+            w.changed = true;
+        }
+    }
+
     private void closeWatch() {
-        watchToken++; // a registration still in flight is closed when it arrives
         if (watch != null) {
-            closeQuietly(watch);
+            watch.close();
             watch = null;
+        }
+    }
+
+    /**
+     * A watch registered in a navigation's background job. A navigation cancelled before it
+     * calls back closes it through {@link #nextWatch}, also when the registration arrives late.
+     */
+    private static final class Watch {
+        private AutoCloseable handle;
+        private boolean closed;
+        /** A change was reported before the listing was shown (FX thread). */
+        boolean changed;
+
+        synchronized void attach(AutoCloseable h) {
+            if (closed) {
+                closeQuietly(h);
+            } else {
+                handle = h;
+            }
+        }
+
+        synchronized void close() {
+            closed = true;
+            if (handle != null) {
+                closeQuietly(handle);
+                handle = null;
+            }
         }
     }
 
@@ -734,6 +780,10 @@ public final class FileTab extends BorderPane {
         loadGeneration++;
         startLoad(null);
         closeWatch();
+        if (nextWatch != null) {
+            nextWatch.close();
+            nextWatch = null;
+        }
         main.showHiddenProperty().removeListener(hiddenListener);
     }
 

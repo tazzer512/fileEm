@@ -381,6 +381,14 @@ tools/                                  make-icon.py, install-linux.sh (per-user
   cells outside a shown scene and log hundreds of CSS lookup warnings.
 - **Refreshing**: `DirWatcher` refreshes tabs. After our own operations
   `MainWindow.refreshDirs` refreshes explicitly too, because macOS watching is slow.
+  `DirWatcher` keys folders by real path (a folder opened through a link and directly shares the
+  OS's one watch). A navigation registers its folder's watch in its listing job **before**
+  listing (`FileTab.Watch`; reports that arrive before the listing is shown trigger one refresh
+  after it), or changes in between were lost. The tree watches every loaded, expanded folder
+  (`FolderItem.updateWatch`; not on a drive being ejected) and reloads it on changes and once
+  the watch is registered; a reload asked for while one runs follows it (`reloadPending`).
+  Same in the Rust app (`nav::go_with`, `nav::watch_tree_folders`, `Tree::open_folders`; the
+  core watcher also refreshes every folder when the OS dropped events).
 - **Context menus** are built per request with `Views.dynamicContextMenu(control, supplier)`. Never
   fill a `ContextMenu` in `onShowing`: `ContextMenu.show` silently ignores a menu that is still
   empty, so it would never open (this bug shipped once). Menu contents live in

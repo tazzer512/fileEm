@@ -17,6 +17,15 @@ use crate::bg;
 use crate::tab::Nav;
 use crate::tree::Reveal;
 
+/// Test hook: runs in a navigation's job right after it listed its folder.
+static AFTER_LISTING: std::sync::Mutex<Option<fn(&Path)>> = std::sync::Mutex::new(None);
+
+/// Sets (or clears) a function each navigation calls right after listing its folder, in the
+/// background job (for tests: a change made there must still show up).
+pub fn set_after_listing(hook: Option<fn(&Path)>) {
+    *AFTER_LISTING.lock().unwrap() = hook;
+}
+
 /// Lists `dir` in the background and shows it in tab `id` when done. File system calls stay off
 /// the UI thread, even the check whether `dir` is a folder: on a dead network mount they would
 /// hang.
@@ -27,8 +36,10 @@ pub fn go(app: &Shared, id: u64, dir: PathBuf, nav: Nav) {
 /// Like [`go`]; with `nearest`, a folder that no longer exists is replaced by its nearest existing
 /// parent (or home), looked up in the background.
 pub fn go_with(app: &Shared, id: u64, dir: PathBuf, nav: Nav, nearest: bool) {
-    let generation = {
+    let (generation, watch) = {
         let mut a = app.borrow_mut();
+        // a navigation watches its folder before listing it, so a change in between is caught
+        let watch = (nav != Nav::Refresh).then(|| (a.next_id(), a.ui.clone()));
         let Some(t) = a.tab_state(id) else { return };
         if nav == Nav::Refresh {
             if t.navigating {
@@ -44,8 +55,13 @@ pub fn go_with(app: &Shared, id: u64, dir: PathBuf, nav: Nav, nearest: bool) {
             job.cancel();
         }
         t.generation += 1;
-        t.generation
+        if let Some((token, _)) = watch {
+            t.next_watch_token = token;
+            t.next_changed = false;
+        }
+        (t.generation, watch)
     };
+    let token = watch.as_ref().map(|(token, _)| *token);
     let target = dir.clone();
     let done_app = app.clone();
     let job = bg::run(
@@ -54,11 +70,16 @@ pub fn go_with(app: &Shared, id: u64, dir: PathBuf, nav: Nav, nearest: bool) {
             if nearest {
                 dir = dir.ancestors().find(|p| p.is_dir()).map(Path::to_path_buf).unwrap_or_else(os::home);
             }
+            let handle = watch.map(|(token, ui)| watch_folder(&dir, token, ui));
             let started = Instant::now();
-            listing::list(&dir, cancel).map(|entries| (dir, entries, started.elapsed()))
+            let listed = listing::list(&dir, cancel);
+            if let Some(hook) = *AFTER_LISTING.lock().unwrap() {
+                hook(&dir);
+            }
+            listed.map(|entries| (dir, entries, started.elapsed(), handle))
         },
-        move |result: std::io::Result<(PathBuf, Vec<FileEntry>, Duration)>| {
-            {
+        move |result: std::io::Result<(PathBuf, Vec<FileEntry>, Duration, Option<watcher::WatchHandle>)>| {
+            let changed = {
                 let mut a = done_app.borrow_mut();
                 let Some(t) = a.tab_state(id) else { return };
                 if t.generation != generation {
@@ -66,16 +87,28 @@ pub fn go_with(app: &Shared, id: u64, dir: PathBuf, nav: Nav, nearest: bool) {
                 }
                 t.load = None;
                 t.navigating = false;
-            }
+                if let Ok((_, _, took, _)) = &result {
+                    t.last_list = *took;
+                }
+                t.next_watch_token = 0;
+                std::mem::take(&mut t.next_changed)
+            };
             if nav == Nav::Refresh {
                 finish_refresh(&done_app, id);
             }
             match result {
-                Ok((dir, entries, took)) => {
-                    if let Some(t) = done_app.borrow_mut().tab_state(id) {
-                        t.last_list = took;
+                Ok((dir, entries, _, handle)) => {
+                    // the folder's new watch replaces the old one; a failed navigation keeps the old
+                    if let (Some(handle), Some(token)) = (handle, token) {
+                        if let Some(t) = done_app.borrow_mut().tab_state(id) {
+                            t.watch = Some(handle);
+                            t.watch_token = token;
+                        }
                     }
                     shown(&done_app, id, dir, entries, nav);
+                    if changed {
+                        request_refresh(&done_app, id); // changed while it was listed
+                    }
                 }
                 // the shown folder is gone: its nearest existing parent
                 Err(_) if nav == Nav::Refresh => go_with(&done_app, id, dir, Nav::Go, true),
@@ -89,7 +122,7 @@ pub fn go_with(app: &Shared, id: u64, dir: PathBuf, nav: Nav, nearest: bool) {
 }
 
 fn shown(app: &Shared, id: u64, dir: PathBuf, entries: Vec<FileEntry>, nav: Nav) {
-    let (side, same, folders_before, selected, watching) = {
+    let (side, same, folders_before, selected) = {
         let mut a = app.borrow_mut();
         let Some((side, _)) = a.find(id) else { return };
         let t = a.tab_state(id).expect("found above");
@@ -98,12 +131,9 @@ fn shown(app: &Shared, id: u64, dir: PathBuf, entries: Vec<FileEntry>, nav: Nav)
         t.tab.show(dir.clone(), entries, nav);
         let select = t.select_after.take();
         let selected = select.is_some_and(|item| t.tab.select_path(&item));
-        (side, same, before, selected, t.watch.is_some())
+        (side, same, before, selected)
     };
     let visible = app.borrow().find(id).is_some_and(|(s, i)| app.borrow().sides[s].active == i);
-    if !same || !watching {
-        watch_folder(app, id, &dir);
-    }
     if !same {
         sync_tabs(app, side);
     }
@@ -483,46 +513,33 @@ pub fn tabs_follow_rename(app: &Shared, from: &Path, to: &Path) {
 
 // ---- watching and refreshing ----
 
-/// Watches tab `id`'s folder; changes refresh it. Registering touches the file system (it can
-/// hang on a dead mount), so it happens in a background job.
-fn watch_folder(app: &Shared, id: u64, dir: &Path) {
-    let (token, ui) = {
-        let mut a = app.borrow_mut();
-        let token = a.next_id();
-        let ui = a.ui.clone();
-        let Some(t) = a.tab_state(id) else { return };
-        t.watch = None;
-        t.watch_token = token;
-        (token, ui)
-    };
-    let done_app = app.clone();
-    let path = dir.to_path_buf();
-    bg::run(
-        move |_| {
-            watcher::watch(&path, move || {
-                // from the watcher's thread to the event loop; the window may be gone by then
-                let _ = ui.upgrade_in_event_loop(move |ui| ui.invoke_dir_changed(token as i32));
-            })
-        },
-        move |handle| {
-            if let Some(t) = done_app.borrow_mut().tab_state(id) {
-                if t.watch_token == token {
-                    t.watch = Some(handle);
-                }
-            }
-        },
-    );
+/// Watches `dir` for a tab (or a tree folder): its reports reach [`dir_changed`] with `token`.
+/// Registering touches the file system (it can hang on a dead mount): call it in a background job.
+fn watch_folder(dir: &Path, token: u64, ui: slint::Weak<crate::AppWindow>) -> watcher::WatchHandle {
+    watcher::watch(dir, move || {
+        // from the watcher's thread to the event loop; the window may be gone by then
+        let _ = ui.upgrade_in_event_loop(move |ui| ui.invoke_dir_changed(token as i32));
+    })
 }
 
 /// A watcher report: refresh the tab watching with `token`, coalesced (one follow-up at most
 /// while a refresh runs).
 pub fn dir_changed(app: &Shared, token: u64) {
-    let id = {
-        let a = app.borrow();
-        a.sides.iter().flat_map(|s| s.tabs.iter()).find(|t| t.watch_token == token).map(|t| t.id)
+    let (id, tree_dir) = {
+        let mut a = app.borrow_mut();
+        let id = a.sides.iter().flat_map(|s| s.tabs.iter()).find(|t| t.watch_token == token).map(|t| t.id);
+        // a navigation still listing its folder refreshes once it is shown
+        if let Some(t) = a.sides.iter_mut().flat_map(|s| s.tabs.iter_mut()).find(|t| t.next_watch_token == token) {
+            t.next_changed = true;
+        }
+        let tree_dir = a.sides.iter().flat_map(|s| s.tree_watches.iter()).find(|(_, w)| w.token == token);
+        (id, tree_dir.map(|(dir, _)| dir.clone()))
     };
     if let Some(id) = id {
         request_refresh(app, id);
+    }
+    if let Some(dir) = tree_dir {
+        reload_tree_node(app, &dir);
     }
 }
 
@@ -574,23 +591,94 @@ pub fn refresh_dirs(app: &Shared, dirs: &[PathBuf]) {
 
 // ---- tree ----
 
-/// Re-reads the subfolders of every loaded tree node showing `dir`, in both trees.
+/// Re-reads the subfolders of every loaded tree node showing `dir`, in both trees. Only the
+/// latest reload of a folder is shown: an older one finishing later read it before the change.
 pub fn reload_tree_node(app: &Shared, dir: &Path) {
     for side in 0..2 {
-        let ids = app.borrow().sides[side].tree.loaded_nodes(dir);
-        if ids.is_empty() {
-            continue;
-        }
+        let (ids, generation) = {
+            let mut a = app.borrow_mut();
+            let ids = a.sides[side].tree.loaded_nodes(dir);
+            if ids.is_empty() {
+                continue;
+            }
+            let generation = a.next_id();
+            a.sides[side].tree_reloads.insert(dir.to_path_buf(), generation);
+            (ids, generation)
+        };
         let done_app = app.clone();
         let path = dir.to_path_buf();
         bg::run(
-            move |_| listing::subfolders(&path, true),
+            {
+                let path = path.clone();
+                move |_| listing::subfolders(&path, true)
+            },
             move |children: std::io::Result<Vec<FileEntry>>| {
+                {
+                    let mut a = done_app.borrow_mut();
+                    let reloads = &mut a.sides[side].tree_reloads;
+                    if reloads.get(&path) != Some(&generation) {
+                        return;
+                    }
+                    reloads.remove(&path);
+                }
                 if let Ok(children) = children {
                     for id in ids {
                         done_app.borrow_mut().sides[side].tree.set_children(id, children.clone());
                     }
                     sync_tree(&done_app, side);
+                }
+            },
+        );
+    }
+}
+
+/// A watch on an open tree folder; `handle` arrives from a background job.
+pub struct TreeWatch {
+    pub token: u64,
+    handle: Option<watcher::WatchHandle>,
+}
+
+/// Watches the tree's open folders (and stops watching the ones closed), so subfolders other
+/// programs create or delete show up. Not on a drive being ejected: a watch can keep it busy.
+pub fn watch_tree_folders(app: &Shared, side: usize) {
+    let (start, ui) = {
+        let mut a = app.borrow_mut();
+        let ejecting: Vec<PathBuf> = a.ejecting.iter().cloned().collect();
+        let mut wanted = a.sides[side].tree.open_folders();
+        wanted.retain(|p| !ejecting.iter().any(|r| p.starts_with(r)));
+        let watches = &mut a.sides[side].tree_watches;
+        if watches.len() == wanted.len() && wanted.iter().all(|p| watches.contains_key(p)) {
+            return;
+        }
+        watches.retain(|p, _| wanted.contains(p));
+        let new: Vec<PathBuf> = wanted.into_iter().filter(|p| !watches.contains_key(p)).collect();
+        let start: Vec<(PathBuf, u64)> = new.into_iter().map(|p| (p, a.next_id())).collect();
+        for (p, token) in &start {
+            a.sides[side].tree_watches.insert(p.clone(), TreeWatch { token: *token, handle: None });
+        }
+        (start, a.ui.clone())
+    };
+    for (dir, token) in start {
+        let done_app = app.clone();
+        let ui = ui.clone();
+        bg::run(
+            {
+                let dir = dir.clone();
+                move |_| watch_folder(&dir, token, ui)
+            },
+            move |handle| {
+                let mine = {
+                    let mut a = done_app.borrow_mut();
+                    match a.sides[side].tree_watches.get_mut(&dir) {
+                        Some(w) if w.token == token => {
+                            w.handle = Some(handle);
+                            true
+                        }
+                        _ => false, // closed (or reopened) meanwhile
+                    }
+                };
+                if mine {
+                    reload_tree_node(&done_app, &dir); // what changed while it was being registered
                 }
             },
         );

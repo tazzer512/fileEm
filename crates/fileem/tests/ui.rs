@@ -364,6 +364,8 @@ fn ui() {
         saving_the_session_keeps_what_only_the_java_app_uses;
         changes_made_elsewhere_show_up_and_keep_the_selection;
         a_new_subfolder_shows_up_in_the_tree;
+        an_open_tree_folder_follows_the_disk_while_the_tab_shows_another;
+        a_change_right_after_the_listing_is_not_lost;
         when_the_shown_folder_is_deleted_its_parent_opens;
         delete_and_f8_ask_first_and_cancel_keeps_the_files;
         shift_delete_deletes_permanently_after_confirming;
@@ -447,6 +449,7 @@ fn ui() {
         // drives and eject (stage 7)
         drives_show_their_space_and_only_plugged_in_ones_offer_eject;
         eject_moves_tabs_off_the_drive_first_then_ejects_and_confirms;
+        the_tree_stops_watching_a_drive_while_it_is_ejected;
         eject_is_refused_while_an_operation_uses_the_drive;
         eject_removes_the_whole_drive_and_moves_tabs_off_every_partition;
         a_failed_eject_shows_the_reason_and_can_be_retried;
@@ -688,6 +691,48 @@ fn a_new_subfolder_shows_up_in_the_tree() {
     fs::create_dir(f.dir.join("gamma")).unwrap();
     wait_until(&f, "the new folder in the tree", |f| f.tree().iter().any(|r| r.name == "gamma"));
     wait_until(&f, "and in the list", |f| f.names().contains(&"gamma".to_string()));
+}
+
+fn an_open_tree_folder_follows_the_disk_while_the_tab_shows_another() {
+    let f = open_window();
+    fs::create_dir(f.dir.join("alpha/old")).unwrap();
+    wait_until(&f, "the tree shows the folder", |f| f.tree().iter().any(|r| r.current));
+    let row = |f: &Fixture, name: &str| f.tree().iter().position(|r| r.name == name);
+    let current = f.tree().iter().position(|r| r.current).unwrap();
+    f.ui.invoke_tree_toggled(0, current as i32);
+    wait_until(&f, "subfolders", |f| row(f, "alpha").is_some());
+    f.ui.invoke_tree_toggled(0, row(&f, "alpha").unwrap() as i32);
+    wait_until(&f, "alpha's subfolder", |f| row(f, "old").is_some());
+
+    // regression: only the tab's folder was watched, so the tree kept showing old folders
+    fs::create_dir(f.dir.join("alpha/new")).unwrap();
+    fs::remove_dir(f.dir.join("alpha/old")).unwrap();
+    wait_until(&f, "the tree follows the disk", |f| row(f, "new").is_some() && row(f, "old").is_none());
+
+    // closed it isn't watched; opened again it shows what changed meanwhile
+    f.ui.invoke_tree_toggled(0, row(&f, "alpha").unwrap() as i32);
+    wait_until(&f, "alpha closed", |f| row(f, "new").is_none());
+    fs::create_dir(f.dir.join("alpha/later")).unwrap();
+    f.ui.invoke_tree_toggled(0, row(&f, "alpha").unwrap() as i32);
+    wait_until(&f, "caught up after opening", |f| row(f, "later").is_some() && row(f, "new").is_some());
+}
+
+fn a_change_right_after_the_listing_is_not_lost() {
+    let f = open_window();
+    fs::create_dir(f.dir.join("gap")).unwrap();
+    fs::write(f.dir.join("gap/first.txt"), "x").unwrap();
+    wait_until(&f, "gap listed", |f| f.names().contains(&"gap".to_string()));
+    // regression: the watch started only once the listing was shown, so this was never seen
+    app::set_after_listing(Some(|dir: &Path| {
+        let late = dir.join("late.txt");
+        if dir.file_name().is_some_and(|n| n == "gap") && !late.exists() {
+            fs::write(late, "x").unwrap();
+        }
+    }));
+    f.double_click("gap");
+    wait_until(&f, "gap", |f| f.address() == f.dir.join("gap"));
+    app::set_after_listing(None);
+    wait_until(&f, "the late file shows up", |f| f.names().contains(&"late.txt".to_string()));
 }
 
 fn when_the_shown_folder_is_deleted_its_parent_opens() {
@@ -3077,6 +3122,26 @@ fn eject_moves_tabs_off_the_drive_first_then_ejects_and_confirms() {
     assert!(!app::is_ejecting(&f.app, &drive));
     f.key(Key::Return);
     assert!(drive.join("photos").is_dir(), "a fake eject: nothing touched");
+}
+
+fn the_tree_stops_watching_a_drive_while_it_is_ejected() {
+    let f = open_window();
+    let drive = f._tmp.path().join("stick3");
+    fs::create_dir_all(drive.join("photos")).unwrap();
+    fake_drive(&f, &drive);
+    tree_to_top(&f);
+    let row = f.tree().iter().position(|r| r.name == "STICK").unwrap();
+    f.ui.invoke_tree_toggled(0, row as i32);
+    wait_until(&f, "the open drive is watched", |f| app::tree_watched(&f.app, 0).contains(&drive));
+    let (started, answer) = fake_ejector(&f, Vec::new());
+
+    ElementHandle::find_by_accessible_label(&f.ui, "Eject (safely remove)").next().unwrap().invoke_accessible_default_action();
+    eject_started(&f, &started);
+    // a watch can keep a drive busy (Windows holds the folder open)
+    assert!(!app::tree_watched(&f.app, 0).iter().any(|p| p.starts_with(&drive)), "not watched while ejecting");
+    answer.send(Ok(())).unwrap();
+    wait_until(&f, "the safe to remove notice", dialog_open);
+    f.key(Key::Return);
 }
 
 fn eject_is_refused_while_an_operation_uses_the_drive() {

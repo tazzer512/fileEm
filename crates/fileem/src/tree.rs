@@ -340,6 +340,25 @@ impl Tree {
             .collect()
     }
 
+    /// Folders shown expanded with their children loaded (also under a collapsed parent): the ones
+    /// whose subfolders are watched for changes.
+    pub fn open_folders(&self) -> HashSet<PathBuf> {
+        let mut out = HashSet::new();
+        let mut stack = self.roots.clone();
+        while let Some(id) = stack.pop() {
+            let n = &self.nodes[id];
+            if let Some(children) = &n.children {
+                if n.expanded {
+                    if let Some(p) = &n.path {
+                        out.insert(p.clone());
+                    }
+                }
+                stack.extend(children);
+            }
+        }
+        out
+    }
+
     /// Shows `dir` in the volumes section: expands its parents, loading what isn't loaded yet
     /// (one [`Reveal::Load`] per step), and makes it the current folder. Branches opened only for
     /// this are folded again when the current folder later leaves them.
@@ -544,6 +563,21 @@ mod tests {
         let (id, path) = t.toggle(1).unwrap(); // and Quick access' Home
         t.set_children(id, subfolders(&path, true).unwrap());
         assert_eq!(t.loaded_nodes(&v.join("home")).len(), 2);
+    }
+
+    #[test]
+    fn open_folders_are_the_expanded_loaded_ones() {
+        let (tmp, mut t) = setup();
+        let v = tmp.path().join("vol");
+        assert!(t.open_folders().is_empty(), "nothing loaded yet");
+        reveal(&mut t, &v.join("a/deep"));
+        assert_eq!(t.open_folders(), HashSet::from([v.clone(), v.join("a")]), "deep itself isn't loaded");
+        let a_row = t.row_of(t.rows().iter().copied().find(|&i| t.node(i).name == "a").unwrap()).unwrap();
+        t.toggle(a_row);
+        assert_eq!(t.open_folders(), HashSet::from([v.clone()]), "a closed");
+        t.toggle(a_row);
+        t.toggle(3); // Vol closed: a is still open beneath it
+        assert_eq!(t.open_folders(), HashSet::from([v.join("a")]));
     }
 
     #[test]
