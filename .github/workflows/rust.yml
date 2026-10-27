@@ -1,6 +1,6 @@
 # The Rust app on Linux, Windows and macOS: clippy, every test (the UI tests run headless on
 # Slint's testing backend, no display needed), the release build and its package, uploaded as
-# the run's artifacts (a .deb, fileEm.exe, fileEm.app zipped).
+# the run's artifacts (a .deb, fileEm.exe, fileEm.app zipped and as a .dmg).
 name: Rust
 
 on:
@@ -41,7 +41,7 @@ jobs:
       - name: Package (macOS)
         if: runner.os == 'macOS'
         run: |
-          crates/fileem/packaging/macos/make-app.sh
+          crates/fileem/packaging/macos/make-app.sh --dmg
           ditto -c -k --keepParent target/dist/fileEm.app target/dist/fileEm-macos.zip
       - name: Package (Windows)
         if: runner.os == 'Windows'
@@ -54,5 +54,6 @@ jobs:
           path: |
             target/dist/*.deb
             target/dist/fileEm-macos.zip
+            target/dist/*.dmg
             target/dist/fileEm.exe
           if-no-files-found: error

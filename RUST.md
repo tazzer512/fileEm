@@ -48,7 +48,9 @@ CI (`.github/workflows/rust.yml`) builds them on every push.
   `~/.local/share/fileem-rust`, icons and the launcher entry `com.fileem.FileEm.desktop`. Next to
   the Java app's install, not over it.
 - Linux, system wide: `crates/fileem/packaging/linux/make-deb.sh` → `fileem_<version>_<arch>.deb`.
-- macOS: `crates/fileem/packaging/macos/make-app.sh` → `fileEm.app` (unsigned).
+- macOS: `crates/fileem/packaging/macos/make-app.sh` → `fileEm.app` (unsigned); with `--dmg`
+  (on macOS: needs `hdiutil`) also `fileEm-<version>.dmg`, the app next to a link to
+  /Applications: one file to copy to a Mac.
 - Windows: `target/release/fileem.exe` is the app (icon and version info built in, no console).
 - The app id `com.fileem.FileEm` (`about::APP_ID`) names the launcher entry, the icons and the
   macOS bundle id; the windows carry it (Wayland app id, X11 class), so docks show the icon.
@@ -111,7 +113,7 @@ crates/fileem/             the app
                            and its stylesheets)
   icons/                   the app icon: PNGs 16–512 px, ico, icns (tools/make-icon.py)
   packaging/linux/         launcher entry, install.sh (per user), make-deb.sh
-  packaging/macos/         make-app.sh (fileEm.app)
+  packaging/macos/         make-app.sh (fileEm.app, --dmg)
   src/about.rs             the About text: version, build date, Rust/Slint, system (Java AppInfo);
                            build.rs fills in the date and versions
   src/view_mode.rs         the eight views, sizes and steps, session format (Java ViewMode)

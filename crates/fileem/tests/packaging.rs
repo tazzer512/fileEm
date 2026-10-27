@@ -203,3 +203,42 @@ fn the_macos_bundle_has_executable_icon_and_info_with_id_and_version() {
     run("packaging/macos/make-app.sh", &[], &[("FILEEM_BIN", bin.as_path()), ("FILEEM_DIST", dist.as_path())]);
     assert!(!app.join("Contents/stale").exists());
 }
+
+#[cfg(target_os = "macos")]
+#[test]
+fn the_macos_disk_image_holds_the_bundle_and_a_link_to_applications() {
+    let tmp = tempfile::tempdir().unwrap();
+    let bin = stand_in(tmp.path());
+    let dist = tmp.path().join("dist");
+    let out = run("packaging/macos/make-app.sh", &["--dmg"], &[("FILEEM_BIN", bin.as_path()), ("FILEEM_DIST", dist.as_path())]);
+    let image = PathBuf::from(out.lines().last().unwrap());
+    assert_eq!(image, dist.join(format!("fileEm-{VERSION}.dmg")));
+    assert!(!dist.join("dmg").exists(), "the staging folder is removed");
+
+    let mount = tmp.path().join("mnt");
+    let attach = Command::new("hdiutil").arg("attach").arg(&image).args(["-readonly", "-nobrowse", "-mountpoint"]).arg(&mount).output().unwrap();
+    assert!(attach.status.success(), "{}", String::from_utf8_lossy(&attach.stderr));
+    let bundled = fs::read(mount.join("fileEm.app/Contents/MacOS/fileem"));
+    let link = fs::read_link(mount.join("Applications"));
+    Command::new("hdiutil").arg("detach").arg(&mount).arg("-force").output().unwrap();
+    assert_eq!(bundled.unwrap(), fs::read(&bin).unwrap());
+    assert_eq!(link.unwrap(), Path::new("/Applications"));
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+#[test]
+fn the_disk_image_is_refused_without_hdiutil() {
+    let tmp = tempfile::tempdir().unwrap();
+    let bin = stand_in(tmp.path());
+    let dist = tmp.path().join("dist");
+    let out = Command::new("bash")
+        .arg(crate_dir().join("packaging/macos/make-app.sh"))
+        .arg("--dmg")
+        .env("FILEEM_BIN", &bin)
+        .env("FILEEM_DIST", &dist)
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("needs hdiutil"));
+    assert!(!dist.exists(), "nothing is built");
+}

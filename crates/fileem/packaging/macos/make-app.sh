@@ -4,7 +4,10 @@
 # shell tools, so it also runs elsewhere (tests); unsigned: the first start needs a right-click
 # > Open, or `xattr -dr com.apple.quarantine fileEm.app`.
 #
-#   cargo build --release -p fileem && crates/fileem/packaging/macos/make-app.sh
+# --dmg also packs it into target/dist/fileEm-<version>.dmg (the app next to a link to
+# /Applications, to drag it there): one file to copy to a Mac. That needs macOS's hdiutil.
+#
+#   cargo build --release -p fileem && crates/fileem/packaging/macos/make-app.sh [--dmg]
 #
 # FILEEM_BIN bundles another executable and FILEEM_DIST writes elsewhere (tests).
 set -euo pipefail
@@ -15,6 +18,14 @@ repo="$(cd "$crate/../.." && pwd)"
 app_id="com.fileem.FileEm"
 bin="${FILEEM_BIN:-$repo/target/release/fileem}"
 dist="${FILEEM_DIST:-$repo/target/dist}"
+dmg=false
+if [[ "${1:-}" == "--dmg" ]]; then
+    dmg=true
+    if ! command -v hdiutil >/dev/null; then
+        echo "--dmg needs hdiutil (macOS)" >&2
+        exit 1
+    fi
+fi
 if [[ ! -x "$bin" ]]; then
     echo "No executable found at $bin" >&2
     echo "Build it first: cargo build --release -p fileem" >&2
@@ -51,3 +62,15 @@ cat > "$app/Contents/Info.plist" <<EOF
 </plist>
 EOF
 echo "$app"
+
+if $dmg; then
+    image="$dist/fileEm-$version.dmg"
+    stage="$dist/dmg"
+    rm -rf "$stage" "$image"
+    mkdir -p "$stage"
+    cp -R "$app" "$stage/"
+    ln -s /Applications "$stage/Applications"
+    hdiutil create -quiet -volname fileEm -srcfolder "$stage" -fs HFS+ -format UDZO "$image"
+    rm -rf "$stage"
+    echo "$image"
+fi
