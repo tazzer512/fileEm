@@ -1244,11 +1244,12 @@ class MainWindowUiTest {
                 "Properties")) {
             assertTrue(hasItem(file, expected), expected + " in " + menuTexts(file));
         }
-        assertFalse(hasItem(file, "Extract here"), "only zips can be extracted");
+        assertFalse(hasItem(file, "Extract here") || hasItem(file, "Extract to folder"), "only zips can be extracted");
         assertFalse(hasItem(file, "Open in new tab"), "files don't open in tabs");
 
         select(robot, tab, "pack.zip");
-        assertTrue(hasItem(fx(() -> window.fileMenuItems(tab)), "Extract here"));
+        List<javafx.scene.control.MenuItem> zip = fx(() -> window.fileMenuItems(tab));
+        assertTrue(hasItem(zip, "Extract here") && hasItem(zip, "Extract to folder"), menuTexts(zip).toString());
 
         select(robot, tab, "sub");
         List<javafx.scene.control.MenuItem> folder = fx(() -> window.fileMenuItems(tab));
@@ -1305,6 +1306,20 @@ class MainWindowUiTest {
         fireMenuItem(fx(() -> window.fileMenuItems(tab)), "Extract here");
         waitUntil("extracted and selected", () -> tab.selectedPaths().equals(List.of(dir.resolve("Archive"))));
         assertEquals("a.txt", Files.readString(dir.resolve("Archive/a.txt")));
+    }
+
+    @Test
+    void extractToFolderNestsASingleItemInAFolderNamedAfterTheArchive(FxRobot robot) throws Exception {
+        Path dir = folderWith("arch1", "a.txt");
+        FileTab tab = leftTab();
+        open(robot, tab, dir);
+        select(robot, tab, "a.txt");
+        fireMenuItem(fx(() -> window.fileMenuItems(tab)), "Compress to ZIP");
+        waitUntil("archive selected", () -> tab.selectedPaths().equals(List.of(dir.resolve("a.zip"))));
+
+        fireMenuItem(fx(() -> window.fileMenuItems(tab)), "Extract to folder");
+        waitUntil("extracted and selected", () -> tab.selectedPaths().equals(List.of(dir.resolve("a"))));
+        assertEquals("a.txt", Files.readString(dir.resolve("a/a.txt")));
     }
 
     @Test

@@ -405,6 +405,13 @@ pub fn menu_activated(app: &Shared, id: i32) {
 }
 
 /// Runs a menu command (tests call it with the commands of [`menu`]'s menus).
+/// Extracts a zip next to itself (`Extract` or `ExtractToFolder`); what it made gets selected.
+fn extract(app: &Shared, zip: PathBuf, kind: Kind) {
+    if let Some(dir) = zip.parent().map(Path::to_path_buf) {
+        run_operation(app, kind, vec![zip], Some(dir));
+    }
+}
+
 pub fn run_command(app: &Shared, command: Command) {
     let parent = |paths: &[PathBuf]| paths.first().and_then(|p| p.parent()).map(Path::to_path_buf);
     let side = app.borrow().active;
@@ -437,11 +444,8 @@ pub fn run_command(app: &Shared, command: Command) {
                 run_operation(app, Kind::Compress, paths, Some(dir));
             }
         }
-        Command::Extract(zip) => {
-            if let Some(dir) = zip.parent().map(Path::to_path_buf) {
-                run_operation(app, Kind::Extract, vec![zip], Some(dir));
-            }
-        }
+        Command::Extract(zip) => extract(app, zip, Kind::Extract),
+        Command::ExtractToFolder(zip) => extract(app, zip, Kind::ExtractToFolder),
         Command::Rename(p) => rename(app, p),
         Command::Trash(paths) => delete(app, paths, false),
         Command::Delete(paths) => delete(app, paths, true),

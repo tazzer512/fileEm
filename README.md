@@ -115,7 +115,7 @@ mvn test -Dheadless=false   # watch the UI tests run on screen
   skipped, and free space is checked up front.
 - **Right-click menus** on files, folders, empty space and the tree: open (in a tab, the other
   side, a terminal or the OS file manager), cut/copy/paste (into a folder), copy/move to the other
-  side, duplicate, compress to ZIP / extract here, new folder / text file, rename, trash, delete,
+  side, duplicate, compress to ZIP / extract here / extract to folder, new folder / text file, rename, trash, delete,
   bookmark, sort by, show hidden files, copy path, properties. Quick access folders, bookmarks and
   drives in the tree can't be cut, renamed or deleted from there.
 - **Drag & drop** between sides, tabs, the tree and other applications. A drop **moves** the files,

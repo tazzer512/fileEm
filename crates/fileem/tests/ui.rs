@@ -1147,6 +1147,16 @@ fn paste_into_a_folder_from_its_menu() {
 
 fn tab_dirs(f: &Fixture, side: usize) -> Vec<PathBuf> {
     app::tabs(&f.app, side).0.into_iter().map(|d| d.unwrap_or_default()).collect()
+
+    // a single item goes into a folder named after the archive
+    f.click("notes.txt");
+    f.right_click(&f.list_row("notes.txt"));
+    f.pick("Compress to ZIP");
+    wait_until(&f, "the single-item archive selected", |f| f.selected() == ["notes.zip"]);
+    f.right_click(&f.list_row("notes.zip"));
+    f.pick("Extract to folder");
+    wait_until(&f, "the new folder selected", |f| f.selected() == ["notes"]);
+    assert_eq!(fs::read_to_string(f.dir.join("notes/notes.txt")).unwrap(), "1234567890");
 }
 
 fn ctrl_t_opens_and_ctrl_w_closes_tabs_but_never_the_last() {

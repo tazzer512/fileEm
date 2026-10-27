@@ -626,6 +626,24 @@ class FileOperationTest {
     }
 
     @Test
+    void extractingToAFolderAlwaysNestsAndNeverOverwrites() throws Exception {
+        Files.createDirectories(src.resolve("project/sub"));
+        Files.writeString(src.resolve("project/sub/a.txt"), "a");
+        FileOperation zip = run(Kind.COMPRESS, List.of(src.resolve("project")), src, FAIL_ON_CONFLICT);
+        Files.move(zip.result(), dst.resolve("pack.zip"));
+
+        FileOperation unzip = run(Kind.EXTRACT_TO_FOLDER, List.of(dst.resolve("pack.zip")), dst, FAIL_ON_CONFLICT);
+        assertEquals(dst.resolve("pack"), unzip.result());
+        assertEquals("a", Files.readString(dst.resolve("pack/project/sub/a.txt")), "the single top-level item is nested");
+
+        FileOperation again = run(Kind.EXTRACT_TO_FOLDER, List.of(dst.resolve("pack.zip")), dst, FAIL_ON_CONFLICT);
+        assertEquals(dst.resolve("pack (2)"), again.result(), "an existing folder is never merged into");
+        assertEquals("a", Files.readString(dst.resolve("pack (2)/project/sub/a.txt")));
+        assertEquals("a", Files.readString(dst.resolve("pack/project/sub/a.txt")));
+        assertNoTempFiles();
+    }
+
+    @Test
     void extractRefusesEntriesThatEscapeTheTarget() throws Exception {
         Path zip = dst.resolve("evil.zip");
         try (var out = new java.util.zip.ZipOutputStream(Files.newOutputStream(zip))) {

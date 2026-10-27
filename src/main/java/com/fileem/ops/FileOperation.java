@@ -70,8 +70,12 @@ import java.util.zip.ZipOutputStream;
  * </ul>
  */
 public final class FileOperation extends Task<Void> {
-    /** COMPRESS zips all sources into one archive in {@code targetDir}; EXTRACT unpacks one zip into it. */
-    public enum Kind { COPY, MOVE, DELETE, TRASH, COMPRESS, EXTRACT }
+    /**
+     * COMPRESS zips all sources into one archive in {@code targetDir}; EXTRACT unpacks each zip into it
+     * (a single top-level item lands as itself); EXTRACT_TO_FOLDER always unpacks into a folder named
+     * after the archive.
+     */
+    public enum Kind { COPY, MOVE, DELETE, TRASH, COMPRESS, EXTRACT, EXTRACT_TO_FOLDER }
 
     public enum Resolution { OVERWRITE, SKIP, KEEP_BOTH, CANCEL }
 
@@ -293,7 +297,7 @@ public final class FileOperation extends Task<Void> {
                 trashAll(work);
             } else if (kind == Kind.COMPRESS) {
                 compress(work);
-            } else if (kind == Kind.EXTRACT) {
+            } else if (kind == Kind.EXTRACT || kind == Kind.EXTRACT_TO_FOLDER) {
                 for (Path zip : work) {
                     checkCancel();
                     try {
@@ -442,7 +446,8 @@ public final class FileOperation extends Task<Void> {
 
     /**
      * Extracts into a hidden temp folder, then renames it into place: "name/" for archives with
-     * several top-level entries, or the single top-level item itself. Entries that would land
+     * several top-level entries (always for EXTRACT_TO_FOLDER), or else the single top-level item
+     * itself. Entries that would land
      * outside the target (zip-slip) are refused.
      */
     private void extract(Path zipFile) throws IOException {
@@ -500,7 +505,7 @@ public final class FileOperation extends Task<Void> {
                 ds.forEach(top::add);
             }
             Path out;
-            if (top.size() == 1) {
+            if (top.size() == 1 && kind == Kind.EXTRACT) {
                 out = FsUtil.uniqueName(targetDir.resolve(top.get(0).getFileName().toString()), false);
                 Files.move(top.get(0), out);
                 Files.delete(tmp);
@@ -564,7 +569,7 @@ public final class FileOperation extends Task<Void> {
                     long[] size = treeSize(src);
                     units += size[0] + size[1];
                 }
-                case EXTRACT -> {
+                case EXTRACT, EXTRACT_TO_FOLDER -> {
                     long[] size = zipSize(src);
                     units += size[0] + size[1];
                     newBytes += size[0];

@@ -115,7 +115,7 @@ are the Java sources, as a size hint.
 - [x] **Right-click menus** (`menu.rs`, toolkit-free and unit-tested; one `ContextMenuArea` in
   app.slint with six sections plus Sort by / New submenus, shown from code only). File menu:
   Open, Open in terminal, Show in file manager, Cut/Copy/Paste (Paste into folder on a folder),
-  Duplicate, Compress to ZIP, Extract here (zips), Rename, Move to Trash, Delete permanently,
+  Duplicate, Compress to ZIP, Extract here / Extract to folder (zips), Rename, Move to Trash, Delete permanently,
   Copy path, Properties. Empty space: Paste, Show hidden files, Refresh, Sort by, New (Folder,
   Text file), Open in terminal, Open in file manager, Copy path, Properties. Tree: the same per
   folder; quick access and drives are shortcuts (no cut, rename, delete, duplicate; drives no

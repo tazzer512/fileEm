@@ -35,6 +35,8 @@ pub enum Command {
     Duplicate(Vec<PathBuf>),
     Compress(Vec<PathBuf>),
     Extract(PathBuf),
+    /// Always into a folder named after the archive.
+    ExtractToFolder(PathBuf),
     Rename(PathBuf),
     Trash(Vec<PathBuf>),
     Delete(Vec<PathBuf>),
@@ -206,6 +208,7 @@ pub fn file_menu(selection: &[Item], dir: Option<&Path>, st: &State) -> Menu {
     let mut archive = vec![item("Compress to ZIP", Command::Compress(sel.clone()))];
     if single && !first.is_dir && is_zip(first.path) {
         archive.push(item("Extract here", Command::Extract(p.clone())));
+        archive.push(item("Extract to folder", Command::ExtractToFolder(p.clone())));
     }
     let mut remove = vec![item("Rename  (F2)", Command::Rename(p.clone())).enabled(single)];
     if st.trash {
@@ -446,7 +449,7 @@ mod tests {
         for expected in ["Open", "Open in terminal", "Show in", "Cut", "Copy", "Duplicate", "Compress to ZIP", "Rename", "Move to Trash", "Delete permanently", "Copy path", "Properties"] {
             assert!(has(&file, expected), "{expected} in {:?}", file.titles());
         }
-        assert!(!has(&file, "Extract here"), "only zips can be extracted");
+        assert!(!has(&file, "Extract here") && !has(&file, "Extract to folder"), "only zips can be extracted");
         assert!(!has(&file, "Open in new tab"), "files don't open in tabs");
         assert!(!file.find("Copy to other side").unwrap().enabled, "needs the second side");
         let dual = file_menu(&[Item { path: &doc, is_dir: false }], Some(dir), &State { dual: true, ..state(false) });
@@ -455,7 +458,9 @@ mod tests {
         assert_eq!(file.find("Open in terminal").unwrap().command, Command::OpenTerminal(dir.into()), "a file's terminal opens in its folder");
 
         let zip = dir.join("pack.ZIP");
-        assert!(has(&file_menu(&[Item { path: &zip, is_dir: false }], Some(dir), &state(false)), "Extract here"));
+        let archive = file_menu(&[Item { path: &zip, is_dir: false }], Some(dir), &state(false));
+        assert_eq!(archive.find("Extract here").unwrap().command, Command::Extract(zip.clone()));
+        assert_eq!(archive.find("Extract to folder").unwrap().command, Command::ExtractToFolder(zip.clone()));
 
         let sub = dir.join("sub");
         let folder = file_menu(&[Item { path: &sub, is_dir: true }], Some(dir), &state(true));

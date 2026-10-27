@@ -26,7 +26,9 @@ use crate::fs::trash;
 use crate::util::fs_util::{self, exists_nofollow};
 use crate::util::{formats, os};
 
-/// `Compress` zips all sources into one archive in the target folder; `Extract` unpacks each zip into it.
+/// `Compress` zips all sources into one archive in the target folder; `Extract` unpacks each zip into it
+/// (a single top-level item lands as itself); `ExtractToFolder` always unpacks into a folder named
+/// after the archive.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
     Copy,
@@ -35,6 +37,7 @@ pub enum Kind {
     Trash,
     Compress,
     Extract,
+    ExtractToFolder,
 }
 
 impl Kind {
@@ -45,7 +48,7 @@ impl Kind {
             Kind::Delete => "delete",
             Kind::Trash => "trash",
             Kind::Compress => "compress",
-            Kind::Extract => "extract",
+            Kind::Extract | Kind::ExtractToFolder => "extract",
         }
     }
 }
@@ -409,7 +412,7 @@ impl Worker {
         match self.kind {
             Kind::Trash => self.trash_all(&work)?,
             Kind::Compress => self.compress(&work)?,
-            Kind::Extract => {
+            Kind::Extract | Kind::ExtractToFolder => {
                 for zip in &work {
                     self.check_cancel()?;
                     match self.extract(zip) {
@@ -527,7 +530,8 @@ impl Worker {
     }
 
     /// Extracts into a hidden temp folder, then renames it into place: "name/" for archives with
-    /// several top-level entries, or the single top-level item itself. Entries that would land
+    /// several top-level entries (always for `ExtractToFolder`), or else the single top-level item
+    /// itself. Entries that would land
     /// outside the target (zip-slip) or whose names aren't valid paths are skipped and reported.
     fn extract(&mut self, zip_file: &Path) -> R<()> {
         let mut base = fs_util::display_name(zip_file);
@@ -596,7 +600,7 @@ impl Worker {
             self.advance(1);
         }
         let top: Vec<PathBuf> = fs::read_dir(tmp)?.filter_map(Result::ok).map(|e| e.path()).collect();
-        let out = if top.len() == 1 {
+        let out = if top.len() == 1 && self.kind == Kind::Extract {
             let out = fs_util::unique_name(&self.target.join(file_name(&top[0])), false);
             rename_noreplace(&top[0], &out)?;
             fs::remove_dir(tmp)?;
@@ -648,7 +652,7 @@ impl Worker {
                     let (bytes, entries) = self.tree_size(src)?;
                     units += bytes + entries;
                 }
-                Kind::Extract => {
+                Kind::Extract | Kind::ExtractToFolder => {
                     let (bytes, entries) = Self::zip_size(src)?;
                     units += bytes + entries;
                     new_bytes += bytes;

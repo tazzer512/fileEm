@@ -838,10 +838,13 @@ public final class MainWindow extends BorderPane {
         }
     }
 
-    /** Extracts a zip next to itself and selects what was extracted. */
-    void extract(Path zip) {
+    /**
+     * Extracts a zip next to itself and selects what was extracted: into a folder named after the
+     * archive, or (not {@code toFolder}) its single top-level item as itself.
+     */
+    void extract(Path zip, boolean toFolder) {
         if (zip.getParent() != null) {
-            selectResult(runOperation(Kind.EXTRACT, List.of(zip), zip.getParent()));
+            selectResult(runOperation(toFolder ? Kind.EXTRACT_TO_FOLDER : Kind.EXTRACT, List.of(zip), zip.getParent()));
         }
     }
 
@@ -1008,7 +1011,8 @@ public final class MainWindow extends BorderPane {
         items.add(new SeparatorMenuItem());
         items.add(item("Compress to ZIP", "mdi2a-archive-arrow-down-outline", () -> compress(sel)));
         if (single && !first.isDirectory() && isZip(first.path())) {
-            items.add(item("Extract here", "mdi2a-archive-arrow-up-outline", () -> extract(first.path())));
+            items.add(item("Extract here", "mdi2a-archive-arrow-up-outline", () -> extract(first.path(), false)));
+            items.add(item("Extract to folder", "mdi2f-folder-zip-outline", () -> extract(first.path(), true)));
         }
         items.add(new SeparatorMenuItem());
         MenuItem rename = item("Rename  (F2)", "mdi2r-rename-box", () -> rename(first.path()));

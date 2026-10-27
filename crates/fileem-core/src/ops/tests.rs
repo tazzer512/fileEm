@@ -745,6 +745,25 @@ fn extracting_a_single_top_level_item_does_not_nest_it_and_never_overwrites() {
     assert_eq!(tree(&d.dst.join("project")), "");
 }
 
+#[test]
+fn extracting_to_a_folder_always_nests_and_never_overwrites() {
+    let d = dirs();
+    fs::create_dir_all(d.src.join("project/sub")).unwrap();
+    write(&d.src.join("project/sub/a.txt"), "a");
+    let zip = run(Kind::Compress, &[d.src.join("project")], Some(&d.src));
+    fs::rename(zip.result().unwrap(), d.dst.join("pack.zip")).unwrap();
+
+    let unzip = run(Kind::ExtractToFolder, &[d.dst.join("pack.zip")], Some(&d.dst));
+    assert_eq!(unzip.result(), Some(d.dst.join("pack")));
+    assert_eq!(read(&d.dst.join("pack/project/sub/a.txt")), "a", "the single top-level item is nested");
+
+    let again = run(Kind::ExtractToFolder, &[d.dst.join("pack.zip")], Some(&d.dst));
+    assert_eq!(again.result(), Some(d.dst.join("pack (2)")), "an existing folder is never merged into");
+    assert_eq!(read(&d.dst.join("pack (2)/project/sub/a.txt")), "a");
+    assert_eq!(read(&d.dst.join("pack/project/sub/a.txt")), "a");
+    assert_no_temp_files(&d.base);
+}
+
 /// A zip with the given entries, each holding `data`.
 fn make_zip(path: &Path, names: &[&str], data: &[u8]) {
     use std::io::Write;

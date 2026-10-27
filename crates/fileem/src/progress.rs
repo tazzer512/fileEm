@@ -57,7 +57,7 @@ pub fn title(kind: Kind, sources: &[PathBuf], target: Option<&Path>) -> String {
         Kind::Delete => format!("Deleting {what}"),
         Kind::Trash => format!("Moving {what} to Trash"),
         Kind::Compress => format!("Compressing {what}"),
-        Kind::Extract => format!("Extracting {what}"),
+        Kind::Extract | Kind::ExtractToFolder => format!("Extracting {what}"),
     }
 }
 

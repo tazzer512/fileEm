@@ -119,7 +119,7 @@ public final class OperationUi {
             case DELETE -> "Deleting " + what;
             case TRASH -> "Moving " + what + " to Trash";
             case COMPRESS -> "Compressing " + what;
-            case EXTRACT -> "Extracting " + what;
+            case EXTRACT, EXTRACT_TO_FOLDER -> "Extracting " + what;
         };
     }
 
