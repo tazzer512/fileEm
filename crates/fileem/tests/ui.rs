@@ -1896,6 +1896,8 @@ fn the_toolbar_buttons_do_what_their_keys_do() {
     press("New tab (Ctrl+T)");
     wait_until(&f, "a second tab", |f| app::tabs(&f.app, 0).0.len() == 2);
     assert_eq!(app::tabs(&f.app, 0).1, 1, "the new tab is selected");
+    // a tab has its folder once the listing is in (on a slow machine only a moment later)
+    wait_until(&f, "the new tab's folder", |f| tab_dirs(f, 0)[1] != PathBuf::new());
     assert_eq!(tab_dirs(&f, 0), [f.dir.join("beta"), f.dir.join("beta")]);
     settle(&f);
 }
