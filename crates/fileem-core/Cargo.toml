@@ -3,6 +3,7 @@ name = "fileem-core"
 description = "fileEm's toolkit-free core: listing, file types, formatting and file operations"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 
 [features]
 # test files (JPEGs, camera raws, Photoshop documents) for the UI tests

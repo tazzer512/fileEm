@@ -3,6 +3,7 @@ name = "fileem"
 description = "fileEm: an Explorer-style file manager with an optional Commander-style second side"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 
 [[bin]]
 name = "fileem"
