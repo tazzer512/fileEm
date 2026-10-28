@@ -503,6 +503,7 @@ mod tests {
         for (n, size) in [("b.txt", 3), ("a10.txt", 1), ("a9.txt", 2), (".hidden", 1)] {
             fs::write(d.join(n), "x".repeat(size)).unwrap();
         }
+        fs_util::hide(&d.join(".hidden"));
         tmp
     }
 

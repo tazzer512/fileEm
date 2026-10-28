@@ -49,7 +49,8 @@ fn about() {
     let lock = std::fs::read_to_string("../../Cargo.lock").unwrap_or_default();
     let slint = lock
         .split("[[package]]")
-        .find(|p| p.contains("\nname = \"slint\"\n"))
+        // by lines: Windows checkouts may have CRLF line ends
+        .find(|p| p.lines().any(|l| l == "name = \"slint\""))
         .and_then(|p| p.lines().find_map(|l| l.strip_prefix("version = \"")))
         .map(|v| v.trim_end_matches('"'))
         .unwrap_or_default();

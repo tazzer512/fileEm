@@ -588,7 +588,8 @@ mod tests {
         assert_eq!(add(&file_menu(&[], Some(dir), &state(false))), Some(Command::AddBookmark(dir.into())), "the folder shown");
         assert_eq!(add(&tree_menu(&sub, NodeKind::Folder, None, &state(false))), Some(Command::AddBookmark(sub.clone())));
 
-        let st = State { bookmarks: vec![dir.into(), sub.clone()], ..state(false) };
+        // bookmarks are kept absolute ("/w" is C:\w on Windows)
+        let st = State { bookmarks: vec![fs_util::normalize(dir), fs_util::normalize(&sub)], ..state(false) };
         let marked = file_menu(&[Item { path: &sub, is_dir: true }], Some(dir), &st);
         assert_eq!(marked.find("Remove from bookmarks").unwrap().command, Command::RemoveBookmark(sub.clone()));
         assert!(!has(&marked, "Add to bookmarks"));

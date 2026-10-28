@@ -26,6 +26,30 @@ pub fn is_hidden(p: &Path) -> bool {
     }
 }
 
+/// Test files: hides `p`, which must have a dot name, also on Windows (where hiding is an
+/// attribute, not the name).
+#[cfg(any(test, feature = "fixtures"))]
+pub fn hide(p: &Path) {
+    assert!(p.file_name().is_some_and(|n| n.to_string_lossy().starts_with('.')), "a dot name: {}", p.display());
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        const FILE_ATTRIBUTE_HIDDEN: u32 = 0x2;
+        extern "system" {
+            fn GetFileAttributesW(name: *const u16) -> u32;
+            fn SetFileAttributesW(name: *const u16, attributes: u32) -> i32;
+        }
+        let wide: Vec<u16> = p.as_os_str().encode_wide().chain(Some(0)).collect();
+        // SAFETY: a NUL-terminated wide path that outlives both calls.
+        let ok = unsafe {
+            let attributes = GetFileAttributesW(wide.as_ptr());
+            attributes != u32::MAX && SetFileAttributesW(wide.as_ptr(), attributes | FILE_ATTRIBUTE_HIDDEN) != 0
+        };
+        assert!(ok, "hide {}", p.display());
+    }
+    assert!(is_hidden(p), "{} is hidden", p.display());
+}
+
 /// True for Windows directory junctions / mount points (reparse points that are not symlinks).
 /// Recursive operations must not descend into them.
 pub fn is_junction(p: &Path) -> bool {

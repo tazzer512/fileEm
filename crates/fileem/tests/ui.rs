@@ -42,6 +42,7 @@ fn open_window_with(prepare: impl FnOnce(&Session, &Path), start_there: bool) ->
     fs::write(dir.join("big.bin"), vec![0u8; 5000]).unwrap();
     fs::write(dir.join("a.png"), "png").unwrap();
     fs::write(dir.join(".hidden"), "h").unwrap();
+    fileem_core::util::fs_util::hide(&dir.join(".hidden"));
     let session = Rc::new(Session::load(&tmp.path().join("session.properties")));
     prepare(&session, &dir);
     let ui = AppWindow::new().unwrap();
@@ -1124,7 +1125,10 @@ fn new_text_file_from_the_menu() {
     assert_eq!(f.ui.get_dialog_select_end(), 13, "the name before .txt is selected");
     f.ui.set_dialog_text("todo.txt".into());
     f.button("Create").invoke_accessible_default_action();
-    wait_until(&f, "the new file", |f| f.selected() == ["todo.txt"]);
+    // step by step, so a failure says which part went wrong
+    wait_until(&f, "todo.txt created in the folder shown", |f| f.dir.join("todo.txt").exists());
+    wait_until(&f, "todo.txt listed", |f| f.names().contains(&"todo.txt".to_string()));
+    wait_until(&f, "todo.txt selected", |f| f.selected() == ["todo.txt"]);
     assert_eq!(fs::read(f.dir.join("todo.txt")).unwrap(), b"", "an empty file");
 }
 

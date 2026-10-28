@@ -451,6 +451,7 @@ impl Tree {
 mod tests {
     use super::*;
     use fileem_core::fs::listing::subfolders;
+    use fileem_core::util::fs_util;
     use std::fs;
 
     fn names(t: &Tree) -> Vec<String> {
@@ -483,6 +484,7 @@ mod tests {
         fs::create_dir_all(v.join("a/deep/er")).unwrap();
         fs::create_dir_all(v.join("b")).unwrap();
         fs::create_dir_all(v.join(".git")).unwrap();
+        fs_util::hide(&v.join(".git"));
         let quick = [Place { name: "Home".into(), path: tmp.path().to_path_buf() }];
         let volumes = [drive("Vol", &v)];
         (tmp, Tree::new(&quick, &volumes))
