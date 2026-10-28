@@ -26,11 +26,45 @@ mvn -Pdist -DskipTests package && tools/install-linux.sh   # again to update
 tools/install-linux.sh --uninstall                          # settings are kept
 ```
 
+## Rust version (branch `rust`)
+
+A port to Rust with a [Slint](https://slint.dev) UI lives next to the Java app (`crates/`): one
+native executable without a Java runtime, using a third to a tenth of the memory. It has the Java
+app's features except drag & drop with other applications (not possible with Slint 1.18: drags
+work inside its window, other programs exchange files through the clipboard). The Java app stays
+the reference until the Rust one has been in daily use.
+
+Ready-made builds: every push builds them in CI (GitHub Actions, *Rust* workflow); download the
+`fileem-Linux`, `fileem-Windows` or `fileem-macOS` artifact of a run, or
+`gh run download <run id> -R tazzer512/fileEm`.
+
+- **macOS**: open `fileEm-<version>.dmg` and drag fileEm to Applications. The app is unsigned:
+  the first time, right-click it and choose *Open* (or run
+  `xattr -dr com.apple.quarantine /Applications/fileEm.app`).
+- **Windows**: `fileEm.exe` is the whole app; put it anywhere and run it.
+- **Linux**: `sudo apt install ./fileem_<version>_<arch>.deb`, or per user (no root) from a
+  checkout: `cargo build --release -p fileem && crates/fileem/packaging/linux/install.sh`.
+
+Build and run it yourself with Rust stable ([rustup](https://rustup.rs); Linux also needs
+`libfontconfig1-dev` and `pkg-config`):
+
+```sh
+cargo run -p fileem [FOLDER]                  # debug build
+cargo build --release -p fileem               # target/release/fileem
+crates/fileem/packaging/macos/make-app.sh --dmg   # after the release build, on a Mac:
+                                              # target/dist/fileEm.app and the .dmg
+```
+
+`SLINT_BACKEND=winit-software` uses the software renderer: about 32 MB instead of about 105 MB
+of memory, but slower drawing on big screens. Build, test, packaging and layout details are in
+[RUST.md](RUST.md); the port's status and plan are in [MIGRATION.md](MIGRATION.md).
+
 ## Test
 
 ```sh
 mvn test                    # unit + end-to-end UI tests, headless (no display needed)
 mvn test -Dheadless=false   # watch the UI tests run on screen
+cargo test --workspace      # the Rust version: core, UI logic and headless UI tests
 ```
 
 ## Features
