@@ -1583,7 +1583,17 @@ fn choosing_copy_after_a_drop_onto_the_tree_keeps_the_original() {
     });
     tree_settled(&f);
     f.click("inside.txt");
-    f.drag_drop(f.on_name("inside.txt"), f.center(&f.tree_row("beta")));
+    let beta = f.center(&f.tree_row("beta"));
+    f.drag_to(f.on_name("inside.txt"), beta, &[]);
+    wait_until(&f, "the drag started", |f| f.ui.get_drag_image().size().width > 0);
+    // a drop finds its tree row by position: let go where beta is now (a drop that lands on
+    // alpha, which holds the file already, is refused without a question)
+    let now = f.center(&f.tree_row("beta"));
+    if now != beta {
+        eprintln!("the tree moved during the drag: beta from {beta:?} to {now:?}");
+    }
+    f.ui.window().dispatch_event(WindowEvent::PointerMoved { position: now });
+    f.release(now);
     answer_drop(&f, "Copy");
     wait_until(&f, "copied", |f| f.dir.join("beta/inside.txt").exists());
     assert!(f.dir.join("alpha/inside.txt").exists(), "the original stays");
