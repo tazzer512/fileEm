@@ -1463,6 +1463,8 @@ fn renaming_a_folder_moves_the_tabs_and_bookmarks_inside_it() {
     app::run_command(&f.app, fileem::menu::Command::Rename(f.dir.join("alpha")));
     f.ui.set_dialog_text("renamed".into());
     f.button("Rename").invoke_accessible_default_action();
+    wait_until(&f, "renamed or refused", |f| f.dir.join("renamed").exists() || !f.ui.get_dialog_error().is_empty());
+    assert!(f.dir.join("renamed").exists(), "the rename failed: {}", f.ui.get_dialog_error());
     wait_until(&f, "the tab followed", |f| f.address() == f.dir.join("renamed/inner"));
     assert!(f.dir.join("renamed/inner").is_dir());
     assert_eq!(
@@ -1510,7 +1512,13 @@ fn dragging_a_file_onto_a_folder_row_asks_then_moves() {
     pump();
     let picture = f.ui.get_drag_image();
     let size = picture.size();
-    assert!(size.height == 24 && size.width > 60 && size.width < 200, "the row's icon and name: {size:?}");
+    let shot = f.ui.window().take_snapshot().map(|s| (s.width(), s.height()));
+    let name = f.on_name("notes.txt");
+    assert!(
+        size.height == 24 && size.width > 60 && size.width < 200,
+        "the row's icon and name: {size:?} (window snapshot {shot:?}, scale {}, name at {name:?})",
+        f.ui.window().scale_factor()
+    );
     let px = picture.to_rgba8().unwrap();
     assert!(px.as_slice().iter().any(|p| p.a > 0 && p.a < 255), "faded");
     f.release(f.center(&f.list_row("alpha")));
