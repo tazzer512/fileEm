@@ -91,6 +91,7 @@ pub fn key(app: &Shared, text: &str, ctrl: bool, alt: bool, shift: bool) -> bool
         }
     } else if c == ' ' && !alt && !shift && (ctrl || !typing_ahead(app)) {
         // Space (or Ctrl+Space) toggles the focused row; a space within a typed name is type-ahead
+        app.borrow_mut().type_ahead.clear(); // and the next letter starts a new name
         app.borrow_mut().tab_mut().toggle_current();
         sync_selection(app, side, false);
     } else if letter('c') && !shift {
@@ -146,10 +147,16 @@ fn starts_with_lowercase(name: &str, prefix: &str) -> bool {
     prefix.chars().all(|p| lower.next() == Some(p))
 }
 
-/// Whether a type-ahead search is going on (a space then belongs to the name typed).
+/// Whether a space belongs to the name being typed: a type-ahead search is going on and a name
+/// continues with a space ("my f" finds "my file.txt"). Otherwise Space marks the focused row.
 fn typing_ahead(app: &Shared) -> bool {
     let a = app.borrow();
-    !a.type_ahead.is_empty() && a.type_ahead_at.is_some_and(|t| t.elapsed() <= Duration::from_secs(1))
+    if a.type_ahead.is_empty() || a.type_ahead_at.is_none_or(|t| t.elapsed() > Duration::from_secs(1)) {
+        return false;
+    }
+    let prefix = format!("{} ", a.type_ahead);
+    let continues = a.tab().rows().any(|e| starts_with_lowercase(e.name(), &prefix));
+    continues
 }
 
 /// Typing a name's first letters jumps to it; a pause of a second starts a new search.
@@ -164,7 +171,9 @@ fn type_ahead(app: &Shared, c: char) {
         a.type_ahead.extend(c.to_lowercase());
         let prefix = a.type_ahead.clone();
         let path = a.tab().rows().find(|e| starts_with_lowercase(e.name(), &prefix)).map(|e| e.path().to_path_buf());
-        path.is_some_and(|p| a.tab_mut().select_path(&p))
+        // while rows are marked with Space, a typed name only moves the focus to its row
+        let marking = a.tab().is_marking();
+        path.is_some_and(|p| if marking { a.tab_mut().focus_path(&p) } else { a.tab_mut().select_path(&p) })
     };
     if found {
         let side = app.borrow().active;

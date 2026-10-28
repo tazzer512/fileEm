@@ -168,7 +168,7 @@ mvn test -Dheadless=false   # watch the UI tests run on screen
 | Ctrl+Shift+1…8, Ctrl+wheel | View: Extra large, Large, Medium, Small icons, List, Details, Tiles, Content |
 | Ctrl++ / Ctrl+− | Bigger / smaller items (icon views and Tiles) |
 | Arrows, Home/End, PgUp/PgDn | Move in the list or grid (Shift extends, Ctrl moves without selecting) |
-| Space, Ctrl+Space | Select or deselect the focused item, keeping the others selected (to pick several files with the keyboard; within a typed name a space is part of the name) |
+| Space, Ctrl+Space | Mark or unmark the focused item, keeping the others. While items are marked, arrow keys and typed names only move the cursor, so Space adds the next one; a click, Shift+arrows, Ctrl+A or another folder end it. A space continues a typed name when a name goes on with one ("my f" → "my file.txt") |
 
 On macOS, Ctrl is Cmd; Cmd+Backspace deletes and Cmd+Up/Down go up/open.
 

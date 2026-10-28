@@ -50,6 +50,10 @@ pub struct Tab {
     /// While a selection box is drawn: the selection it started from, and whether it toggles
     /// (Ctrl/Cmd) rather than adds.
     boxing: Option<(HashSet<PathBuf>, bool)>,
+    /// Rows were marked with Space: plain arrow keys (and typed names) then only move the focus
+    /// and keep the marks, until the selection is made another way (a click, Shift+arrows,
+    /// Ctrl+A, another folder).
+    marking: bool,
 }
 
 /// The rows a selection box touches, from content offsets `a` and `b` (0 = top of the first
@@ -88,6 +92,7 @@ impl Tab {
             current: None,
             anchor: None,
             boxing: None,
+            marking: false,
         }
     }
 
@@ -139,6 +144,7 @@ impl Tab {
         }
         self.dir = Some(dir);
         if nav != Nav::Refresh || !same_folder {
+            self.marking = false;
             self.selected.clear();
             self.anchor = None;
             self.current = None;
@@ -282,6 +288,7 @@ impl Tab {
             self.selected.insert(path.clone());
             self.anchor = Some(path.clone());
         }
+        self.marking = false;
         self.current = Some(path);
     }
 
@@ -301,6 +308,7 @@ impl Tab {
     /// it, plain replaces it.
     pub fn start_box(&mut self, ctrl: bool, shift: bool) {
         let base = if ctrl || shift { self.selected.clone() } else { HashSet::new() };
+        self.marking = false;
         self.boxing = Some((base, ctrl));
     }
 
@@ -357,10 +365,15 @@ impl Tab {
     }
 
     /// Arrow keys and friends: moves the focus by `delta` rows (clamped). Plain selects only the
-    /// new row, Shift extends from the anchor, Ctrl/Cmd only moves the focus.
+    /// new row (only moves the focus while rows are marked with Space), Shift extends from the
+    /// anchor, Ctrl/Cmd only moves the focus.
     pub fn move_focus(&mut self, delta: isize, ctrl: bool, shift: bool) {
         if self.view.is_empty() {
             return;
+        }
+        let ctrl = ctrl || (self.is_marking() && !shift);
+        if !ctrl {
+            self.marking = false;
         }
         let from = self.current_row();
         let to = match from {
@@ -381,17 +394,34 @@ impl Tab {
         self.current = Some(path);
     }
 
-    /// Space (with or without Ctrl): toggles the focused row.
+    /// Space (with or without Ctrl): toggles the focused row; from then on plain arrow keys keep
+    /// the marked rows (see [`Tab::is_marking`]).
     pub fn toggle_current(&mut self) {
         if let Some(p) = self.current.clone() {
             if !self.selected.remove(&p) {
                 self.selected.insert(p);
             }
+            self.marking = true;
         }
     }
 
+    /// Whether rows marked with Space are kept while arrow keys move the focus.
+    pub fn is_marking(&self) -> bool {
+        self.marking && !self.selected.is_empty()
+    }
+
     pub fn select_all(&mut self) {
+        self.marking = false;
         self.selected = self.rows().map(|e| e.path().to_path_buf()).collect();
+    }
+
+    /// Focuses the row of `path`, if it is shown, keeping the selection.
+    pub fn focus_path(&mut self, path: &Path) -> bool {
+        if !self.row_of.contains_key(path) {
+            return false;
+        }
+        self.current = Some(path.to_path_buf());
+        true
     }
 
     /// Focuses and selects the row of `path`, if it is shown.
@@ -399,6 +429,7 @@ impl Tab {
         if !self.row_of.contains_key(path) {
             return false;
         }
+        self.marking = false;
         self.selected.clear();
         self.selected.insert(path.to_path_buf());
         self.anchor = Some(path.to_path_buf());
@@ -663,6 +694,39 @@ mod tests {
         assert_eq!(tab.selected_paths().len(), 4);
         tab.select_all();
         assert_eq!(tab.status(), "4 items (1 hidden), 4 selected (6 bytes)");
+    }
+
+    #[test]
+    fn rows_marked_with_space_stay_while_arrows_move() {
+        let tmp = folder();
+        let root = tmp.path().to_path_buf();
+        let mut tab = Tab::new();
+        tab.show(root.clone(), listing(&root), Nav::Go);
+        let name = |tab: &Tab| tab.current_row().map(|r| tab.row(r).name().to_string());
+        let first = name(&tab).unwrap();
+        tab.toggle_current();
+        tab.move_focus(1, false, false);
+        assert_eq!(tab.selected_paths(), [root.join(&first)], "a plain arrow keeps the mark");
+        tab.toggle_current();
+        tab.move_focus(1, false, false);
+        tab.toggle_current();
+        assert_eq!(tab.selected_paths().len(), 3);
+        tab.toggle_current();
+        assert_eq!(tab.selected_paths().len(), 2, "Space again unmarks only that row");
+        assert_eq!(tab.current_row(), Some(2));
+
+        // a refresh keeps marking; a plain click ends it
+        tab.show(root.clone(), listing(&root), Nav::Refresh);
+        tab.move_focus(-1, false, false);
+        assert_eq!(tab.selected_paths().len(), 2);
+        tab.click(0, false, false);
+        tab.move_focus(1, false, false);
+        assert_eq!(tab.selected_paths().len(), 1, "arrows select again");
+
+        // unmarking the last row ends it too
+        tab.toggle_current();
+        tab.move_focus(1, false, false);
+        assert_eq!(tab.selected_paths(), [root.join("a10.txt")]);
     }
 
     #[test]

@@ -550,18 +550,34 @@ fn typing_jumps_to_a_name() {
 
 fn space_toggles_the_focused_row_keeping_the_others() {
     let f = open_window();
-    f.key(Key::Home);
+    assert!(f.selected().is_empty());
+    assert_eq!(f.current().as_deref(), Some("alpha"));
+    f.key(" ");
     assert_eq!(f.selected(), ["alpha"]);
-    f.chord(&[Key::Control], Key::DownArrow);
-    f.chord(&[Key::Control], Key::DownArrow);
+    // once rows are marked, plain arrows only move the focus
+    f.key(Key::DownArrow);
+    f.key(Key::DownArrow);
+    assert_eq!(f.selected(), ["alpha"]);
     f.key(" ");
     assert_eq!(f.selected(), ["alpha", "a.png"]);
-    f.chord(&[Key::Control], Key::DownArrow);
+    f.key(Key::DownArrow);
     f.key(" ");
     assert_eq!(f.selected(), ["alpha", "a.png", "big.bin"]);
     f.key(" ");
-    assert_eq!(f.selected(), ["alpha", "a.png"], "a second Space deselects");
+    assert_eq!(f.selected(), ["alpha", "a.png"], "a second Space deselects only that row");
     assert_eq!(f.current().as_deref(), Some("big.bin"), "the focus stays");
+    f.key(Key::UpArrow);
+    assert_eq!(f.selected(), ["alpha", "a.png"]);
+    // a typed name moves the focus too, keeping the marks
+    f.key("n");
+    assert_eq!(f.current().as_deref(), Some("notes.txt"));
+    f.key(" ");
+    assert_eq!(f.selected(), ["alpha", "a.png", "notes.txt"]);
+
+    // a click ends marking: arrows select again
+    f.click("beta");
+    f.key(Key::DownArrow);
+    assert_eq!(f.selected(), ["a.png"]);
 
     // within a typed name a space is part of it
     fs::write(f.dir.join("my file.txt"), "x").unwrap();
@@ -1131,6 +1147,16 @@ fn duplicate_compress_and_extract_from_the_menu() {
     wait_until(&f, "the extracted folder selected", |f| f.selected() == ["Archive"]);
     assert_eq!(fs::read_to_string(f.dir.join("Archive/notes.txt")).unwrap(), "1234567890");
     assert_eq!(fs::read(f.dir.join("Archive/big.bin")).unwrap().len(), 5000);
+
+    // a single item goes into a folder named after the archive
+    f.click("notes.txt");
+    f.right_click(&f.list_row("notes.txt"));
+    f.pick("Compress to ZIP");
+    wait_until(&f, "the single-item archive selected", |f| f.selected() == ["notes.zip"]);
+    f.right_click(&f.list_row("notes.zip"));
+    f.pick("Extract to folder");
+    wait_until(&f, "the new folder selected", |f| f.selected() == ["notes"]);
+    assert_eq!(fs::read_to_string(f.dir.join("notes/notes.txt")).unwrap(), "1234567890");
 }
 
 fn paste_into_a_folder_from_its_menu() {
@@ -1147,16 +1173,6 @@ fn paste_into_a_folder_from_its_menu() {
 
 fn tab_dirs(f: &Fixture, side: usize) -> Vec<PathBuf> {
     app::tabs(&f.app, side).0.into_iter().map(|d| d.unwrap_or_default()).collect()
-
-    // a single item goes into a folder named after the archive
-    f.click("notes.txt");
-    f.right_click(&f.list_row("notes.txt"));
-    f.pick("Compress to ZIP");
-    wait_until(&f, "the single-item archive selected", |f| f.selected() == ["notes.zip"]);
-    f.right_click(&f.list_row("notes.zip"));
-    f.pick("Extract to folder");
-    wait_until(&f, "the new folder selected", |f| f.selected() == ["notes"]);
-    assert_eq!(fs::read_to_string(f.dir.join("notes/notes.txt")).unwrap(), "1234567890");
 }
 
 fn ctrl_t_opens_and_ctrl_w_closes_tabs_but_never_the_last() {

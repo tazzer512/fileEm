@@ -14,10 +14,13 @@ import javafx.scene.control.TableCell;
 import javafx.scene.control.TableColumn;
 import javafx.scene.control.TableRow;
 import javafx.scene.control.TableView;
+import javafx.scene.control.skin.VirtualFlow;
 import javafx.scene.input.ClipboardContent;
 import javafx.scene.input.Dragboard;
+import javafx.scene.input.KeyCode;
 import javafx.scene.input.KeyEvent;
 import javafx.scene.input.MouseButton;
+import javafx.scene.input.MouseEvent;
 import javafx.scene.input.TransferMode;
 import org.kordamp.ikonli.javafx.FontIcon;
 
@@ -77,6 +80,12 @@ final class FileTable extends TableView<FileEntry> {
 
         setRowFactory(tv -> new FileRow());
         addEventHandler(KeyEvent.KEY_TYPED, tab::typeAhead);
+        addEventFilter(KeyEvent.KEY_PRESSED, this::moveWhileMarking);
+        addEventFilter(MouseEvent.MOUSE_PRESSED, e -> {
+            if (e.getButton() == MouseButton.PRIMARY) {
+                tab.stopMarking();
+            }
+        });
         marquee = new Marquee(this);
 
         Views.dynamicContextMenu(this, () -> main.fileMenuItems(tab));
@@ -159,6 +168,46 @@ final class FileTable extends TableView<FileEntry> {
 
     void ensureVisible(int index) {
         Views.ensureVisible(this, index);
+    }
+
+    /**
+     * While items are marked with Space, plain arrow keys only move the focus (like Ctrl+arrows),
+     * so the marks stay; Shift+arrows select a range as usual, which ends marking.
+     */
+    private void moveWhileMarking(KeyEvent e) {
+        KeyCode c = e.getCode();
+        boolean move = c == KeyCode.UP || c == KeyCode.DOWN || c == KeyCode.PAGE_UP || c == KeyCode.PAGE_DOWN
+                || c == KeyCode.HOME || c == KeyCode.END;
+        if (!move || e.isShortcutDown() || e.isAltDown() || !tab.isMarking()) {
+            return;
+        }
+        if (e.isShiftDown()) {
+            tab.stopMarking();
+            return;
+        }
+        int n = getItems().size();
+        int cur = Math.max(0, getFocusModel().getFocusedIndex());
+        int page = Math.max(1, visibleRows() - 1);
+        int target = switch (c) {
+            case UP -> cur - 1;
+            case DOWN -> cur + 1;
+            case PAGE_UP -> cur - page;
+            case PAGE_DOWN -> cur + page;
+            case HOME -> 0;
+            default -> n - 1;
+        };
+        target = Math.max(0, Math.min(n - 1, target));
+        getFocusModel().focus(target);
+        ensureVisible(target);
+        e.consume();
+    }
+
+    private int visibleRows() {
+        if (lookup(".virtual-flow") instanceof VirtualFlow<?> flow
+                && flow.getFirstVisibleCell() != null && flow.getLastVisibleCell() != null) {
+            return flow.getLastVisibleCell().getIndex() - flow.getFirstVisibleCell().getIndex() + 1;
+        }
+        return 10;
     }
 
     // ---- column persistence ----

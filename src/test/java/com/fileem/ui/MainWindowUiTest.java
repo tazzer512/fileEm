@@ -2432,25 +2432,41 @@ class MainWindowUiTest {
     }
 
     @Test
-    void spaceTogglesTheFocusedItemKeepingTheOthers(FxRobot robot) throws Exception {
+    void spaceMarksItemsThatStayWhileArrowsMove(FxRobot robot) throws Exception {
         FileTab tab = leftTab();
-        open(robot, tab, folderWith("space", "a.txt", "b.txt", "c.txt", "my file.txt"));
+        open(robot, tab, folderWith("space", "a.txt", "b.txt", "c.txt", "my file.txt", "z.txt"));
         robot.interact(() -> tab.table().getFocusModel().focus(0));
         robot.type(KeyCode.SPACE);
         assertEquals(List.of("a.txt"), selectedNames(tab));
-        robot.push(KeyCode.CONTROL, KeyCode.DOWN);
-        robot.push(KeyCode.CONTROL, KeyCode.DOWN);
+        // once items are marked, plain arrows only move the focus
+        robot.type(KeyCode.DOWN);
+        robot.type(KeyCode.DOWN);
+        assertEquals(List.of("a.txt"), selectedNames(tab));
         robot.type(KeyCode.SPACE);
         assertEquals(List.of("a.txt", "c.txt"), selectedNames(tab));
         robot.type(KeyCode.SPACE);
-        assertEquals(List.of("a.txt"), selectedNames(tab), "a second Space deselects");
+        assertEquals(List.of("a.txt"), selectedNames(tab), "a second Space deselects only that item");
         assertEquals(2, (int) fx(() -> tab.table().getFocusModel().getFocusedIndex()), "the focus stays");
+        robot.type(KeyCode.UP);
+        assertEquals(List.of("a.txt"), selectedNames(tab));
+        // a typed name moves the focus too, keeping the marks
+        robot.write("z");
+        assertEquals(4, (int) fx(() -> tab.table().getFocusModel().getFocusedIndex()));
+        robot.type(KeyCode.SPACE);
+        assertEquals(List.of("a.txt", "z.txt"), selectedNames(tab));
 
-        // the grid views share the selection and the key
+        // the grid views share the selection, the keys and the marking
         setView(robot, tab, ViewMode.SMALL_ICONS);
         robot.interact(tab::focusTable);
+        robot.type(KeyCode.LEFT);
         robot.type(KeyCode.SPACE);
-        assertEquals(List.of("a.txt", "c.txt"), selectedNames(tab));
+        assertEquals(List.of("a.txt", "my file.txt", "z.txt"), selectedNames(tab));
+
+        // a click ends marking: arrows select again
+        FileGrid g = grid(tab);
+        robot.clickOn(fx(() -> g.screenCenterOf(1)));
+        robot.type(KeyCode.RIGHT);
+        assertEquals(List.of("c.txt"), selectedNames(tab));
 
         // within a typed name a space is part of it
         robot.write("my f");

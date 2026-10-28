@@ -499,6 +499,9 @@ final class FileGrid extends Control {
 
     private void onPressed(MouseEvent e) {
         requestFocus();
+        if (e.getButton() == MouseButton.PRIMARY) {
+            tab.stopMarking();
+        }
         pressedIndex = itemAt(e);
         deferredSelect = false;
         dragStarted = false;
@@ -766,7 +769,11 @@ final class FileGrid extends Control {
         // past an edge: stop at the first or last item (Down from a full row to a shorter last row
         // lands on the last item, as in Explorer)
         target = cur < 0 ? 0 : clamp(target, 0, n - 1);
-        if (e.isShortcutDown() && !e.isShiftDown()) {
+        if (e.isShiftDown()) {
+            tab.stopMarking();
+        }
+        // while items are marked with Space, plain arrows only move the focus too
+        if ((e.isShortcutDown() || tab.isMarking()) && !e.isShiftDown()) {
             fm.focus(target);
         } else {
             select(target, e.isShiftDown(), false);

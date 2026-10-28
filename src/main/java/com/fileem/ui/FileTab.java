@@ -72,6 +72,12 @@ public final class FileTab extends BorderPane {
     private final InvalidationListener hiddenListener = o -> updatePredicate();
     private final List<Path> history = new ArrayList<>();
     private final StringBuilder typeAhead = new StringBuilder();
+    /**
+     * Items were marked with Space: plain arrow keys (and typed names) then only move the focus
+     * and keep the marks, until the selection is made another way (a click, Shift+arrows, Ctrl+A,
+     * another folder). A refresh keeps it.
+     */
+    private boolean marking;
     private long lastTyped;
     private ViewMode viewMode = ViewMode.DETAILS;
     /** + / - size steps per view (icon views and Tiles); missing means the view's own size. */
@@ -618,6 +624,7 @@ public final class FileTab extends BorderPane {
                 filter.clear();
                 onDirectoryChanged();
             }
+            marking = false;
             master.setAll(entries);
             if (selectAfter != null) {
                 restoreSelection(List.of(selectAfter), true);
@@ -832,6 +839,7 @@ public final class FileTab extends BorderPane {
     }
 
     void selectAll() {
+        marking = false;
         table.getSelectionModel().selectAll();
     }
 
@@ -846,6 +854,7 @@ public final class FileTab extends BorderPane {
 
     /** Space: selects or deselects the focused item, keeping the rest of the selection. */
     void toggleFocused() {
+        typeAhead.setLength(0); // the next letter starts a new name
         int i = table.getFocusModel().getFocusedIndex();
         if (i < 0) {
             return;
@@ -857,11 +866,29 @@ public final class FileTab extends BorderPane {
             sm.select(i);
         }
         table.getFocusModel().focus(i);
+        marking = true;
     }
 
-    /** Whether a type-ahead search is going on (a space then belongs to the name typed). */
+    /** Whether items marked with Space are kept while arrow keys move the focus. */
+    boolean isMarking() {
+        return marking && !table.getSelectionModel().getSelectedIndices().isEmpty();
+    }
+
+    /** The selection is made another way: arrows select again. */
+    void stopMarking() {
+        marking = false;
+    }
+
+    /**
+     * Whether a space belongs to the name being typed: a type-ahead search is going on and a name
+     * continues with a space ("my f" finds "my file.txt"). Otherwise Space marks the focused item.
+     */
     boolean typingAhead() {
-        return !typeAhead.isEmpty() && System.currentTimeMillis() - lastTyped <= 1000;
+        if (typeAhead.isEmpty() || System.currentTimeMillis() - lastTyped > 1000) {
+            return false;
+        }
+        String prefix = typeAhead.toString().toLowerCase(Locale.ROOT) + " ";
+        return sorted.stream().anyMatch(e -> e.name().toLowerCase(Locale.ROOT).startsWith(prefix));
     }
 
     /** Type-ahead find in either view: typing a name's first letters selects it. */
@@ -886,7 +913,9 @@ public final class FileTab extends BorderPane {
         String prefix = typeAhead.toString().toLowerCase(Locale.ROOT);
         for (int i = 0; i < sorted.size(); i++) {
             if (sorted.get(i).name().toLowerCase(Locale.ROOT).startsWith(prefix)) {
-                table.getSelectionModel().clearAndSelect(i);
+                if (!isMarking()) { // while items are marked a typed name only moves the focus
+                    table.getSelectionModel().clearAndSelect(i);
+                }
                 table.getFocusModel().focus(i);
                 ensureVisible(i);
                 break;
