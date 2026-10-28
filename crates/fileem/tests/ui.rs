@@ -352,7 +352,11 @@ fn ui() {
     let only = std::env::var("FILEEM_UI_ONLY").ok();
     macro_rules! scenarios {
         ($($name:ident;)*) => {
-            $(if only.as_deref().is_none_or(|o| stringify!($name).contains(o)) { $name(); })*
+            // the name first, so a failure says which scenario it was in
+            $(if only.as_deref().is_none_or(|o| stringify!($name).contains(o)) {
+                eprintln!("scenario {}", stringify!($name));
+                $name();
+            })*
         };
     }
     scenarios! {
@@ -2593,6 +2597,14 @@ fn open_tree(f: &Fixture, name: &str, paths: &[&str]) -> PathBuf {
         } else {
             fs::create_dir_all(dir.join(p).parent().unwrap()).unwrap();
             fs::write(dir.join(p), p).unwrap();
+        }
+        // dot names are hidden (on Windows by attribute)
+        let mut at = dir.clone();
+        for part in Path::new(p.trim_end_matches('/')).components() {
+            at.push(part);
+            if part.as_os_str().to_string_lossy().starts_with('.') && !fileem_core::util::fs_util::is_hidden(&at) {
+                fileem_core::util::fs_util::hide(&at);
+            }
         }
     }
     f.ui.invoke_address_entered(0, dir.display().to_string().into());
