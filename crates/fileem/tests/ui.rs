@@ -274,7 +274,13 @@ impl Fixture {
         }
     }
 
+    /// Lets go of the mouse. Like a person, it lingers a moment first: hover state is updated
+    /// between event loop runs, which a slow machine needs time for.
     fn release(&self, at: LogicalPosition) {
+        let start = Instant::now();
+        while start.elapsed() < Duration::from_millis(50) {
+            pump();
+        }
         self.ui.window().dispatch_event(WindowEvent::PointerReleased { position: at, button: PointerEventButton::Left });
         pump();
     }
@@ -1511,7 +1517,7 @@ fn dragging_a_file_onto_a_folder_row_asks_then_moves() {
     f.click("notes.txt");
     // while dragging, the row's icon and name follow the mouse
     f.drag_to(f.on_name("notes.txt"), f.center(&f.list_row("alpha")), &[]);
-    pump();
+    wait_until(&f, "the drag picture", |f| f.ui.get_drag_image().size().width > 0);
     let picture = f.ui.get_drag_image();
     let size = picture.size();
     let shot = f.ui.window().take_snapshot().map(|s| (s.width(), s.height()));
