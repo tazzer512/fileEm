@@ -139,6 +139,71 @@ impl Drop for WatchHandle {
     }
 }
 
+/// Windows can't rename, move or delete a folder while a folder in it (or itself) is watched: the
+/// watch holds it open ("Access denied"). Releases the OS watches on `path` and below until the
+/// guard is dropped, which watches the folders still wanted and existing again and reports them
+/// changed. notify closes a released watch on its own thread, moments later: callers retry
+/// briefly ([`retry_while_busy`]). Elsewhere it does nothing.
+pub fn release_under(path: &Path) -> Released {
+    let mut released = Released { dirs: Vec::new() };
+    if !RELEASE_TO_CHANGE {
+        return released;
+    }
+    let Some(s) = shared() else { return released };
+    let path = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let _registering = s.registering.lock().unwrap();
+    released.dirs = s.entries.lock().unwrap().keys().filter(|d| d.starts_with(&path)).cloned().collect();
+    let mut watcher = s.watcher.lock().unwrap();
+    for d in &released.dirs {
+        let _ = watcher.unwatch(d);
+    }
+    released
+}
+
+/// Watches held open block changing their folders on Windows only.
+const RELEASE_TO_CHANGE: bool = cfg!(windows);
+
+/// Watches given back when dropped (see [`release_under`]).
+pub struct Released {
+    dirs: Vec<PathBuf>,
+}
+
+impl Drop for Released {
+    fn drop(&mut self) {
+        if self.dirs.is_empty() {
+            return;
+        }
+        let Some(s) = shared() else { return };
+        let _registering = s.registering.lock().unwrap();
+        let wanted: Vec<PathBuf> =
+            { s.entries.lock().unwrap().keys().filter(|d| self.dirs.contains(d)).cloned().collect() };
+        for d in &wanted {
+            if d.is_dir() {
+                let _ = s.watcher.lock().unwrap().watch(d, RecursiveMode::NonRecursive);
+            }
+            changed(&s.entries, Some(d));
+        }
+    }
+}
+
+/// Runs `f` again while it fails with "Access denied", for up to a second, on Windows: a watch
+/// just released ([`release_under`]) or a virus scanner may still hold the folder for a moment.
+pub fn retry_while_busy<T>(mut f: impl FnMut() -> std::io::Result<T>) -> std::io::Result<T> {
+    let start = std::time::Instant::now();
+    loop {
+        match f() {
+            Err(e)
+                if RELEASE_TO_CHANGE
+                    && e.kind() == std::io::ErrorKind::PermissionDenied
+                    && start.elapsed() < Duration::from_secs(1) =>
+            {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            r => return r,
+        }
+    }
+}
+
 /// Calls `on_change` (on a background thread) whenever the content of `dir` changes, until the
 /// handle is dropped. Registering touches the file system (it can block on a hung mount): call it
 /// off the UI thread. A folder that can't be watched simply never reports.
@@ -193,6 +258,33 @@ mod tests {
             c.fetch_add(1, Ordering::SeqCst);
             let _ = tx.lock().unwrap().send(());
         })
+    }
+
+    #[test]
+    fn a_folder_with_a_watched_folder_inside_can_be_renamed_while_released() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (a, inner) = (tmp.path().join("a"), tmp.path().join("a/inner"));
+        fs::create_dir_all(&inner).unwrap();
+        let _watching = watch(&inner, || {});
+        let released = release_under(&a);
+        // without the release, Windows refuses: the watch holds a/inner open
+        retry_while_busy(|| fs::rename(&a, tmp.path().join("b"))).expect("renamed");
+        drop(released);
+        assert!(tmp.path().join("b/inner").is_dir());
+    }
+
+    #[test]
+    fn released_watches_report_again_once_given_back() {
+        let tmp = tempfile::tempdir().unwrap();
+        let inner = tmp.path().join("inner");
+        fs::create_dir(&inner).unwrap();
+        let (_, rx, listener) = counter();
+        let _watching = watch(&inner, listener);
+        drop(release_under(tmp.path()));
+        std::thread::sleep(DEBOUNCE * 2); // giving back reports the folder once
+        while rx.try_recv().is_ok() {}
+        fs::write(inner.join("x.txt"), "x").unwrap();
+        rx.recv_timeout(WAIT).expect("watched again");
     }
 
     #[test]

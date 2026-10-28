@@ -10,7 +10,7 @@ use std::time::Duration;
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 
 use fileem_core::fs::measure::{self, Totals};
-use fileem_core::fs::trash;
+use fileem_core::fs::{trash, watcher};
 use fileem_core::fs::FileEntry;
 use fileem_core::ops::{names, Handle, Kind, State};
 use fileem_core::util::{fs_util, os};
@@ -830,7 +830,11 @@ pub(super) fn rename_to(app: &Shared, src: &Path, text: &str) -> Result<PathBuf,
     if let Some(problem) = names::name_problem(&dir, text, Some(src)) {
         return Err(problem);
     }
-    let target = names::rename(src, text)
+    // Windows: a watched folder inside (a tab's, an open tree branch's) blocks the rename
+    let released = watcher::release_under(src);
+    let renamed = names::rename(src, text);
+    drop(released);
+    let target = renamed
         .map_err(|e| format!("Cannot rename \u{201c}{}\u{201d}: {}", fs_util::display_name(src), reason(&e)))?;
     if app.borrow().tab().dir() == Some(dir.as_path()) {
         refresh_selecting(app, target.clone());

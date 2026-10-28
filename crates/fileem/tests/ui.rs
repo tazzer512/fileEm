@@ -1499,7 +1499,9 @@ fn box_shown(f: &Fixture) -> bool {
 }
 
 fn answer_drop(f: &Fixture, button: &str) {
-    wait_until(f, "the move or copy question", |f| dialog_open(f) && f.ui.get_dialog_title() == "Move or copy");
+    wait_until(f, "a question", dialog_open);
+    let title = f.ui.get_dialog_title();
+    assert_eq!(title, "Move or copy", "another dialog: {}", f.ui.get_dialog_message());
     f.button(button).invoke_accessible_default_action();
     pump();
 }

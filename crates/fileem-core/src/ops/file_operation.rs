@@ -424,6 +424,8 @@ impl Worker {
             _ => {
                 for src in &work {
                     self.check_cancel()?;
+                    // Windows: a watched folder inside can't be moved or deleted
+                    let _released = (self.kind != Kind::Copy).then(|| crate::fs::watcher::release_under(src));
                     let r = match self.kind {
                         Kind::Copy => self.copy_top(src),
                         Kind::Move => self.move_top(src),
@@ -1087,6 +1089,8 @@ impl Worker {
         }
         for batch in present.chunks(TRASH_BATCH) {
             self.check_cancel()?;
+            // Windows: a watched folder inside can't be moved to the Recycle Bin
+            let _released: Vec<_> = batch.iter().map(|p| crate::fs::watcher::release_under(p)).collect();
             self.message(&batch[0].to_string_lossy());
             if batch.len() > 1 && trash::move_all_to_trash(batch) {
                 self.advance(batch.len() as u64);
@@ -1414,7 +1418,8 @@ pub(crate) fn rename_noreplace(from: &Path, to: &Path) -> io::Result<()> {
     if exists_nofollow(to) {
         return Err(io::Error::new(io::ErrorKind::AlreadyExists, "Already exists"));
     }
-    fs::rename(from, to)
+    // Windows: a folder whose watch was just released may still be held for a moment
+    crate::fs::watcher::retry_while_busy(|| fs::rename(from, to))
 }
 
 /// Copies a link as a link (same target text), with the link's own times where supported.
