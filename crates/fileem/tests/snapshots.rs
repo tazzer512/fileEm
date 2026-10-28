@@ -98,6 +98,23 @@ fn snapshots() {
     pump_until("drop question", || ui.get_dialog_open());
     save(ui.window(), "dialog-drop");
     ui.invoke_dialog_cancelled();
+    // a question that wraps over several lines
+    let long = dir.join("a rather long file name that has to wrap over more than one line of the dialog.txt");
+    app::run_command(&a, fileem::menu::Command::Delete(vec![long]));
+    pump_until("delete question", || ui.get_dialog_open());
+    save(ui.window(), "dialog-delete");
+    ui.invoke_dialog_cancelled();
+    let unbroken = dir.join("IMG_20240101_123456_a_very_long_file_name_without_any_spaces_in_it_at_all.jpg");
+    app::run_command(&a, fileem::menu::Command::Trash(vec![unbroken.clone()]));
+    pump_until("trash question", || ui.get_dialog_open());
+    save(ui.window(), "dialog-trash");
+    ui.invoke_dialog_cancelled();
+    ui.window().set_size(slint::LogicalSize::new(360.0, 400.0));
+    app::run_command(&a, fileem::menu::Command::Delete(vec![unbroken]));
+    pump_until("delete question", || ui.get_dialog_open());
+    save(ui.window(), "dialog-delete-narrow");
+    ui.invoke_dialog_cancelled();
+    ui.window().set_size(slint::LogicalSize::new(900.0, 560.0));
 
     // the grid views, with a thumbnail
     image::RgbImage::from_fn(120, 80, |x, y| image::Rgb([(x * 2) as u8, (y * 3) as u8, 160])).save(dir.join("photo.png")).unwrap();
