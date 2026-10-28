@@ -7,7 +7,7 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
-use slint::{ComponentHandle, Model, ModelRc, VecModel};
+use slint::{ComponentHandle, ModelRc, VecModel};
 
 use fileem_core::bookmarks::Bookmarks;
 use fileem_core::fs::places::Place;
@@ -281,16 +281,7 @@ fn sync_rows(app: &Shared) {
         })
         .collect();
     let selected = rows.iter().position(|r| r.selected).map_or(-1, |i| i as i32);
-    // rows that didn't change keep their instance (a press in progress stays)
-    if m.rows.row_count() == rows.len() {
-        for (i, r) in rows.into_iter().enumerate() {
-            if m.rows.row_data(i).as_ref() != Some(&r) {
-                m.rows.set_row_data(i, r);
-            }
-        }
-    } else {
-        m.rows.set_vec(rows);
-    }
+    super::update_rows(&m.rows, rows); // a press in progress stays
     m.window.set_selected(selected);
 }
 

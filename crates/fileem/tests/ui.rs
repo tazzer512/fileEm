@@ -446,6 +446,7 @@ fn ui() {
         renaming_a_folder_moves_the_tabs_and_bookmarks_inside_it;
         both_lists_stay_usable_in_a_narrow_dual_window;
         dragging_a_file_onto_a_folder_row_asks_then_moves;
+        a_refresh_during_the_press_still_drags;
         choosing_copy_after_a_drop_onto_the_tree_keeps_the_original;
         cancelling_the_drop_question_leaves_everything_alone;
         drops_into_the_dragged_items_or_where_they_are_are_refused;
@@ -1546,6 +1547,30 @@ fn answer_drop(f: &Fixture, button: &str) {
     assert_eq!(title, "Move or copy", "another dialog: {}", f.ui.get_dialog_message());
     f.button(button).invoke_accessible_default_action();
     pump();
+}
+
+fn a_refresh_during_the_press_still_drags() {
+    let f = open_window();
+    f.click("notes.txt");
+    settle(&f);
+    let (from, to) = (f.on_name("notes.txt"), f.center(&f.list_row("alpha")));
+    let w = f.ui.window();
+    w.dispatch_event(WindowEvent::PointerMoved { position: from });
+    w.dispatch_event(WindowEvent::PointerPressed { position: from, button: PointerEventButton::Left });
+    settle(&f);
+    // regression: a refresh rebuilt every row, dropping the press (on macOS every watch change
+    // refreshes, so drags failed there)
+    fs::write(f.dir.join("new.txt"), "n").unwrap();
+    wait_until(&f, "the watcher's refresh", |f| f.names().len() == 6);
+    for step in 1..=10 {
+        let t = step as f32 / 10.0;
+        let position = LogicalPosition::new(from.x + (to.x - from.x) * t, from.y + (to.y - from.y) * t);
+        w.dispatch_event(WindowEvent::PointerMoved { position });
+    }
+    wait_until(&f, "the drag started", |f| f.ui.get_drag_image().size().width > 0);
+    f.release(to);
+    answer_drop(&f, "Cancel");
+    assert!(f.dir.join("notes.txt").exists());
 }
 
 fn dragging_a_file_onto_a_folder_row_asks_then_moves() {

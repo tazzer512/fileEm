@@ -20,7 +20,8 @@ remove or break it.
 - Cargo isn't on the default PATH here: `export PATH=$HOME/.cargo/bin:$PATH`.
 - Slint repeaters: repeat over models from Rust that keep their identity; an int count or a
   `cond ? model : []` expression rebuilds every instance on each update and loses presses in
-  progress (see MIGRATION.md's lessons).
+  progress (see MIGRATION.md's lessons). So does `VecModel::set_vec`: fill row models with
+  `app::update_rows`.
 - Drag & drop in the Rust app works only inside its window (Slint 1.18 has no native drag on
   winit); other applications exchange files through the clipboard. Don't promise more.
 - Always say plainly what the Rust app still lacks compared to the Java app (the open stages in

@@ -769,6 +769,30 @@ fn file_row(tab: &Tab, row: usize, cols: &Columns, thumb: Option<slint::Image>) 
     }
 }
 
+/// Most rows a model gains or loses in place; a bigger change (a navigation) resets it.
+const IN_PLACE_ROWS: usize = 64;
+
+/// Puts `rows` into `model`, keeping the instances of rows that stay: a reset (`set_vec`) rebuilds
+/// every row of a repeater and drops a press in progress. Changed rows are replaced, a few added
+/// or removed at the end; only a big change resets.
+pub(crate) fn update_rows<T: Clone + PartialEq + 'static>(model: &VecModel<T>, rows: Vec<T>) {
+    let old = model.row_count();
+    if old.abs_diff(rows.len()) > IN_PLACE_ROWS {
+        model.set_vec(rows);
+        return;
+    }
+    while model.row_count() > rows.len() {
+        model.remove(model.row_count() - 1);
+    }
+    let mut rows = rows.into_iter();
+    for (i, r) in rows.by_ref().take(old).enumerate() {
+        if model.row_data(i).as_ref() != Some(&r) {
+            model.set_row_data(i, r);
+        }
+    }
+    model.extend(rows);
+}
+
 /// Rebuilds a side's file rows and crumbs (after a listing, sort, filter or tab change).
 fn sync_files(app: &Shared, side: usize) {
     {
@@ -785,7 +809,9 @@ fn sync_files(app: &Shared, side: usize) {
                 file_row(tab, r, &a.columns, thumb)
             })
             .collect();
-        s.files.set_vec(rows);
+        // a refresh (the watcher's, and on macOS one after every watch change) must not drop a
+        // press on a row, or the drag never starts
+        update_rows(&s.files, rows);
         let flagged = flagged_rows(tab);
         let s = &mut a.sides[side];
         s.flagged = flagged;
@@ -890,18 +916,9 @@ fn sync_tree(app: &Shared, side: usize) {
             }
         })
         .collect();
-    // rows that didn't change keep their instance: a reload (one follows every new watch) must
-    // not drop a press in progress, or a drag from the tree never starts
-    let model = &a.sides[side].tree_rows;
-    if model.row_count() == rows.len() {
-        for (i, r) in rows.into_iter().enumerate() {
-            if model.row_data(i).as_ref() != Some(&r) {
-                model.set_row_data(i, r);
-            }
-        }
-    } else {
-        model.set_vec(rows);
-    }
+    // a reload (one follows every new watch) must not drop a press in progress, or a drag from
+    // the tree never starts
+    update_rows(&a.sides[side].tree_rows, rows);
     drop(a);
     nav::watch_tree_folders(app, side);
 }

@@ -510,9 +510,11 @@ are the Java sources, as a size hint.
   expression like `cond ? model : []`) is a *new* model whenever its binding re-evaluates (any
   change of the struct it reads), so every instance is rebuilt and a press in progress is lost
   (double-clicks, drags). Repeat over models from Rust that keep their identity (`Side::slots`,
-  `list-files` / `no_files`). `VecModel::set_vec` is a reset too: the tree replaced its rows
-  on every reload (one follows each new watch), so a drag from the tree failed whenever a reload
-  came during the press; `sync_tree` now updates changed rows only, like the Bookmarks window.
+  `list-files` / `no_files`). `VecModel::set_vec` is a reset too: the tree and the file list
+  replaced their rows on every reload/refresh (one follows each new watch, and on macOS every
+  watch change refreshes all folders), so a drag failed whenever one came during the press.
+  Put rows in with `app::update_rows` (changed rows replaced, a few added or removed at the
+  end; only a navigation-sized change resets); `ui.rs` `a_refresh_during_the_press_still_drags`.
 - A `ListView` destroys rows that scroll out of view, with their `TouchArea` and its mouse grab:
   a gesture that may scroll (selection box) must be handled by an element that isn't a row.
 - `ListView` recomputes `content-y` from its own row-height estimate and can nudge a programmatic
