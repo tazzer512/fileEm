@@ -558,9 +558,10 @@ once with an ASMedia `174c:55aa` adapter (fix: the `usb-storage quirks=174c:55aa
 
 ## Known gaps / ideas
 
-The suite has only run on Linux; the macOS/Windows paths (Trash via AWT, drive labels, junctions,
+Until CI the suite had only run on Linux; the macOS/Windows paths (Trash via AWT, drive labels, junctions,
 Cmd shortcuts) are untested there. Packaging is only tried on Linux as an app-image (+
 `install-linux.sh`); the macOS/Windows images and the `deb`/`rpm`/`dmg`/`msi` installer types are
-untested, and on macOS the Dock icon only comes from the packaged `.app`. Possible next steps: CI on
-all three OSes for the Java app too (tests + `-Pdist`; `.github/workflows/rust.yml` covers only
-the Rust app), archive browsing, folder-size column.
+untested, and on macOS the Dock icon only comes from the packaged `.app`. CI
+(`.github/workflows/java.yml`) runs `mvn test` and builds the `-Pdist` app image on Linux, Windows
+and macOS (`rust.yml` does the same for the Rust app). Possible next steps: archive browsing,
+folder-size column.

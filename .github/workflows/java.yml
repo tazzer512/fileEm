@@ -1,0 +1,43 @@
+# The Java app on Linux, Windows and macOS: every test (the UI tests run headless on Monocle, no
+# display needed) and the native app image (jpackage, -Pdist), uploaded as the run's artifact.
+name: Java
+
+on:
+  push:
+    branches: [main, rust]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '27'
+          cache: maven
+      - name: Tests
+        # Windows runners' TEMP is a short 8.3 name (C:\Users\RUNNER~1\…), which folder listings
+        # never show: use the runner's own temp folder (a full path) like the Rust workflow
+        env:
+          TMP: ${{ runner.temp }}
+          TEMP: ${{ runner.temp }}
+        run: mvn -B -ntp test
+      - name: Surefire reports
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: java-test-reports-${{ runner.os }}
+          path: target/surefire-reports/
+      - name: App image
+        run: mvn -B -ntp -Pdist -DskipTests package
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fileem-java-${{ runner.os }}
+          path: target/dist/app/
