@@ -245,6 +245,16 @@ impl Fixture {
         LogicalPosition::new(x, e.absolute_position().y + e.size().height / 2.0)
     }
 
+    /// The middle of a tree row's name, where people press to drag it (a deep row's left part is
+    /// indentation).
+    fn on_tree_name(&self, name: &str) -> LogicalPosition {
+        let tree_width = self.ui.get_left().tree_width;
+        let e = ElementHandle::find_by_accessible_label(&self.ui, name)
+            .find(|e| e.accessible_role() == Some(i_slint_backend_testing::AccessibleRole::Text) && e.absolute_position().x < tree_width)
+            .unwrap_or_else(|| panic!("no tree name {name:?}"));
+        self.center(&e)
+    }
+
     fn center(&self, e: &ElementHandle) -> LogicalPosition {
         let (pos, size) = (e.absolute_position(), e.size());
         LogicalPosition::new(pos.x + (size.width / 2.0).min(30.0), pos.y + size.height / 2.0)
@@ -326,6 +336,28 @@ fn wait_until(f: &Fixture, what: &str, cond: impl Fn(&Fixture) -> bool) {
 fn settle(f: &Fixture) {
     let start = Instant::now();
     wait_until(f, "settled", move |_| start.elapsed() > Duration::from_millis(150));
+}
+
+/// Waits until the tree has revealed and scrolled to the current folder (in the background, a
+/// moment after the list): rows found before that may still move.
+fn tree_settled(f: &Fixture) {
+    wait_until(f, "the tree shows the folder", |f| f.tree().iter().any(|r| r.current));
+    // then until the tree stops moving: its current row in the same place for 150 ms
+    let place = |f: &Fixture| {
+        let name = f.tree().into_iter().find(|r| r.current).map(|r| r.name).unwrap_or_default();
+        let name = name.trim().to_string();
+        f.tree_row(&name).absolute_position()
+    };
+    let seen = std::cell::Cell::new((place(f), Instant::now()));
+    wait_until(f, "the tree settled", |f| {
+        let (last, since) = seen.get();
+        let now = place(f);
+        if now != last {
+            seen.set((now, Instant::now()));
+            return false;
+        }
+        since.elapsed() > Duration::from_millis(150)
+    });
 }
 
 /// Waits until the tree has revealed (and scrolled to) the current folder, which it does in the
@@ -1549,6 +1581,7 @@ fn choosing_copy_after_a_drop_onto_the_tree_keeps_the_original() {
         f.names() == ["inside.txt"]
             && ElementHandle::find_by_accessible_label(&f.ui, "beta").any(|e| e.absolute_position().x < f.ui.get_left().tree_width)
     });
+    tree_settled(&f);
     f.click("inside.txt");
     f.drag_drop(f.on_name("inside.txt"), f.center(&f.tree_row("beta")));
     answer_drop(&f, "Copy");
@@ -1629,11 +1662,16 @@ fn a_tree_folder_can_be_dragged_into_the_list() {
         f.names() == ["inside.txt"]
             && ElementHandle::find_by_accessible_label(&f.ui, "beta").any(|e| e.absolute_position().x < f.ui.get_left().tree_width)
     });
+    // regression: pressing after the tree's background reload (it rebuilt every row, dropping
+    // the press) never started a drag
+    tree_settled(&f);
     let empty = {
         let row = f.list_row("inside.txt");
         LogicalPosition::new(row.absolute_position().x + 200.0, row.absolute_position().y + 100.0)
     };
-    f.drag_drop(f.center(&f.tree_row("beta")), empty);
+    f.drag_to(f.on_tree_name("beta"), empty, &[]);
+    wait_until(&f, "the drag started", |f| f.ui.get_drag_image().size().width > 0);
+    f.release(empty);
     answer_drop(&f, "Copy");
     wait_until(&f, "copied into the shown folder", |f| f.dir.join("alpha/beta").is_dir());
     assert!(f.dir.join("beta").is_dir());

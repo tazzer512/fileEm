@@ -890,7 +890,18 @@ fn sync_tree(app: &Shared, side: usize) {
             }
         })
         .collect();
-    a.sides[side].tree_rows.set_vec(rows);
+    // rows that didn't change keep their instance: a reload (one follows every new watch) must
+    // not drop a press in progress, or a drag from the tree never starts
+    let model = &a.sides[side].tree_rows;
+    if model.row_count() == rows.len() {
+        for (i, r) in rows.into_iter().enumerate() {
+            if model.row_data(i).as_ref() != Some(&r) {
+                model.set_row_data(i, r);
+            }
+        }
+    } else {
+        model.set_vec(rows);
+    }
     drop(a);
     nav::watch_tree_folders(app, side);
 }
