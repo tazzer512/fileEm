@@ -2036,8 +2036,9 @@ fn size_controls_resize_within_limits_and_each_view_keeps_its_size() {
     let moved = icon_px(&f);
     assert_ne!(moved, 96, "a click on the track moves the slider there");
     std::thread::sleep(std::time::Duration::from_millis(600));
+    // the release handler runs within the click: no pump in between, a slow runner's pump
+    // (a redraw) once made the quick pair slower than the double-click interval
     f.click_at(&slider);
-    pump();
     assert_eq!(icon_px(&f), moved, "two slow clicks are no double-click");
     f.click_at(&slider);
     pump();
@@ -3167,7 +3168,8 @@ fn fake_drive(f: &Fixture, root: &Path) {
     use fileem_core::fs::volumes::{Kind as VKind, Volume};
     let mut stick = Volume::new(root, "STICK", VKind::Removable);
     stick.space = Some((1 << 30, 4 << 30));
-    let mut disk = Volume::new("/", "File System", VKind::System);
+    // the root holding the test folder (`/` on Windows contains no folder: nothing to reveal)
+    let mut disk = Volume::new(f.dir.ancestors().last().unwrap(), "File System", VKind::System);
     disk.space = Some((5 << 30, 100 << 30));
     app::show_volumes(&f.app, vec![stick, disk]);
 }
