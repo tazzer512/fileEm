@@ -7,7 +7,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use fileem::about::{APP_ID, VERSION};
+use fileem::about::APP_ID;
+#[cfg(unix)]
+use fileem::about::VERSION;
 
 fn crate_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -72,17 +74,16 @@ fn icons_exist_in_every_size_and_format() {
 }
 
 /// A shell script the packaging scripts install in place of the app.
+#[cfg(unix)]
 fn stand_in(dir: &Path) -> PathBuf {
+    use std::os::unix::fs::PermissionsExt;
     let bin = dir.join("fileem-built");
     fs::write(&bin, "#!/bin/sh\necho fileem\n").unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&bin, fs::Permissions::from_mode(0o755)).unwrap();
-    }
+    fs::set_permissions(&bin, fs::Permissions::from_mode(0o755)).unwrap();
     bin
 }
 
+#[cfg(unix)]
 fn run(script: &str, args: &[&str], env: &[(&str, &Path)]) -> String {
     let mut c = Command::new("bash");
     c.arg(crate_dir().join(script)).args(args);

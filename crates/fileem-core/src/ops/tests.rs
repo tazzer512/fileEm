@@ -3,7 +3,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -321,8 +321,9 @@ fn failed_overwrite_keeps_the_original_intact() {
 }
 
 /// Runs `f` on its own thread and fails the test if it takes longer than `limit` (a hang).
+#[cfg(unix)]
 fn within<T: Send + 'static>(limit: Duration, f: impl FnOnce() -> T + Send + 'static) -> T {
-    let (tx, rx) = mpsc::channel();
+    let (tx, rx) = std::sync::mpsc::channel();
     thread::spawn(move || {
         let _ = tx.send(f());
     });
