@@ -676,6 +676,9 @@ fn trash_of_a_missing_item_reports_an_error_and_touches_nothing() {
     assert_eq!(h.errors().len(), 1, "{:?}", h.errors());
 }
 
+// Windows reserves the space when a file is extended (files aren't sparse unless flagged), so the
+// huge file can't be made there
+#[cfg(not(windows))]
 #[test]
 fn not_enough_space_fails_before_writing_anything() {
     let d = dirs();

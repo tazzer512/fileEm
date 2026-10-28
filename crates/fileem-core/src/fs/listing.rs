@@ -176,6 +176,7 @@ mod tests {
         for f in ["x10", "x9", ".git"] {
             fs::create_dir(d.join(f)).unwrap();
         }
+        crate::util::fs_util::hide(&d.join(".git"));
         fs::write(d.join("file"), "x").unwrap();
         assert_eq!(names(&subfolders(d, false).unwrap()), ["x9", "x10"]);
         assert_eq!(names(&subfolders(d, true).unwrap()), [".git", "x9", "x10"]);

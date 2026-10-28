@@ -582,7 +582,12 @@ mod tests {
     #[test]
     fn a_missing_root_has_no_space() {
         let tmp = tempfile::tempdir().unwrap();
-        assert_eq!(space(&tmp.path().join("not-there")), None);
+        // Windows answers for any path on a drive, existing or not: a drive letter that isn't there
+        #[cfg(windows)]
+        let missing = ('D'..='Z').rev().map(|c| PathBuf::from(format!("{c}:\\"))).find(|p| !p.exists()).unwrap();
+        #[cfg(not(windows))]
+        let missing = tmp.path().join("not-there");
+        assert_eq!(space(&missing), None);
         assert!(space(tmp.path()).is_some());
     }
 }

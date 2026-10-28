@@ -574,3 +574,9 @@ are the Java sources, as a size hint.
   selected or current, so a change touches only those and the new ones, and
   `Tab::selected_rows` costs the selection's size (now ~4 ms). Select all (~140 ms) and the first
   move after it still touch every row; type-ahead compares names without lowercased copies.
+- First CI runs on macOS and Windows (2026-10-28) found what Linux never shows: notify's FSEvents
+  backend restarts its stream "since now" on every watch/unwatch, dropping undelivered changes
+  (`watcher::RESTARTS_LOSE_EVENTS` refreshes the watched folders after each restart); Windows
+  hides by attribute, not by dot name (`fs_util::hide` for test files); the runner's `TEMP` is
+  an 8.3 short name the tree can never match (CI points it at `runner.temp`); `Cargo.lock` may
+  be checked out with CRLF.

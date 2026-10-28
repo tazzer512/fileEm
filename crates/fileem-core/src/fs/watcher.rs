@@ -13,6 +13,11 @@ use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 
 const DEBOUNCE: Duration = Duration::from_millis(400);
 
+/// macOS's FSEvents backend restarts its one stream on every watch and unwatch, "since now":
+/// changes not yet delivered are dropped. Each restart then counts as a change of every folder
+/// already watched (one debounced refresh each).
+const RESTARTS_LOSE_EVENTS: bool = cfg!(target_os = "macos");
+
 type Listener = Arc<dyn Fn() + Send + Sync>;
 
 #[derive(Default)]
@@ -127,6 +132,9 @@ impl Drop for WatchHandle {
             #[cfg(test)]
             tests::pause_point(&self.dir);
             let _ = s.watcher.lock().unwrap().unwatch(&self.dir);
+            if RESTARTS_LOSE_EVENTS {
+                changed_all(&s.entries);
+            }
         }
     }
 }
@@ -146,6 +154,9 @@ pub fn watch(dir: &Path, on_change: impl Fn() + Send + Sync + 'static) -> WatchH
     // registered again on every watch: a folder deleted and created again at the same path needs
     // a new OS watch, or it would never report again
     let _ = s.watcher.lock().unwrap().watch(dir, RecursiveMode::NonRecursive);
+    if RESTARTS_LOSE_EVENTS {
+        changed_all(&s.entries); // before adding the new one: its listing follows anyway
+    }
     s.entries.lock().unwrap().entry(dir.to_path_buf()).or_default().listeners.push((id, Arc::new(on_change)));
     handle
 }
@@ -182,6 +193,20 @@ mod tests {
             c.fetch_add(1, Ordering::SeqCst);
             let _ = tx.lock().unwrap().send(());
         })
+    }
+
+    #[test]
+    fn a_change_right_before_another_folder_is_watched_is_not_lost() {
+        let (a, b) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let (_, rx, listener) = counter();
+        let _watching_a = watch(a.path(), listener);
+        std::thread::sleep(DEBOUNCE); // settled: only the write below reports
+        while rx.try_recv().is_ok() {}
+        fs::write(a.path().join("new.txt"), "x").unwrap();
+        // on macOS this restarts the OS stream, which dropped the write's undelivered event
+        let _watching_b = watch(b.path(), || {});
+        drop(watch(a.path().join("..").as_path(), || {}));
+        rx.recv_timeout(WAIT).expect("the change in a was reported");
     }
 
     #[test]

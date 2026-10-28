@@ -31,6 +31,11 @@ jobs:
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Tests
+        # Windows runners' TEMP is a short 8.3 name (C:\Users\RUNNER~1\…), which no folder listing
+        # shows: the tree could never find the tests' folders
+        env:
+          TMP: ${{ runner.temp }}
+          TEMP: ${{ runner.temp }}
         run: cargo test --workspace --no-fail-fast
       - name: Release build
         run: cargo build --release -p fileem
