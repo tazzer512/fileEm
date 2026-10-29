@@ -180,6 +180,24 @@ class FileOperationTest {
         assertNoTempFiles();
     }
 
+    @Test
+    void copyingOrMovingAFolderIntoItselfIsRefusedWhenTheSourcePathGoesThroughALink() throws Exception {
+        // regression: the source's real path left links in its parents unresolved (macOS: /var is
+        // /private/var), so a copy recursed into its own output
+        assumeTrue(OsUtil.isPosix());
+        Files.createDirectories(src.resolve("sub/deep"));
+        Files.writeString(src.resolve("sub/file.txt"), "f");
+        Path linkedSrc = Files.createSymbolicLink(dst.resolve("srclink"), src);
+        String before = tree(src);
+        for (Kind kind : List.of(Kind.COPY, Kind.MOVE)) {
+            FileOperation op = run(kind, List.of(linkedSrc.resolve("sub")), src.resolve("sub/deep"), FAIL_ON_CONFLICT);
+            assertEquals(1, op.errors().size(), kind + ": " + op.errors());
+            assertTrue(op.errors().get(0).contains("into itself"), op.errors().toString());
+            assertEquals(before, tree(src), kind + " left everything as it was");
+        }
+        assertNoTempFiles();
+    }
+
     // ---- conflicts ----
 
     @Test

@@ -709,10 +709,21 @@ public final class FileOperation extends Task<Void> {
             return true;
         }
         try {
-            return targetDir.toRealPath().startsWith(src.toRealPath(NOFOLLOW));
+            return targetDir.toRealPath().startsWith(realPathNoFollow(src));
         } catch (NoSuchFileException e) {
             return false; // the copy itself reports the missing folder
         }
+    }
+
+    /**
+     * {@code p}'s real path without following {@code p} itself when it is a link. Not
+     * {@code toRealPath(NOFOLLOW)}: that resolves no links at all, not even in the parent folders
+     * (macOS's temp folder {@code /var} is {@code /private/var}).
+     */
+    private static Path realPathNoFollow(Path p) throws IOException {
+        Path parent = p.toAbsolutePath().getParent();
+        Path name = p.getFileName();
+        return parent == null || name == null ? p.toRealPath() : parent.toRealPath().resolve(name);
     }
 
     /** Copies (or moves, when {@code move}) {@code src} to {@code dst}, merging folders and asking on conflicts. */

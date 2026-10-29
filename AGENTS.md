@@ -313,7 +313,9 @@ tools/                                  make-icon.py, install-linux.sh (per-user
   paths are skipped and reported. An entry is never written past its declared size (zip bomb: the
   free-space check trusts those sizes); one failing archive doesn't stop the others.
 - Copying or moving a folder into itself is also refused when the target reaches it through a link
-  (real-path check), otherwise the copy recurses into its own output.
+  (real-path check), otherwise the copy recurses into its own output. The source's real path
+  resolves its parent folders' links too (`realPathNoFollow`): `toRealPath(NOFOLLOW)` resolves
+  none, and on macOS every temp path goes through the `/var` → `/private/var` link.
 - Free space is checked before a copy or extract starts. Per-item failures are collected in `errors()` and
   processing continues.
 
@@ -558,10 +560,12 @@ once with an ASMedia `174c:55aa` adapter (fix: the `usb-storage quirks=174c:55aa
 
 ## Known gaps / ideas
 
-Until CI the suite had only run on Linux; the macOS/Windows paths (Trash via AWT, drive labels, junctions,
-Cmd shortcuts) are untested there. Packaging is only tried on Linux as an app-image (+
-`install-linux.sh`); the macOS/Windows images and the `deb`/`rpm`/`dmg`/`msi` installer types are
-untested, and on macOS the Dock icon only comes from the packaged `.app`. CI
-(`.github/workflows/java.yml`) runs `mvn test` and builds the `-Pdist` app image on Linux, Windows
-and macOS (`rust.yml` does the same for the Rust app). Possible next steps: archive browsing,
+CI (`.github/workflows/java.yml`) runs `mvn test` and builds the `-Pdist` app image on Linux,
+Windows and macOS (`rust.yml` does the same for the Rust app). Its first run on Windows and macOS
+(2026-10-28) found failures that are being worked through (causes not yet verified): a folder
+renamed from the tree on Windows (likely watched folders inside it blocking the rename, as in the
+Rust app), grid Ctrl-click and Ctrl+Shift+F on macOS (likely tests pressing Ctrl where macOS wants
+Cmd), search results not leaving the list after a delete on macOS, and a new tab opened while an
+operation asks (Windows and macOS). The link check in copy/move was a real bug, now fixed. The installer types (`deb`/`rpm`/`dmg`/`msi`) are untested, and on
+macOS the Dock icon only comes from the packaged `.app`. Possible next steps: archive browsing,
 folder-size column.
